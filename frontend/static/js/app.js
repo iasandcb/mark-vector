@@ -2104,8 +2104,10 @@ function openNewSlide() {
     // behind must not also land on the new slide.
     const wasDictating = !!dictation;
     if (wasDictating) stopDictation();
-    const lineBreak = value.endsWith("\n") ? "" : "\n";
-    replaceEditorRange(value.length, value.length, `${lineBreak}\n---\n\n`);
+    // Exactly one blank line before the `---`, whatever the slide ends with
+    // (a line break from X leaves one already).
+    const gap = value.endsWith("\n\n") ? "" : value.endsWith("\n") ? "\n" : "\n\n";
+    replaceEditorRange(value.length, value.length, `${gap}---\n\n`);
     if (wasDictating) startDictation();
   }
   presenter.slide = "last";
@@ -2181,21 +2183,21 @@ function movePresenter(delta, to = null) {
 }
 
 // Default layout for an 8BitDo Micro-style pad in the browser's "standard"
-// mapping: the D-pad (12 up, 13 down, 14 left, 15 right) drives the
-// writing, the face buttons drive what the audience sees. Face buttons are
-// numbered by position (0 bottom, 1 right, 2 left, 3 top), which on a
-// Nintendo-labelled pad is B, A, Y, X. A pad that reports differently is
-// fixed up once in the 🎮 dialog. Right on the D-pad is deliberately left
-// free; undo/regenerate exist but have no default button.
+// mapping: the face buttons drive the writing, the D-pad drives what the
+// audience sees. Face buttons are numbered by position (0 bottom, 1 right,
+// 2 left, 3 top), which on a Nintendo-labelled pad is B, A, Y, X; the D-pad
+// is 12 up, 13 down, 14 left, 15 right. A pad that reports differently is
+// fixed up once in the 🎮 dialog. Y is deliberately left free; undo/
+// regenerate exist but have no default button.
 const remote = createGamepadRemote({
   actions: [
-    { id: "newSlide", label: t("remote.action.newSlide"), defaultBinding: { type: "button", index: 14 } },
-    { id: "tidySlide", label: t("remote.action.tidySlide"), defaultBinding: { type: "button", index: 12 } },
-    { id: "lineBreak", label: t("remote.action.lineBreak"), defaultBinding: { type: "button", index: 13 } },
-    { id: "firstSlide", label: t("remote.action.firstSlide"), defaultBinding: { type: "button", index: 2 } },
-    { id: "prevSlide", label: t("remote.action.prevSlide"), defaultBinding: { type: "button", index: 0 } },
-    { id: "nextSlide", label: t("remote.action.nextSlide"), defaultBinding: { type: "button", index: 3 } },
-    { id: "lastSlide", label: t("remote.action.lastSlide"), defaultBinding: { type: "button", index: 1 } },
+    { id: "newSlide", label: t("remote.action.newSlide"), defaultBinding: { type: "button", index: 1 } },
+    { id: "lineBreak", label: t("remote.action.lineBreak"), defaultBinding: { type: "button", index: 3 } },
+    { id: "tidySlide", label: t("remote.action.tidySlide"), defaultBinding: { type: "button", index: 0 } },
+    { id: "prevSlide", label: t("remote.action.prevSlide"), defaultBinding: { type: "button", index: 12 } },
+    { id: "nextSlide", label: t("remote.action.nextSlide"), defaultBinding: { type: "button", index: 13 } },
+    { id: "firstSlide", label: t("remote.action.firstSlide"), defaultBinding: { type: "button", index: 15 } },
+    { id: "lastSlide", label: t("remote.action.lastSlide"), defaultBinding: { type: "button", index: 14 } },
     { id: "undoSlide", label: t("remote.action.undoSlide"), defaultBinding: null },
     { id: "regenerateSlide", label: t("remote.action.regenerateSlide"), defaultBinding: null },
   ],
