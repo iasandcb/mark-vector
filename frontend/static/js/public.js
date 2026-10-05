@@ -1,4 +1,4 @@
-import { renderMarkdown, parseCustomSymbolsCsv, setCustomAsciiMathSymbols, firstH1Heading } from "./markdown.js";
+import { renderMarkdown, parseCustomSymbolsCsv, setCustomAsciiMathSymbols, firstH1Heading, detectMathDirective } from "./markdown.js";
 import { applyStaticTranslations, t } from "./i18n.js";
 import { splitSlides } from "./slides.js";
 
@@ -118,11 +118,16 @@ function render() {
   // blank until something is said on it - and still has to be shown.
   const slides = splitSlides(doc.content, { keepEmptyLast: presenting });
   slideCount = slides.length;
+  // Each slide is rendered on its own, so a `<!-- math: ... -->` directive at
+  // the top of the document would otherwise only reach the first slide -
+  // every later one would read its AsciiMath as LaTeX. Resolved once from
+  // the whole document and handed to every slide instead.
+  const dialect = detectMathDirective(doc.content) || doc.dialect;
   contentEl.innerHTML = "";
   for (const source of slides) {
     const section = document.createElement("section");
     section.className = "slide";
-    section.innerHTML = renderMarkdown(source, doc.dialect);
+    section.innerHTML = renderMarkdown(source, dialect);
     contentEl.appendChild(section);
   }
   // A live edit that removed slides shouldn't leave the visitor past the end.
