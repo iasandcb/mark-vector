@@ -1207,6 +1207,32 @@ body.row-dragging {
   padding-left: 22px;
 }
 
+/* Task lists (`- [ ]` / `- [x]`, rendered by asciimath-markdown with
+   GitHub's classes): the checkbox stands in for the bullet. */
+.markdown-body li.task-list-item {
+  list-style: none;
+}
+
+.markdown-body .task-list-item-checkbox {
+  /* Sized in em so it keeps up with the text - a slideshow's large font
+     would otherwise leave a tiny native checkbox beside it. */
+  width: 0.85em;
+  height: 0.85em;
+  margin: 0 0.35em 0 -1.25em;
+  vertical-align: -0.1em;
+}
+
+.markdown-body mark {
+  background: #fde68a;
+  color: inherit;
+  padding: 0 2px;
+  border-radius: 2px;
+}
+
+.markdown-body del {
+  color: var(--muted);
+}
+
 .markdown-body .error {
   color: #b91c1c;
 }
