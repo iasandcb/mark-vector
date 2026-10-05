@@ -1819,3 +1819,49 @@ kbd.shortcut-key {
 .quick-open-overlay.busy {
   cursor: progress;
 }
+
+/* ---------- gamepad remote settings (see static/js/remote.js) ---------- */
+
+.remote-panel {
+  max-height: none;
+}
+
+.remote-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 16px 16px;
+}
+
+.remote-status {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+  word-break: break-word;
+}
+
+.remote-rows {
+  display: flex;
+  flex-direction: column;
+}
+
+.remote-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.remote-row-binding {
+  font-family: "SF Mono", Consolas, monospace;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.remote-actions {
+  display: flex;
+  justify-content: flex-end;
+}

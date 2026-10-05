@@ -1,5 +1,6 @@
 import { renderMarkdown, parseCustomSymbolsCsv, setCustomAsciiMathSymbols, firstH1Heading } from "./markdown.js";
 import { applyStaticTranslations, t } from "./i18n.js";
+import { splitSlides } from "./slides.js";
 
 // No language switcher here (unlike index.html/login.html) - a share-link
 // recipient is often not a mark-vector user at all and there's barely
@@ -93,41 +94,9 @@ contentEl.addEventListener("click", async (e) => {
 // ---------- slideshow ----------
 //
 // A document published with the "slides" option (see storage.set_publish_
-// slides) opens here as a slideshow: split at every line that is just
-// `---` into one <section class="slide"> each, shown one at a time (see
-// public.html's body.slides-mode styles). The split is done on the Markdown
-// source rather than on rendered <hr>s so a slide is rendered on its own -
-// but a `---` inside a fenced code block or a $$ display-math block is
-// content, not a separator, so those are tracked and skipped.
-const SLIDE_SEPARATOR_RE = /^\s*---\s*$/;
-const FENCE_RE = /^\s{0,3}(`{3,}|~{3,})/;
-
-function splitSlides(content) {
-  const slides = [];
-  let current = [];
-  let fence = null;
-  let inMath = false;
-  for (const line of content.split("\n")) {
-    const fenceMatch = FENCE_RE.exec(line);
-    if (fence) {
-      if (fenceMatch && fenceMatch[1][0] === fence[0] && fenceMatch[1].length >= fence.length) fence = null;
-    } else if (fenceMatch) {
-      fence = fenceMatch[1];
-    } else if (line.trim() === "$$") {
-      inMath = !inMath;
-    } else if (!inMath && SLIDE_SEPARATOR_RE.test(line)) {
-      slides.push(current.join("\n"));
-      current = [];
-      continue;
-    }
-    current.push(line);
-  }
-  slides.push(current.join("\n"));
-  // A leading/trailing/doubled separator shouldn't produce a blank slide.
-  const nonEmpty = slides.filter((s) => s.trim() !== "");
-  return nonEmpty.length ? nonEmpty : [""];
-}
-
+// slides) opens here as a slideshow, one <section class="slide"> per slide
+// (see slides.js for where the boundaries are), shown one at a time (see
+// public.html's body.slides-mode styles).
 let view = "document"; // or "slides"
 let slideIndex = 0;
 let slideCount = 0;
@@ -171,6 +140,26 @@ function goToSlide(index) {
   // replaceState, not a hash assignment: stepping through a deck shouldn't
   // fill the back button's history with every slide.
   history.replaceState(null, "", `#${slideIndex + 1}`);
+}
+
+// The owner's gamepad remote (see app.js's presenter remote) puts the slide
+// it's presenting into each live update: a 0-based index, or "last" to ride
+// the newest slide as it's being built. Applied only when it *changes* (or,
+// for "last", when a new slide appears) - every keystroke on the owner's
+// side sends an update, and re-applying an unchanged position each time
+// would yank back a visitor who'd stepped to another slide on their own.
+// Absent (undefined) when the owner isn't using the remote at all.
+let presenterSlide;
+let presenterSlideCount = 0;
+function followPresenter(slide) {
+  if (slide === undefined || slide === null || view !== "slides") {
+    presenterSlide = slide;
+    return;
+  }
+  const changed = slide !== presenterSlide || (slide === "last" && slideCount !== presenterSlideCount);
+  presenterSlide = slide;
+  presenterSlideCount = slideCount;
+  if (changed) goToSlide(slide === "last" ? slideCount - 1 : slide);
 }
 
 function updateViewToggle() {
@@ -328,6 +317,7 @@ function connectLive() {
     filenameEl.textContent = doc.filename;
     updatePageTitle();
     render();
+    followPresenter(message.slide);
     liveDotEl.hidden = false;
     liveDotEl.classList.add("connected");
   });

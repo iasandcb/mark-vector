@@ -84,6 +84,12 @@
               <option value="ja-JP">JA</option>
             </select>
           </span>
+          <!-- Gamepad remote settings (see remote.js) - shown only while a
+               controller is connected; the controller itself drives the
+               presenter actions (see the presenter section in app.js). -->
+          <button id="remote-btn" class="secondary-btn" type="button" hidden>
+            <span class="btn-icon" aria-hidden="true">🎮</span>
+          </button>
           <!-- Appears only with the caret inside an inline thread (see
                updateInlineThreadButton) - a control for something that isn't
                there would just be another disabled button in a row that's

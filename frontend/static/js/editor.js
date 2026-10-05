@@ -54,6 +54,12 @@ export function createEditor(textarea, { onFoldToggle, foldRanges }) {
     textarea.setPlaceholder = (text) => {
       textarea.placeholder = text;
     };
+    textarea.replaceRangeKeepingSelection = (from, to, text) => {
+      const map = (pos) => (pos <= from ? pos : pos >= to ? pos + text.length - (to - from) : from + text.length);
+      const [start, end] = [map(textarea.selectionStart), map(textarea.selectionEnd)];
+      textarea.value = textarea.value.slice(0, from) + text + textarea.value.slice(to);
+      textarea.setSelectionRange(start, end);
+    };
     textarea.append = (text) => {
       textarea.value += text;
     };
@@ -252,6 +258,13 @@ export function createEditor(textarea, { onFoldToggle, foldRanges }) {
     },
     setSelectionRange(start, end) {
       dispatchSelection(start, end);
+    },
+    // An edit somewhere else in the document that leaves the caret where it
+    // was (CodeMirror maps the selection through the change) and doesn't
+    // scroll - for rewriting text away from where the user is working, e.g.
+    // a slide generated from speech while dictation keeps typing below it.
+    replaceRangeKeepingSelection(from, to, text) {
+      view.dispatch({ changes: { from, to, insert: text } });
     },
     // Streaming's write path: adds to the end instead of the whole-document
     // replace `value +=` would do, and doesn't move the view - whether to

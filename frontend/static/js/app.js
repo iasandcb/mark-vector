@@ -10,6 +10,8 @@ import {
 import { t, getLanguage, applyStaticTranslations, createLanguageSelect, exchangeHeadingRole } from "./i18n.js";
 import { createEditor } from "./editor.js";
 import { openTranscribeDialog } from "./transcribe.js";
+import { createGamepadRemote } from "./remote.js";
+import { splitSlides, lastSlideStart } from "./slides.js";
 
 // Inline-thread markers. Declared up here, away from the rest of the
 // inline-thread code further down, because `el` below builds the editor,
@@ -78,6 +80,7 @@ const el = {
   previewScrollBottomBtn: document.getElementById("preview-scroll-bottom-btn"),
   editorFilename: document.getElementById("editor-filename"),
   toolStatus: document.getElementById("tool-status"),
+  remoteBtn: document.getElementById("remote-btn"),
   saveBtn: document.getElementById("save-btn"),
   splitToggleBtn: document.getElementById("split-toggle-btn"),
   splitResizer: document.getElementById("split-resizer"),
@@ -957,6 +960,10 @@ function currentLiveState() {
         // storage.resolve_published's own stripping.
         content: stripInlineThreads(el.editor.value),
         dialect: sessionMathDialect(active.projectId, active.sessionId),
+        // The presenter remote's slide (see the presenter section) - left
+        // out entirely until the remote has been used, so a plain Live
+        // session never moves anyone's slideshow.
+        ...(presenter.slide !== null ? { slide: presenter.slide } : {}),
       }
     : { type: "update", filename: null, content: "" };
 }
@@ -1886,6 +1893,220 @@ function toggleDictation() {
   if (dictation) stopDictation();
   else startDictation();
 }
+
+// ---------- presenter remote (gamepad -> live slides) ----------
+//
+// Live slides from speech: dictation types into the document, the document
+// is published as a slideshow with Live on, and a gamepad (see remote.js)
+// drives it. The slide being spoken is the document's *last* slide - the
+// text after the final `---` (see slides.js) - and its raw transcript is
+// visible to the audience as it's typed. "Make slide" turns that raw text
+// into a finished slide with the toolbar's provider/model (through the same
+// unrecorded inline-complete endpoint ✨ uses, with the slides so far as
+// document context so the deck stays consistent), and opens the next slide
+// for dictation right away - the speaker doesn't wait for the model.
+//
+// Where the audience is (presenter.slide, carried in every live update -
+// see currentLiveState and public.js's followPresenter): "last" follows the
+// slide being built; a number pins one. Making a slide pins the finished
+// one so it can be read; "next" past the end returns to following "last".
+const presenter = { slide: null };
+// The most recently made slide, for "undo" (put the raw transcript back) and
+// "regenerate" (ask again from the same transcript). Found again by its
+// text, since dictation keeps moving everything after it.
+let lastMadeSlide = null;
+let slideJob = null;
+let remoteStatusTimer = null;
+
+function showRemoteStatus(text, { sticky = false } = {}) {
+  clearTimeout(remoteStatusTimer);
+  if (streaming) return; // the send in flight owns the status line
+  setToolStatus(text);
+  if (text && !sticky) remoteStatusTimer = setTimeout(() => !streaming && !slideJob && setToolStatus(""), 2500);
+}
+
+function presenterUsable() {
+  return !!active && !streaming && !el.editor.disabled && !NON_SENDABLE_ROLES.has(active.role);
+}
+
+// Rewrites [from, to) without moving the caret, and keeps a running
+// dictation's anchor in step when the edit lands before it - the slide
+// being swapped in sits above where dictation is still typing.
+function spliceKeepingCaret(from, to, text) {
+  el.editor.replaceRangeKeepingSelection(from, to, text);
+  if (dictation && to <= dictation.from) dictation.from += text.length - (to - from);
+  updateFilenameLabel();
+  updateFormatToolbar();
+  renderPreview();
+}
+
+// The new text takes over the old text's leading/trailing blank lines, so
+// the spacing around the `---` lines stays exactly as it was.
+function keepSurroundingWhitespace(old, text) {
+  return `${old.match(/^\s*/)[0]}${text}${old.match(/\s*$/)[0]}`;
+}
+
+function slideIndexAt(endOffset) {
+  return splitSlides(stripInlineThreads(el.editor.value.slice(0, endOffset))).length - 1;
+}
+
+function sendPresenterUpdate() {
+  if (el.livePublicCheckbox.checked) livePublicSocket.send(false);
+  else showRemoteStatus(t("remote.liveOff"));
+}
+
+// One slide from one stretch of transcript. `context` is the deck before
+// it. Resolves to the slide's Markdown, or throws.
+async function generateSlide(raw, context) {
+  const settings = {
+    provider: el.providerSelect.value,
+    model: el.modelSelect.value,
+    reasoningEffort: el.reasoningSelect.value,
+    convertMath: el.formatSelect.value !== "latex",
+    hybridMath: el.formatSelect.value === "hybrid",
+  };
+  if (!settings.provider || !settings.model) throw new Error(t("remote.noModel"));
+  const prompt =
+    "Turn the following spoken transcript into exactly one presentation slide in Markdown: " +
+    "a `## ` title line, then 2-5 concise bullet points. Write in the transcript's own language, " +
+    "fix obvious speech-recognition errors, and keep any math in the document's notation. " +
+    "Output only the slide - no `---` lines, no code fence around it, nothing before or after.\n\n" +
+    `Transcript:\n${raw}`;
+  let text = "";
+  let failed = null;
+  await api.inlineComplete(active.projectId, active.sessionId, prompt, [], stripInlineThreads(context).trim(), settings, async (event) => {
+    if (event.type === "done") text = event.text;
+    else if (event.type === "error") failed = event.message;
+  });
+  if (failed) throw new Error(failed);
+  // Models sometimes wrap the slide in a fence or add separators anyway.
+  const slide = text
+    .trim()
+    .replace(/^```[a-z]*\n([\s\S]*?)\n```$/i, "$1")
+    .split("\n")
+    .filter((line) => !/^\s*---\s*$/.test(line))
+    .join("\n")
+    .trim();
+  if (!slide) throw new Error(t("remote.emptySlide"));
+  return slide;
+}
+
+async function makeSlideFromSpeech() {
+  if (!presenterUsable()) return;
+  if (slideJob) return showRemoteStatus(t("remote.busy"));
+  const value = el.editor.value;
+  const start = lastSlideStart(value);
+  const rawRegion = value.slice(start);
+  const raw = stripInlineThreads(rawRegion).trim();
+  if (!raw) return showRemoteStatus(t("remote.nothingToSlide"));
+
+  // Open the next slide first, so speech keeps flowing while the model
+  // works. Dictation is restarted rather than re-anchored: the recognizer
+  // may still deliver a final version of the phrase that's now frozen in
+  // the old slide, and it must not land at the top of the new one too.
+  const wasDictating = !!dictation;
+  if (wasDictating) stopDictation();
+  const opener = (value.endsWith("\n") ? "" : "\n") + "\n---\n\n";
+  replaceEditorRange(value.length, value.length, opener);
+  if (wasDictating) startDictation();
+
+  const job = (slideJob = { rawRegion, start });
+  showRemoteStatus(t("remote.making"), { sticky: true });
+  try {
+    const slide = await generateSlide(raw, value.slice(0, start));
+    if (slideJob !== job) return;
+    const current = el.editor.value;
+    const at = current.slice(start, start + rawRegion.length) === rawRegion ? start : current.lastIndexOf(rawRegion);
+    if (at === -1) throw new Error(t("remote.lostTranscript"));
+    const replacement = keepSurroundingWhitespace(rawRegion, slide);
+    spliceKeepingCaret(at, at + rawRegion.length, replacement);
+    lastMadeSlide = { raw: rawRegion, slide: replacement, contextEnd: at };
+    presenter.slide = slideIndexAt(at + replacement.length);
+    sendPresenterUpdate();
+    showRemoteStatus(t("remote.made"));
+  } catch (err) {
+    showRemoteStatus(t("remote.failed", { message: err.message }));
+  } finally {
+    if (slideJob === job) slideJob = null;
+  }
+}
+
+function locateLastMadeSlide() {
+  if (!lastMadeSlide) return -1;
+  return el.editor.value.lastIndexOf(lastMadeSlide.slide);
+}
+
+function undoLastSlide() {
+  if (!presenterUsable() || slideJob) return;
+  const at = locateLastMadeSlide();
+  if (at === -1) return showRemoteStatus(t("remote.nothingToUndo"));
+  const { raw, slide } = lastMadeSlide;
+  spliceKeepingCaret(at, at + slide.length, raw);
+  lastMadeSlide = null;
+  presenter.slide = slideIndexAt(at + raw.length);
+  sendPresenterUpdate();
+  showRemoteStatus(t("remote.undone"));
+}
+
+async function regenerateLastSlide() {
+  if (!presenterUsable()) return;
+  if (slideJob) return showRemoteStatus(t("remote.busy"));
+  if (locateLastMadeSlide() === -1) return showRemoteStatus(t("remote.nothingToUndo"));
+  const target = lastMadeSlide;
+  const job = (slideJob = { regenerate: true });
+  showRemoteStatus(t("remote.making"), { sticky: true });
+  try {
+    const at = el.editor.value.lastIndexOf(target.slide);
+    const slide = await generateSlide(stripInlineThreads(target.raw).trim(), el.editor.value.slice(0, at));
+    const now = el.editor.value.lastIndexOf(target.slide);
+    if (now === -1) throw new Error(t("remote.lostTranscript"));
+    const replacement = keepSurroundingWhitespace(target.slide, slide);
+    spliceKeepingCaret(now, now + target.slide.length, replacement);
+    lastMadeSlide = { ...target, slide: replacement };
+    presenter.slide = slideIndexAt(now + replacement.length);
+    sendPresenterUpdate();
+    showRemoteStatus(t("remote.made"));
+  } catch (err) {
+    showRemoteStatus(t("remote.failed", { message: err.message }));
+  } finally {
+    if (slideJob === job) slideJob = null;
+  }
+}
+
+function movePresenter(delta) {
+  if (!active) return;
+  const count = splitSlides(stripInlineThreads(el.editor.value)).length;
+  const current = presenter.slide === null || presenter.slide === "last" ? count - 1 : Math.min(presenter.slide, count - 1);
+  const next = Math.max(0, Math.min(count - 1, current + delta));
+  presenter.slide = next === count - 1 ? "last" : next;
+  sendPresenterUpdate();
+  showRemoteStatus(t("remote.slidePosition", { n: next + 1, total: count }));
+}
+
+const remote = createGamepadRemote({
+  actions: [
+    { id: "makeSlide", label: t("remote.action.makeSlide"), defaultBinding: { type: "button", index: 0 } },
+    { id: "toggleDictation", label: t("remote.action.toggleDictation"), defaultBinding: { type: "button", index: 1 } },
+    { id: "prevSlide", label: t("remote.action.prevSlide"), defaultBinding: { type: "button", index: 14 } },
+    { id: "nextSlide", label: t("remote.action.nextSlide"), defaultBinding: { type: "button", index: 15 } },
+    { id: "undoSlide", label: t("remote.action.undoSlide"), defaultBinding: { type: "button", index: 2 } },
+    { id: "regenerateSlide", label: t("remote.action.regenerateSlide"), defaultBinding: { type: "button", index: 3 } },
+  ],
+  onAction(id) {
+    if (presenter.slide === null) presenter.slide = "last";
+    if (id === "makeSlide") makeSlideFromSpeech();
+    else if (id === "toggleDictation") toggleDictation();
+    else if (id === "prevSlide") movePresenter(-1);
+    else if (id === "nextSlide") movePresenter(1);
+    else if (id === "undoSlide") undoLastSlide();
+    else if (id === "regenerateSlide") regenerateLastSlide();
+  },
+  onConnectionChange(pad) {
+    el.remoteBtn.hidden = !pad;
+    el.remoteBtn.title = pad ? t("remote.buttonTitle", { id: pad.id }) : "";
+  },
+});
+el.remoteBtn.addEventListener("click", () => remote.openSettings());
 
 // Unlike send/publish, exporting/downloading has no NON_SENDABLE_ROLES
 // restriction - a system prompt or a read-only Hermes transcript is just as
