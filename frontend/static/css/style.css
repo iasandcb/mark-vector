@@ -1,0 +1,1804 @@
+:root {
+  --bg: #f7f7f5;
+  --panel: #ffffff;
+  --border: #e3e2de;
+  --text: #1f1e1c;
+  --muted: #7a7873;
+  --accent: #b45309;
+  --accent-contrast: #ffffff;
+  --active-bg: #eef1fb;
+  --code-bg: #f1f0ec;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* Author-stylesheet `display` declarations beat the UA stylesheet's
+   `[hidden] { display: none }` at equal specificity (origin outranks
+   specificity in the cascade) - so any element toggled via `el.hidden = ...`
+   in app.js that also has its own `display` set in a class rule (flex
+   containers, mostly) would otherwise silently ignore `hidden` entirely.
+   `.document-list` had this same bug already; it went unnoticed only
+   because a collapsed list is also empty of children, so it collapsed to
+   zero height anyway despite technically still being `display: flex`. */
+[hidden] {
+  display: none !important;
+}
+
+html, body {
+  height: 100%;
+  margin: 0;
+}
+
+/* The editor app is a fixed-height grid whose panes scroll on their own. The
+   page itself must never scroll: a pane hitting its bottom edge would chain
+   the scroll up to the page and slide the pane headers out of view, and one
+   hitting its top edge would trigger pull-to-refresh. */
+html:has(body.app-shell),
+body.app-shell {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+.layout {
+  overscroll-behavior: none;
+}
+
+.preview,
+.tree-pane {
+  overscroll-behavior: contain;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--text);
+  background: var(--bg);
+}
+
+/* Column 1 (tree) and column 7 (preview) are user-resizable - see
+   .pane-resizer's drag handlers in app.js, which set these two custom
+   properties directly rather than recomputing the whole template each
+   drag. Columns 2/4/6 are the resizer handles themselves; column 3 (editor)
+   always takes whatever's left. .tree-collapsed/.preview-collapsed/
+   .split-view (also toggled from app.js) override the whole template
+   instead of just zeroing one variable, so the matching resizer track
+   collapses to 0 too - a resizer with nothing to drag would otherwise leave
+   a dead 6px gap. Columns 4/5 (the split-view editor pane and its resizer)
+   stay reserved at 0px when split view is off, rather than removed from the
+   template, so the other columns' indices below never have to change.
+
+   Every direct child is pinned to an explicit grid-column below (rather
+   than relying on auto-placement-by-DOM-order) because a collapsed pane is
+   toggled via `display: none` - and a display:none item is skipped by
+   auto-placement entirely, which would otherwise shift every later
+   sibling one column to the left the moment any of them collapses. */
+.layout {
+  display: grid;
+  grid-template-columns: var(--tree-width, 280px) 6px 1fr 0px 0px 6px var(--preview-width, 1fr);
+  height: 100vh;
+  height: 100dvh;
+  /* One row exactly as tall as the layout. An implicit `auto` row grows to
+     fit the tallest pane's content, so a long document made the panes taller
+     than the window and only the (now disabled) page scroll could reach
+     their bottom; with the row capped, each pane scrolls its own content. */
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.tree-pane {
+  grid-column: 1;
+}
+
+#tree-resizer {
+  grid-column: 2;
+}
+
+#editor-pane {
+  grid-column: 3;
+}
+
+#split-resizer {
+  grid-column: 4;
+}
+
+#editor-pane-b {
+  grid-column: 5;
+}
+
+#preview-resizer {
+  grid-column: 6;
+}
+
+.preview-pane {
+  grid-column: 7;
+}
+
+.layout.tree-collapsed {
+  grid-template-columns: 0px 0px 1fr 0px 0px 6px var(--preview-width, 1fr);
+}
+
+.layout.preview-collapsed {
+  grid-template-columns: var(--tree-width, 280px) 6px 1fr 0px 0px 0px 0px;
+}
+
+.layout.tree-collapsed.preview-collapsed {
+  grid-template-columns: 0px 0px 1fr 0px 0px 0px 0px;
+}
+
+.layout.split-view {
+  grid-template-columns: var(--tree-width, 280px) 6px 1fr 6px var(--split-width, 1fr) 6px var(--preview-width, 1fr);
+}
+
+.layout.split-view.tree-collapsed {
+  grid-template-columns: 0px 0px 1fr 6px var(--split-width, 1fr) 6px var(--preview-width, 1fr);
+}
+
+.layout.split-view.preview-collapsed {
+  grid-template-columns: var(--tree-width, 280px) 6px 1fr 6px var(--split-width, 1fr) 0px 0px;
+}
+
+.layout.split-view.tree-collapsed.preview-collapsed {
+  grid-template-columns: 0px 0px 1fr 6px var(--split-width, 1fr) 0px 0px;
+}
+
+.pane-resizer {
+  position: relative;
+  cursor: col-resize;
+  background: transparent;
+}
+
+/* Widens the actual hit-test area a little past the visible 6px track,
+   without changing the track's layout width - a bare 6px target is fussy
+   to grab with a mouse. */
+.pane-resizer::after {
+  content: "";
+  position: absolute;
+  inset: 0 -3px;
+}
+
+.pane-resizer:hover,
+.pane-resizer.dragging {
+  background: var(--accent);
+  opacity: 0.5;
+}
+
+/* ---------- left: session/document tree ---------- */
+
+.tree-pane {
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.tree-pane.collapsed {
+  display: none;
+}
+
+.tree-header {
+  padding: 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tree-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.tree-header h1 {
+  font-size: 16px;
+  margin: 0;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.lang-select {
+  font-size: 11.5px;
+  padding: 3px 4px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+}
+
+.auth-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.auth-info span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.auth-info a {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.auth-info a:hover {
+  color: var(--text);
+}
+
+/* A floating re-expand button for a collapsed side pane - lives outside
+   .tree-pane/.preview-pane (they're display:none while collapsed, so a
+   button *inside* either would have no way to be clicked) - see
+   app.js's setTreeCollapsed/setPreviewCollapsed. */
+/* Sits below .pane-header (min-height: 44px, plus its own padding) rather
+   than beside it - at the header's own height, it would overlap the
+   editor's filename label on the left or its save/publish/send buttons on
+   the right. */
+.pane-expand-btn {
+  position: fixed;
+  top: 56px;
+  z-index: 5;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.pane-expand-btn:hover {
+  color: var(--text);
+  background: var(--bg);
+}
+
+#tree-expand-btn {
+  left: 8px;
+}
+
+#preview-expand-btn {
+  right: 8px;
+}
+
+.warning {
+  font-size: 12px;
+  color: #b91c1c;
+  margin: 0;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.sync-scroll-row,
+.glasses-row,
+.live-public-row {
+  white-space: nowrap;
+}
+
+/* Sits below .pane-header, same slot as #editor-toolbar in the editor pane -
+   shown only while the glasses checkbox is on (see app.js's
+   updateGlassesToolbarVisibility). */
+.glasses-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--code-bg);
+}
+
+/* Shared by the glasses toolbar's connection dot, the editor's "Live"
+   checkbox (see #live-public-status-dot in index.html), and the public
+   page's own live indicator (public.js) - one generic "is a live socket
+   currently connected" light, reused wherever one of those sockets is. */
+.live-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #b91c1c;
+  flex-shrink: 0;
+  transition: background 200ms ease;
+}
+
+.live-status-dot.connected {
+  background: #15803d;
+}
+
+.glasses-toolbar-label {
+  font-size: 12px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.glasses-url-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  font-family: "SF Mono", Consolas, monospace;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 6px;
+}
+
+.global-row {
+  margin: 0 8px;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+}
+
+/* A separate top-level tree section for browsing the local Hermes agent
+   gateway's own sessions (read-only - see routers/hermes.py) - deliberately
+   kept visually and structurally apart from mark-vector's own project tree
+   below it, since it's foreign, not-owned-here data. */
+.hermes-section {
+  margin: 0 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.hermes-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.hermes-header:hover {
+  background: var(--bg);
+}
+
+.hermes-title {
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.hermes-list {
+  padding: 0 0 8px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.hermes-row {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.hermes-row:hover {
+  background: var(--bg);
+}
+
+.hermes-row.active {
+  background: var(--active-bg);
+}
+
+.hermes-row-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hermes-row-meta {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.hermes-more-btn {
+  margin: 4px 8px 0;
+  background: none;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  padding: 5px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.hermes-more-btn:hover {
+  color: var(--text);
+  border-color: var(--muted);
+}
+
+.session-tree {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.project-node {
+  margin-bottom: 6px;
+}
+
+.project-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.project-row:hover {
+  background: var(--bg);
+}
+
+.project-row.active {
+  background: var(--active-bg);
+}
+
+.project-row.drop-target,
+.session-row.drop-target {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  background: var(--active-bg);
+}
+
+/* Set on <body> for the duration of a row drag (see startRowDrag/
+   onRowDragMove in app.js) - keeps the cursor showing "grabbing" and stops
+   the drag gesture from also selecting row text as it crosses over it. */
+body.row-dragging {
+  cursor: grabbing;
+  user-select: none;
+}
+
+/* The row actually being dragged (see startRowDrag/onRowDragMove) - dims
+   in place, the same way a native drag leaves its origin looking, while
+   .drag-ghost below stands in for the native drag image itself. */
+.row-drag-source {
+  opacity: 0.4;
+}
+
+/* Follows the cursor for the life of a drag (see createDragGhost/
+   moveDragGhost in app.js) - this pointer-driven implementation's
+   replacement for the ghost image a native HTML5 drag gets for free. */
+.drag-ghost {
+  position: fixed;
+  z-index: 1000;
+  pointer-events: none;
+  transform: translate(12px, 12px);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12.5px;
+  color: var(--text);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
+}
+
+/* Sessions nest one level under their project, mirroring how
+   .document-list indents a session's own documents under it. */
+.project-body {
+  padding-left: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.session-node {
+  margin-bottom: 2px;
+}
+
+.session-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.session-row:hover {
+  background: var(--bg);
+}
+
+.session-row.active {
+  background: var(--active-bg);
+}
+
+/* A fixed "▶" glyph rotated by `.expanded`, rather than swapping between
+   "▸"/"▾" text - at this small size the two glyphs read as nearly the same
+   faint dot, not a clear expanded/collapsed state. A consistent shape that
+   visibly rotates 90° is much easier to read at a glance. */
+.disclosure {
+  width: 14px;
+  flex-shrink: 0;
+  display: inline-block;
+  color: var(--text);
+  font-size: 11px;
+  text-align: center;
+  transition: transform 0.15s ease;
+}
+
+.disclosure.expanded {
+  transform: rotate(90deg);
+}
+
+.session-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.session-actions {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.icon-btn {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 14px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.icon-btn:hover {
+  color: var(--text);
+  background: var(--border);
+}
+
+.document-list {
+  padding-left: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.document-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12.5px;
+}
+
+.document-row:hover {
+  background: var(--bg);
+}
+
+.document-row.active {
+  background: var(--active-bg);
+  font-weight: 600;
+}
+
+/* Open in the split-view pane (see selectDocumentB in app.js) - an outline
+   rather than .active's own background/weight, so a row that's open in
+   *both* panes at once (nothing stops that) shows both cues instead of one
+   winning. */
+.document-row.active-b {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.doc-role-badge {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--accent-contrast);
+}
+
+.doc-role-badge.role-exchange {
+  background: #4b5da3;
+}
+
+.doc-role-badge.role-user {
+  background: #4b5da3;
+}
+
+.doc-role-badge.role-assistant {
+  background: #3a8a5f;
+}
+
+.doc-role-badge.role-draft {
+  background: var(--muted);
+}
+
+.doc-role-badge.role-system {
+  background: #8b5cf6;
+}
+
+.doc-filename {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: "SF Mono", Consolas, monospace;
+}
+
+/* Long-press opens the row menu on touch (see attachRowMenu in app.js) -
+   without these, iOS would also pop its own text-selection callout. */
+.project-row,
+.session-row,
+.document-row {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Pushes ✎ and "⋯" to the right edge of a document row. */
+.document-row .doc-filename {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.row-more-btn {
+  flex-shrink: 0;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+
+.row-more-btn.menu-open {
+  color: var(--text);
+  background: var(--border);
+}
+
+/* The shared tree-row action menu (see openRowMenu in app.js) - lives on
+   <body>, positioned in viewport coordinates, so the tree's own overflow
+   never clips it. */
+.row-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 180px;
+  max-width: min(320px, calc(100vw - 16px));
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.14);
+}
+
+.row-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.row-menu-item:hover,
+.row-menu-item:focus-visible {
+  background: var(--active-bg);
+  outline: none;
+}
+
+.row-menu-item.danger {
+  color: #b91c1c;
+}
+
+.row-menu-icon {
+  width: 18px;
+  flex-shrink: 0;
+  text-align: center;
+  color: var(--muted);
+}
+
+.row-menu-item.danger .row-menu-icon {
+  color: inherit;
+}
+
+.row-menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
+}
+
+@media (max-width: 700px) {
+  .row-menu-item {
+    padding: 12px 12px;
+    font-size: 16px;
+  }
+}
+
+.alt-hint-badge {
+  flex-shrink: 0;
+  font-family: "SF Mono", Consolas, monospace;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.doc-empty {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 6px 8px;
+}
+
+.primary-btn {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border: none;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.primary-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.primary-btn.full-width {
+  width: 100%;
+  padding: 8px 12px;
+}
+
+.secondary-btn {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.secondary-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Unsaved changes - see updateFilenameLabel() in app.js, which toggles
+   this alongside the "•" it already adds to the filename label. */
+.secondary-btn.dirty {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Split view is open - see setSplitView() in app.js. The only visual cue on
+   a screen too narrow to show the second pane at all (tablet/phone - see
+   the max-width: 900px block below), where the button itself stays put but
+   the pane it opens is force-hidden. */
+.secondary-btn[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border-color: var(--accent);
+}
+
+/* Editor-header buttons carry an icon and a word (see index.html); the word
+   is what gets dropped on a phone, where four worded buttons don't fit the
+   header row. Both spans sit inside the button, so nothing about the
+   button's own sizing/disabled handling changes with the viewport. */
+.btn-icon {
+  margin-right: 5px;
+}
+
+@media (max-width: 700px) {
+  .editor-actions .btn-label {
+    display: none;
+  }
+  .editor-actions .btn-icon {
+    margin-right: 0;
+    font-size: 17px;
+  }
+}
+
+/* Dictation: the 🎤 button and its language select read as one joined
+   control (see #dictation-group in index.html). */
+.dictation-group {
+  display: inline-flex;
+  align-items: stretch;
+}
+
+.dictation-group #dictation-btn {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.dictation-lang {
+  border: 1px solid var(--border);
+  border-left: none;
+  border-radius: 0 6px 6px 0;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 0 4px;
+  cursor: pointer;
+}
+
+#dictation-btn.listening {
+  background: #b91c1c;
+  border-color: #b91c1c;
+  color: #ffffff;
+}
+
+#dictation-btn.listening .btn-icon {
+  display: inline-block;
+  animation: dictation-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes dictation-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.18); }
+}
+
+/* The ⚙ that opens the toolbar row is phone-only: on a wider screen that
+   row is always open, so a control for it would just be a button that does
+   nothing visible. */
+.toolbar-toggle {
+  display: none;
+}
+
+@media (max-width: 700px) {
+  .toolbar-toggle {
+    display: inline-block;
+  }
+  /* Collapsed until the ⚙ adds .open (see toggleEditorToolbar in app.js).
+     [hidden] still wins over both states - it's !important at the top of
+     this file - so a row with nothing worth showing stays gone either way. */
+  .editor-toolbar:not(.open) {
+    display: none;
+  }
+}
+
+/* The phone rules above key off the *window*, which is exactly wrong for
+   split view: opening it halves the editor pane's own width while the
+   window itself stays as wide as ever, so a viewport media query never
+   fires and the six-plus buttons in .editor-actions (and the format/model/
+   reasoning/context row below them) just wrap or overflow instead. A
+   container query keys off the pane's own rendered width instead, so the
+   exact same collapse - icon-only buttons, the toolbar row folded behind ⚙ -
+   also kicks in whenever *this* pane is narrow, split view or not, at any
+   window width. */
+.editor-pane {
+  container: editor-pane / inline-size;
+}
+
+@container editor-pane (max-width: 520px) {
+  .editor-actions .btn-label {
+    display: none;
+  }
+  .editor-actions .btn-icon {
+    margin-right: 0;
+    font-size: 17px;
+  }
+  .toolbar-toggle {
+    display: inline-block;
+  }
+  .editor-toolbar:not(.open) {
+    display: none;
+  }
+}
+
+/* ---------- middle: editor / right: preview ---------- */
+
+.editor-pane,
+.preview-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  /* Anchors .scroll-nav (below) to this pane rather than the viewport - the
+     pane is always on-screen whenever its own content is scrollable, unlike
+     .pane-expand-btn's `position: fixed`, which exists specifically because
+     that button must still work while its pane is display:none. */
+  position: relative;
+}
+
+/* Floating "scroll to top/bottom" buttons over the editor/preview content -
+   one pair per pane (see #editor-scroll-top-btn/#preview-scroll-top-btn
+   etc. in index.html). Visibility (the .visible class) is driven by
+   app.js's updateScrollNavVisibility: hidden unless that pane's content
+   actually overflows *and* isn't already scrolled to that edge, so they
+   don't clutter a short document with buttons that would be no-ops. */
+.scroll-nav {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  z-index: 4;
+}
+
+.scroll-nav-btn {
+  display: none;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 50%;
+  align-items: center;
+  justify-content: center;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.18);
+  opacity: 0.85;
+}
+
+/* Overrides .icon-btn:hover's rectangular background explicitly - same
+   specificity, and without this its background would show past the
+   circle's border-radius as a squared-off corner. */
+.scroll-nav-btn:hover {
+  opacity: 1;
+  background: var(--panel);
+  color: var(--text);
+}
+
+.scroll-nav-btn.visible {
+  display: flex;
+}
+
+.editor-pane {
+  border-right: 1px solid var(--border);
+}
+
+.preview-pane.collapsed {
+  display: none;
+}
+
+.pane-header {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+}
+
+.pane-title-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+
+.pane-filename {
+  font-size: 12.5px;
+  font-family: "SF Mono", Consolas, monospace;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 1;
+}
+
+/* Wraps rather than overflowing: a draft can show four buttons at once
+   (save / publish / inline complete / send) plus the "live" checkbox, which
+   is more than a phone-width header fits on one line. */
+.editor-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.preview-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.tool-status {
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-contrast);
+  background: var(--accent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+.editor-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.editor-toolbar select {
+  padding: 5px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
+  max-width: 160px;
+}
+
+.editor-toolbar .warning {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.editor {
+  flex: 1;
+  border: none;
+  resize: none;
+  padding: 16px;
+  font-family: "SF Mono", Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  background: var(--panel);
+  color: var(--text);
+}
+
+.editor:disabled {
+  background: var(--bg);
+  color: var(--muted);
+}
+
+/* CodeMirror stands in for the textarea above (see editor.js) and has to
+   fill the same slot: a flex child of .editor-pane that scrolls internally
+   rather than stretching the pane. The colors come from the same variables
+   the textarea used, so the two look alike apart from the fold gutter. */
+.editor-pane .cm-editor {
+  flex: 1;
+  min-height: 0;
+  background: var(--panel);
+  color: var(--text);
+}
+
+.editor-pane .cm-editor.cm-focused {
+  outline: none;
+}
+
+/* Read-only (no document open, or a send in flight) - the same "not yours
+   to type in right now" shading .editor:disabled had. */
+.editor-pane .cm-editor:not(.cm-focused) .cm-content[contenteditable="false"],
+.editor-pane .cm-editor .cm-content[contenteditable="false"] {
+  background: var(--bg);
+  color: var(--muted);
+}
+
+@media (max-width: 700px) {
+  .editor-pane .cm-editor {
+    font-size: 16px;
+  }
+}
+
+.editor:focus {
+  outline: none;
+}
+
+/* The "rendered" half of #view-mode-btn's toggle (see toggleEditorViewMode in
+   app.js): fills the exact same flex slot .cm-editor does, sized the same
+   way, with the two of them swapped by `hidden` (never both visible at
+   once) rather than one drawn over the other - CodeMirror's own DOM is left
+   completely alone either way, just hidden. */
+.editor-rendered {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 24px;
+  background: var(--panel);
+}
+
+.preview-pane {
+  background: var(--panel);
+}
+
+.preview {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 24px;
+}
+
+/* ---------- rendered markdown (preview pane) ---------- */
+
+.markdown-body {
+  font-size: 14px;
+  line-height: 1.6;
+  word-wrap: break-word;
+}
+
+.markdown-body p {
+  margin: 0 0 10px;
+}
+
+.markdown-body p:last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body pre {
+  background: var(--code-bg);
+  padding: 12px;
+  border-radius: 8px;
+  overflow-x: auto;
+}
+
+.markdown-body code {
+  background: var(--code-bg);
+  padding: 1px 4px;
+  border-radius: 4px;
+  font-family: "SF Mono", Consolas, monospace;
+  font-size: 13px;
+}
+
+.markdown-body pre code {
+  background: none;
+  padding: 0;
+}
+
+.markdown-body blockquote {
+  margin: 0 0 10px;
+  padding-left: 12px;
+  border-left: 3px solid var(--border);
+  color: var(--muted);
+}
+
+.markdown-body ul, .markdown-body ol {
+  margin: 0 0 10px;
+  padding-left: 22px;
+}
+
+.markdown-body .error {
+  color: #b91c1c;
+}
+
+.markdown-body table {
+  display: block;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 0 0 10px;
+  font-size: 13px;
+}
+
+.markdown-body th, .markdown-body td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.markdown-body th {
+  background: var(--bg);
+  font-weight: 700;
+}
+
+.markdown-body .math-display {
+  margin: 0 0 10px;
+  /* overflow-x: auto implicitly makes overflow-y clip too (CSS spec: a
+     non-"visible" x-axis forces the y-axis out of "visible" as well), which
+     crops descenders like an integral's lower limit that sit just below the
+     baseline. The vertical padding gives them room so nothing gets cut. */
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 8px 0;
+  text-align: center;
+}
+
+.markdown-body .math-error {
+  color: #b91c1c;
+  font-family: "SF Mono", Consolas, monospace;
+  font-size: 13px;
+}
+
+.markdown-body .katex-display {
+  margin: 0;
+}
+
+/* ---------- mobile tab bar (phones only; see breakpoint below) ---------- */
+
+.mobile-tabs {
+  display: none;
+}
+
+/* Resizing/collapsing panes is a desktop-only affordance - below this width
+   the tree/preview panes are already single-purpose (tablet: preview
+   hidden outright; phone: one pane at a time via the tab bar below), so
+   there's nothing meaningful left to resize or collapse. Split view (a
+   *third* text pane, see .layout.split-view above) is the same story, one
+   size class earlier: #editor-pane-b/#split-resizer are forced hidden
+   regardless of their own open/closed state, and the toggle that opens them
+   goes with them - app.js's own state (`splitViewOpen()`) is left alone, so
+   widening the window back past 900px picks the pane back up automatically. */
+@media (max-width: 900px) {
+  .pane-resizer,
+  .pane-expand-btn,
+  .pane-collapse-btn,
+  #editor-pane-b,
+  #split-resizer,
+  #split-toggle-btn {
+    display: none !important;
+  }
+}
+
+@media (min-width: 701px) and (max-width: 900px) {
+  .layout,
+  .layout.tree-collapsed,
+  .layout.preview-collapsed,
+  .layout.tree-collapsed.preview-collapsed {
+    grid-template-columns: 220px 1fr;
+  }
+  /* This template only has 2 explicit columns, but the base rules pin
+     .tree-pane/.editor-pane to columns 1/3 (see the desktop comment above
+     .layout) - left unset here, .editor-pane's explicit column 3 would
+     fall into an *implicit* auto-sized track past an empty column 2,
+     leaving a blank gap where column 2 should be. */
+  .tree-pane {
+    grid-column: 1;
+  }
+  .editor-pane {
+    grid-column: 2;
+  }
+  .preview-pane {
+    display: none;
+  }
+  /* Overrides .tree-pane.collapsed (equal specificity, but this rule comes
+     later) in case the tree was left collapsed at a wider viewport - the
+     button that could re-collapse/expand it is itself hidden at this width
+     (see the max-width: 900px block above), so it must default back open. */
+  .tree-pane.collapsed {
+    display: flex;
+  }
+}
+
+/* ---------- phones: one pane at a time, switched by the bottom tab bar,
+   with larger text and touch targets for comfortable reading/tapping
+   (e.g. presbyopia-friendly use on an iPhone) ---------- */
+
+@media (max-width: 700px) {
+  .layout {
+    display: block;
+    height: 100vh;
+    height: 100dvh; /* dynamic viewport height: accounts for Safari's collapsing toolbars */
+    overflow: hidden;
+  }
+
+  .tree-pane,
+  .editor-pane,
+  .preview-pane {
+    display: none;
+    width: 100%;
+    height: calc(100vh - 64px - env(safe-area-inset-bottom, 0px));
+    height: calc(100dvh - 64px - env(safe-area-inset-bottom, 0px));
+    border-right: none;
+  }
+
+  body[data-mobile-view="tree"] .tree-pane {
+    display: flex;
+  }
+  body[data-mobile-view="editor"] .editor-pane {
+    display: flex;
+  }
+  body[data-mobile-view="preview"] .preview-pane {
+    display: flex;
+  }
+
+  .mobile-tabs {
+    display: flex;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 64px;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    background: var(--panel);
+    border-top: 1px solid var(--border);
+    z-index: 10;
+  }
+
+  .mobile-tab {
+    flex: 1;
+    border: none;
+    background: none;
+    color: var(--muted);
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .mobile-tab.active {
+    color: var(--accent);
+  }
+
+  /* larger text and roomier tap targets throughout */
+  .tree-header h1 {
+    font-size: 20px;
+  }
+
+  .editor-toolbar select,
+  .warning {
+    font-size: 16px;
+  }
+
+  .editor-toolbar select {
+    padding: 12px;
+  }
+
+  .global-row,
+  .project-row,
+  .session-row,
+  .document-row {
+    padding: 14px 10px;
+    font-size: 17px;
+  }
+
+  .disclosure {
+    font-size: 13px;
+  }
+
+  .doc-role-badge {
+    width: 22px;
+    height: 22px;
+    font-size: 13px;
+  }
+
+  .icon-btn {
+    font-size: 20px;
+    padding: 8px 12px;
+  }
+
+  .primary-btn,
+  .secondary-btn {
+    font-size: 16px;
+    padding: 12px 16px;
+  }
+
+  .pane-filename {
+    font-size: 15px;
+  }
+
+  .editor {
+    font-size: 17px;
+    line-height: 1.7;
+  }
+
+  .markdown-body {
+    font-size: 18px;
+    line-height: 1.75;
+  }
+
+  .markdown-body pre,
+  .markdown-body code {
+    font-size: 16px;
+  }
+}
+
+/* ---------- PDF export (index.html only - public.html has no app chrome
+   to isolate from, so it just prints its whole page directly and skips
+   all of this; this stylesheet is shared by both pages, so the
+   hide-everything-but-#print-target rule below is deliberately scoped to
+   body.app-shell (index.html only) - unscoped, it would hide public.html's
+   real content too with nothing there to un-hide it, printing a blank
+   page). #print-target is populated with a snapshot of the live preview's
+   rendered HTML right before window.print() (see exportPreviewToPdf in
+   app.js), rather than printing .preview-pane in place - that pane can be
+   resized/collapsed by the user, and isolating a plain top-level element
+   from the rest of the page is far simpler than fighting the resizable
+   3-pane grid and its own collapse states in print media.
+
+   Hiding every sibling with `display: none` (rather than the more common
+   visibility:hidden + position:absolute trick) is deliberate: it keeps
+   #print-target itself in normal document flow, sole content of the page,
+   which is what a forced page-break-before/break-before (see
+   .print-doc-break below, for exportSessionToPdf's multi-document export)
+   needs to reliably paginate on - pulling it out of flow with `position:
+   absolute` left engines free to render the whole thing as one
+   unpaginated block instead of honoring break points inside it. */
+#print-target {
+  display: none;
+}
+
+@media print {
+  body.app-shell > :not(#print-target) {
+    display: none !important;
+  }
+  body.app-shell #print-target {
+    display: block;
+  }
+  @page {
+    margin: 20mm 18mm;
+  }
+}
+
+/* An expanded inline thread in the preview (see renderDocumentWithThreads).
+   Deliberately unlike the surrounding document: this is scratch conversation
+   that never reaches a published page, and it shouldn't be mistaken for
+   content while reading. Clicking it collapses the thread, hence the
+   pointer. Its turn headings are shrunk - inside a box this small, an <h2>
+   per turn is all weight and no information. */
+.inline-thread {
+  border-left: 3px solid var(--border);
+  background: var(--code-bg);
+  border-radius: 0 6px 6px 0;
+  padding: 2px 14px;
+  margin: 16px 0;
+  cursor: pointer;
+}
+
+.inline-thread h2 {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  border: none;
+  margin: 14px 0 6px;
+  padding: 0;
+}
+
+/* Folder PDF export only (see exportSessionToPdf in app.js) - starts each
+   document after the first on its own page. A single document's export
+   has nothing to separate, so exportPreviewToPdf never uses this. Both
+   properties set for the same break (browsers still print off the
+   `page-break-*` alias, but a couple only honor the newer `break-*` name). */
+.print-doc-break {
+  page-break-before: always;
+  break-before: page;
+}
+
+/* ---------- quick open (⌘/Ctrl+P, ⌘/Ctrl+K, or the 🔍 button) ---------- */
+
+.quick-open-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 12vh;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.quick-open-panel {
+  width: min(560px, calc(100vw - 32px));
+  max-height: min(60vh, 480px);
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.28);
+  overflow: hidden;
+}
+
+.quick-open-input {
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  font-size: 15px;
+  padding: 14px 16px;
+}
+
+.quick-open-input:focus {
+  outline: none;
+}
+
+.quick-open-results {
+  overflow-y: auto;
+  padding: 6px;
+}
+
+.quick-open-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.quick-open-row.selected {
+  background: var(--active-bg);
+}
+
+.quick-open-row-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  min-width: 0;
+}
+
+.quick-open-row-main .doc-role-badge {
+  flex-shrink: 0;
+}
+
+.quick-open-row-filename {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The matched characters within the filename (see fuzzyScore in app.js) -
+   the same signal VS Code's own Quick Open highlights, so the eye can see
+   *why* a loosely-typed query matched this row instead of the one above it. */
+.quick-open-row-filename mark {
+  background: none;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.quick-open-row-path {
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quick-open-empty {
+  padding: 24px 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.quick-open-hint {
+  padding: 8px 14px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+@media (max-width: 700px) {
+  .quick-open-overlay {
+    padding-top: 8vh;
+  }
+}
+
+/* ---------- keyboard shortcuts help ("?", or the ⌨ button) ---------- */
+
+.shortcuts-panel {
+  max-height: min(75vh, 620px);
+}
+
+.shortcuts-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.shortcuts-groups {
+  overflow-y: auto;
+  padding: 4px 16px 16px;
+}
+
+.shortcuts-group-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin: 16px 0 6px;
+}
+
+.shortcuts-group-title:first-child {
+  margin-top: 12px;
+}
+
+.shortcuts-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.shortcuts-row:last-child {
+  border-bottom: none;
+}
+
+.shortcuts-row-desc {
+  color: var(--text);
+}
+
+.shortcuts-row-keys {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+kbd.shortcut-key {
+  font-family: "SF Mono", Consolas, monospace;
+  font-size: 11.5px;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  padding: 2px 6px;
+  color: var(--text);
+}
+
+/* ---------- transcription dialog (see static/js/transcribe.js) ---------- */
+
+.transcribe-panel {
+  max-height: none;
+}
+
+.transcribe-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 4px 16px 16px;
+}
+
+.transcribe-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.transcribe-drop {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 84px;
+  padding: 12px;
+  border: 1.5px dashed var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  text-align: center;
+  cursor: pointer;
+  word-break: break-all;
+}
+
+.transcribe-drop.over,
+.transcribe-drop:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.transcribe-or {
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.transcribe-record,
+.transcribe-start {
+  padding: 9px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.transcribe-record.recording {
+  border-color: #dc2626;
+  color: #dc2626;
+  font-variant-numeric: tabular-nums;
+}
+
+.transcribe-row {
+  display: flex;
+  gap: 8px;
+}
+
+.transcribe-title {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+}
+
+.transcribe-lang {
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+}
+
+.transcribe-status {
+  min-height: 1.4em;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.transcribe-status.error {
+  color: #b91c1c;
+}
+
+.transcribe-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.transcribe-start {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+  font-weight: 600;
+}
+
+.transcribe-start:disabled,
+.transcribe-record:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.quick-open-overlay.busy {
+  cursor: progress;
+}

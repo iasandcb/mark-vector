@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>mark-vector</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.18.4/dist/katex.min.css">
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body data-mobile-view="tree" class="app-shell">
+  <div id="layout" class="layout">
+    <aside id="tree-pane" class="tree-pane">
+      <div class="tree-header">
+        <div class="tree-header-row">
+          <h1>mark-vector</h1>
+          <div class="header-actions">
+            <button id="quick-open-btn" class="icon-btn" type="button" data-i18n-title="quickOpen.openTitle">🔍</button>
+            <button id="shortcuts-btn" class="icon-btn" type="button" data-i18n-title="shortcuts.openTitle">⌨</button>
+            <span id="lang-select-slot"></span>
+            <button id="tree-collapse-btn" class="icon-btn pane-collapse-btn" data-i18n-title="ui.collapsePanel">«</button>
+          </div>
+        </div>
+        <button id="new-project-btn" class="primary-btn full-width" data-i18n="ui.newProject"></button>
+        <div id="auth-info" class="auth-info" hidden></div>
+      </div>
+      <div id="global-system-row" class="document-row global-row">
+        <span class="doc-role-badge role-system">G</span>
+        <span class="doc-filename" data-i18n="tree.globalSystemPrompt"></span>
+      </div>
+      <div id="global-custom-symbols-row" class="document-row global-row">
+        <span class="doc-role-badge role-system">C</span>
+        <span class="doc-filename" data-i18n="tree.globalCustomSymbols"></span>
+      </div>
+      <div id="hermes-section" class="hermes-section" hidden>
+        <div id="hermes-header" class="hermes-header">
+          <span id="hermes-disclosure" class="disclosure">▶</span>
+          <span class="hermes-title" data-i18n="hermes.sectionTitle"></span>
+        </div>
+        <div id="hermes-list" class="hermes-list" hidden></div>
+      </div>
+      <div id="session-tree" class="session-tree"></div>
+    </aside>
+
+    <div id="tree-resizer" class="pane-resizer" data-i18n-title="ui.dragToResize"></div>
+
+    <main id="editor-pane" class="editor-pane">
+      <div class="pane-header">
+        <div class="pane-title-group">
+          <span id="editor-filename" class="pane-filename" data-i18n="editor.selectDocument"></span>
+          <span id="tool-status" class="tool-status" hidden></span>
+        </div>
+        <div class="editor-actions">
+          <!-- Each of these carries its icon and its wording as separate
+               spans: on a phone the row can't fit four worded buttons, so
+               the labels are dropped there and the icons stand alone (see
+               .btn-label in style.css). The publish button's own wording is
+               swapped in JS, which is why only its label span is scripted -
+               see updatePublishButton. -->
+          <button id="save-btn" class="secondary-btn" disabled data-i18n-title="editor.save">
+            <span class="btn-icon" aria-hidden="true">💾</span>
+            <span class="btn-label" data-i18n="editor.save"></span>
+          </button>
+          <button id="publish-btn" class="secondary-btn" disabled hidden>
+            <span id="publish-icon" class="btn-icon" aria-hidden="true">🔗</span>
+            <span id="publish-label" class="btn-label"></span>
+          </button>
+          <button id="inline-complete-btn" class="secondary-btn" disabled hidden data-i18n-title="editor.inlineCompleteTitle">
+            <span class="btn-icon" aria-hidden="true">✨</span>
+            <span class="btn-label" data-i18n="editor.inlineComplete"></span>
+          </button>
+          <!-- Live dictation into the editor at the caret (see the dictation
+               section in app.js) - hidden entirely in a browser without the
+               Web Speech API (Firefox). The language select is its own
+               per-browser preference, independent of the UI language, so a
+               Korean UI can still take English dictation. -->
+          <span id="dictation-group" class="dictation-group" hidden>
+            <button id="dictation-btn" class="secondary-btn" type="button" disabled aria-pressed="false" data-i18n-title="editor.dictationTitle">
+              <span class="btn-icon" aria-hidden="true">🎤</span>
+              <span id="dictation-label" class="btn-label" data-i18n="editor.dictation"></span>
+            </button>
+            <select id="dictation-lang" class="dictation-lang" data-i18n-title="editor.dictationLangTitle">
+              <option value="ko-KR">KO</option>
+              <option value="en-US">EN</option>
+              <option value="ja-JP">JA</option>
+            </select>
+          </span>
+          <!-- Appears only with the caret inside an inline thread (see
+               updateInlineThreadButton) - a control for something that isn't
+               there would just be another disabled button in a row that's
+               already tight on a phone. -->
+          <button id="thread-toggle-btn" class="secondary-btn" type="button" disabled hidden data-i18n-title="editor.threadToggle">
+            <span class="btn-icon" aria-hidden="true">👁</span>
+            <span class="btn-label" data-i18n="editor.thread"></span>
+          </button>
+          <button id="send-btn" class="primary-btn" disabled data-i18n-title="editor.send">
+            <span class="btn-icon" aria-hidden="true">💬</span>
+            <span class="btn-label" data-i18n="editor.send"></span>
+          </button>
+          <!-- Swaps the editor pane itself between the raw Markdown source
+               (editable) and the same rendering the preview pane shows (read-
+               only) - see toggleEditorViewMode in app.js. Its own "pressed"
+               look means "currently rendered", same convention as
+               #split-toggle-btn above. -->
+          <button id="view-mode-btn" class="secondary-btn" type="button" disabled aria-pressed="false" data-i18n-title="editor.viewModeTitle">
+            <span class="btn-icon" aria-hidden="true">📖</span>
+            <span id="view-mode-label" class="btn-label" data-i18n="editor.viewModeSource"></span>
+          </button>
+          <!-- Opens a second, lighter editor pane (view/edit/save only - no
+               AI toolbar) beside this one - see setSplitView in app.js. Its
+               own "pressed" look (aria-pressed, styled in style.css) is the
+               only indicator that it's open on a screen too narrow to show
+               the second pane at all (a phone, or a tablet - hidden there
+               entirely, see the max-width: 900px block in style.css). -->
+          <button id="split-toggle-btn" class="secondary-btn" type="button" aria-pressed="false" data-i18n-title="editor.splitView">
+            <span class="btn-icon" aria-hidden="true">◫</span>
+            <span class="btn-label" data-i18n="editor.splitView"></span>
+          </button>
+          <!-- Phone-only (see .toolbar-toggle in style.css): the toolbar row
+               below is collapsed by default there, where five combos cost
+               more vertical space than the editor can spare, and this opens
+               it on demand. On a wider screen the row is always open and
+               this button isn't rendered at all. -->
+          <button id="toolbar-toggle-btn" class="secondary-btn toolbar-toggle" type="button" aria-expanded="false" data-i18n-title="editor.toggleToolbar">
+            <span class="btn-icon" aria-hidden="true">⚙</span>
+          </button>
+        </div>
+      </div>
+      <!-- One row for every per-document control. The math format applies to
+           any document mark-vector owns (system prompts included), while the
+           provider/model/reasoning/context ones only mean anything for a
+           document that can actually be sent - so they're shown and hidden
+           independently inside this shared row (see updateEditorToolbarVisibility
+           in app.js), which is also why the row itself isn't just tied to one
+           of those conditions. -->
+      <div id="editor-toolbar" class="editor-toolbar" hidden>
+        <select id="format-select" data-i18n-title="editor.formatTitle">
+          <option value="latex" data-i18n="editor.formatLatex"></option>
+          <option value="asciimath" data-i18n="editor.formatAsciimath"></option>
+          <option value="hybrid" data-i18n="editor.formatHybrid"></option>
+        </select>
+        <select id="provider-select"></select>
+        <select id="model-select"></select>
+        <!-- Only "off" is static (so the selector is never empty before the
+             provider list loads) - the levels themselves are rebuilt per
+             model from /api/providers' reasoning_efforts, since they differ
+             per model. See updateReasoningAvailability in app.js. -->
+        <select id="reasoning-select" data-i18n-title="editor.reasoningTitle">
+          <option value="off" data-i18n="editor.reasoningOff"></option>
+        </select>
+        <select id="context-scope-select" data-i18n-title="editor.contextScopeTitle">
+          <option value="default" data-i18n="editor.contextScopeDefault"></option>
+          <option value="sibling" data-i18n="editor.contextScopeSibling"></option>
+          <option value="descendants" data-i18n="editor.contextScopeDescendants"></option>
+        </select>
+        <label id="live-public-row" class="checkbox-row live-public-row" hidden data-i18n-title="editor.liveTitle">
+          <input type="checkbox" id="live-public-checkbox">
+          <span id="live-public-status-dot" class="live-status-dot"></span>
+          <span data-i18n="editor.live"></span>
+        </label>
+        <!-- Publish option, stored with the share link itself (see
+             storage.set_publish_slides) - unlike "Live" above, which is a
+             per-browser preference. Same visibility rule: published only. -->
+        <label id="publish-slides-row" class="checkbox-row live-public-row" hidden data-i18n-title="editor.slidesTitle">
+          <input type="checkbox" id="publish-slides-checkbox">
+          <span data-i18n="editor.slides"></span>
+        </label>
+        <p id="provider-warning" class="warning" hidden data-i18n="provider.notConfigured"></p>
+      </div>
+      <textarea id="editor" class="editor" data-i18n-placeholder="editor.placeholder" disabled></textarea>
+      <!-- The "rendered" half of #view-mode-btn's toggle: an absolutely-
+           positioned cover over the editor (.editor-pane already establishes
+           the positioning context) rather than swapping CodeMirror's own DOM
+           out, so editor.js/CodeMirror stay untouched by this - see
+           renderEditorView in app.js. Shares .markdown-body with the real
+           preview pane, so it picks up the exact same typography/math/thread
+           styling for free. -->
+      <div id="editor-rendered" class="markdown-body editor-rendered" hidden></div>
+      <div class="scroll-nav">
+        <button id="editor-scroll-top-btn" class="icon-btn scroll-nav-btn" type="button" data-i18n-title="ui.scrollToTop">↑</button>
+        <button id="editor-scroll-bottom-btn" class="icon-btn scroll-nav-btn" type="button" data-i18n-title="ui.scrollToBottom">↓</button>
+      </div>
+    </main>
+
+    <div id="split-resizer" class="pane-resizer" data-i18n-title="ui.dragToResize" hidden></div>
+
+    <!-- The split-view companion to .editor-pane above: view/edit/save any
+         document beside the primary one, but none of its AI toolbar (no
+         send, no inline-complete, no provider/model row) - see setSplitView
+         and selectDocumentB in app.js. Starts hidden; opened from
+         #split-toggle-btn or by opening a document "to the side" from the
+         tree (⌘/Ctrl-click a row, or its own tree icon). -->
+    <main id="editor-pane-b" class="editor-pane" hidden>
+      <div class="pane-header">
+        <div class="pane-title-group">
+          <span id="editor-filename-b" class="pane-filename" data-i18n="editor.selectDocument"></span>
+        </div>
+        <div class="editor-actions">
+          <button id="save-btn-b" class="secondary-btn" disabled data-i18n-title="editor.save">
+            <span class="btn-icon" aria-hidden="true">💾</span>
+          </button>
+          <button id="close-split-btn" class="icon-btn" type="button" data-i18n-title="ui.closeSplit">×</button>
+        </div>
+      </div>
+      <textarea id="editor-b" class="editor" data-i18n-placeholder="editor.placeholder" disabled></textarea>
+      <div class="scroll-nav">
+        <button id="editor-scroll-top-btn-b" class="icon-btn scroll-nav-btn" type="button" data-i18n-title="ui.scrollToTop">↑</button>
+        <button id="editor-scroll-bottom-btn-b" class="icon-btn scroll-nav-btn" type="button" data-i18n-title="ui.scrollToBottom">↓</button>
+      </div>
+    </main>
+
+    <div id="preview-resizer" class="pane-resizer" data-i18n-title="ui.dragToResize"></div>
+
+    <section id="preview-pane" class="preview-pane">
+      <div class="pane-header">
+        <span class="pane-filename" data-i18n="preview.title"></span>
+        <div class="preview-actions">
+          <label class="checkbox-row sync-scroll-row">
+            <input type="checkbox" id="sync-scroll-checkbox">
+            <span data-i18n="preview.syncScroll"></span>
+          </label>
+          <label class="checkbox-row glasses-row">
+            <input type="checkbox" id="glasses-checkbox">
+            <span data-i18n="preview.glasses"></span>
+          </label>
+          <button id="download-md-btn" class="icon-btn" disabled data-i18n-title="preview.downloadMdTitle">⤓ MD</button>
+          <button id="export-pdf-btn" class="icon-btn" disabled data-i18n-title="preview.exportPdfTitle">⤓ PDF</button>
+          <button id="preview-collapse-btn" class="icon-btn pane-collapse-btn" data-i18n-title="ui.collapsePanel">»</button>
+        </div>
+      </div>
+      <div id="glasses-toolbar" class="glasses-toolbar" hidden>
+        <span id="glasses-status-dot" class="live-status-dot"></span>
+        <span class="glasses-toolbar-label" data-i18n="preview.glassesUrlLabel"></span>
+        <input id="glasses-url-input" class="glasses-url-input" type="text" readonly data-i18n-title="preview.glassesUrlTitle">
+        <button id="glasses-copy-btn" class="icon-btn" type="button" data-i18n-title="preview.glassesCopyTitle">⧉</button>
+      </div>
+      <div id="preview" class="preview markdown-body"></div>
+      <div class="scroll-nav">
+        <button id="preview-scroll-top-btn" class="icon-btn scroll-nav-btn" type="button" data-i18n-title="ui.scrollToTop">↑</button>
+        <button id="preview-scroll-bottom-btn" class="icon-btn scroll-nav-btn" type="button" data-i18n-title="ui.scrollToBottom">↓</button>
+      </div>
+    </section>
+  </div>
+
+  <button id="tree-expand-btn" class="pane-expand-btn" hidden data-i18n-title="ui.expandPanel">»</button>
+  <button id="preview-expand-btn" class="pane-expand-btn" hidden data-i18n-title="ui.expandPanel">«</button>
+
+  <!-- Populated with a snapshot of #preview's rendered HTML right before
+       window.print() (see exportPreviewToPdf in app.js) - kept separate
+       from the live preview pane so PDF export works regardless of the
+       pane's current width/collapsed state, and so the print stylesheet
+       (style.css's @media print block) only has to isolate one fixed
+       target instead of fighting the resizable 3-pane grid layout. -->
+  <div id="print-target" class="markdown-body"></div>
+
+  <nav id="mobile-tabs" class="mobile-tabs">
+    <button type="button" class="mobile-tab active" data-view="tree" data-i18n="mobile.tree"></button>
+    <button type="button" class="mobile-tab" data-view="editor" data-i18n="mobile.editor"></button>
+    <button type="button" class="mobile-tab" data-view="preview" data-i18n="mobile.preview"></button>
+  </nav>
+
+  <!-- Fuzzy jump-to-document across every project/folder, not just the open
+       session's own siblings (that's what the ⌃/⌥ digit hints further up
+       already cover) - see openQuickOpen in app.js. Hidden by default;
+       opened with ⌘/Ctrl+P or ⌘/Ctrl+K, or the 🔍 button above the tree. -->
+  <div id="quick-open-overlay" class="quick-open-overlay" hidden>
+    <div class="quick-open-panel" role="dialog" aria-modal="true">
+      <input
+        id="quick-open-input"
+        class="quick-open-input"
+        type="text"
+        data-i18n-placeholder="quickOpen.placeholder"
+        autocomplete="off"
+        autocapitalize="off"
+        spellcheck="false"
+      >
+      <div id="quick-open-results" class="quick-open-results"></div>
+      <div id="quick-open-empty" class="quick-open-empty" data-i18n="quickOpen.empty" hidden></div>
+      <div id="quick-open-hint" class="quick-open-hint" data-i18n="quickOpen.hint"></div>
+    </div>
+  </div>
+
+  <!-- Every keyboard shortcut this app binds, in one place - see
+       renderShortcutsHelp in app.js, which is also the one source of truth
+       these rows are generated from (nothing here is hand-duplicated, so a
+       shortcut added there can't quietly go undocumented here). Opened with
+       "?" (outside any text field - see the shortcuts-help keydown listener)
+       or the ⌨ button above the tree. -->
+  <div id="shortcuts-overlay" class="quick-open-overlay" hidden>
+    <div class="quick-open-panel shortcuts-panel" role="dialog" aria-modal="true">
+      <div class="shortcuts-header">
+        <span data-i18n="shortcuts.title"></span>
+        <button id="shortcuts-close-btn" class="icon-btn" type="button" data-i18n-title="ui.close">×</button>
+      </div>
+      <div id="shortcuts-groups" class="shortcuts-groups"></div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.18.4/dist/katex.min.js"
+    integrity="sha384-ykMNcWQhhTUb0YV9SPpPUFURHZ+tWmubkakGBP+OgNK/UXdO2gtzglWx0Rj9hnO3"
+    crossorigin="anonymous"></script>
+  <script type="module" src="/static/js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# Secrets - real values live in backend/.env locally and `fly secrets` in prod
+.env
+
+# App state: projects, published links, session secret, ChatGPT credentials,
+# models cache... Created lazily under DATA_DIR (see storage.py), never source.
+data/
+
+# Local tooling output
+.playwright-mcp/
+.DS_Store

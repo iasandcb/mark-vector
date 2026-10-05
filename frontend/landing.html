@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>mark-vector — a Markdown-native LLM workspace</title>
+  <meta name="description" content="mark-vector is a writing-first LLM client where every prompt and every reply is a complete Markdown document, with first-class math, per-turn model choice, and sign in with ChatGPT.">
+  <meta property="og:title" content="mark-vector">
+  <meta property="og:description" content="A Markdown-native LLM workspace: every turn is a document.">
+  <style>
+    :root {
+      --bg: #f7f7f5;
+      --panel: #ffffff;
+      --border: #e3e2de;
+      --text: #1f1e1c;
+      --muted: #6b6964;
+      --accent: #b45309;
+      --accent-soft: #fdf3e7;
+      --accent-contrast: #ffffff;
+      --code-bg: #f1f0ec;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #171614;
+        --panel: #201f1c;
+        --border: #34322e;
+        --text: #ecebe8;
+        --muted: #a19e97;
+        --accent: #f59e0b;
+        --accent-soft: #2c2214;
+        --accent-contrast: #1a1204;
+        --code-bg: #2a2925;
+      }
+    }
+    * { box-sizing: border-box; }
+    html { -webkit-text-size-adjust: 100%; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+      color: var(--text);
+      background: var(--bg);
+      line-height: 1.6;
+    }
+    a { color: var(--accent); }
+    .wrap { max-width: 1040px; margin: 0 auto; padding: 0 20px; }
+
+    header.top {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 18px 0;
+    }
+    .brand { font-weight: 700; font-size: 18px; letter-spacing: -0.01em; text-decoration: none; color: var(--text); }
+    .brand span { color: var(--accent); }
+    nav.top-actions { display: flex; gap: 8px; align-items: center; }
+    .lang-toggle {
+      border: 1px solid var(--border); background: var(--panel); color: var(--muted);
+      border-radius: 6px; padding: 6px 10px; font-size: 13px; cursor: pointer;
+    }
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 10px 18px; border-radius: 8px; font-size: 15px; font-weight: 600;
+      text-decoration: none; border: 1px solid transparent;
+    }
+    .btn-primary { background: var(--accent); color: var(--accent-contrast); }
+    .btn-ghost { border-color: var(--border); color: var(--text); background: var(--panel); }
+    .btn-small { padding: 6px 12px; font-size: 13px; }
+
+    .hero { padding: 56px 0 40px; }
+    .hero h1 {
+      font-size: clamp(32px, 6vw, 52px); line-height: 1.1; letter-spacing: -0.02em;
+      margin: 0 0 18px; max-width: 16ch;
+    }
+    .hero p.lede { font-size: clamp(17px, 2.2vw, 20px); color: var(--muted); max-width: 60ch; margin: 0 0 28px; }
+    .hero .ctas { display: flex; gap: 12px; flex-wrap: wrap; }
+
+    /* A drawn, not screenshotted, picture of the three-pane layout. */
+    .mock {
+      margin: 44px 0 0; border: 1px solid var(--border); border-radius: 12px;
+      background: var(--panel); overflow: hidden;
+      box-shadow: 0 20px 50px -30px rgba(0,0,0,.35);
+    }
+    .mock-bar { display: flex; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+    .mock-bar i { width: 10px; height: 10px; border-radius: 50%; background: var(--border); display: block; }
+    .mock-body { display: grid; grid-template-columns: 1fr 1.4fr 1.4fr; min-height: 250px; font-size: 13px; }
+    .mock-pane { padding: 14px 16px; border-right: 1px solid var(--border); min-width: 0; }
+    .mock-pane:last-child { border-right: 0; }
+    .mock-label { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 10px; }
+    .tree div { padding: 3px 6px; border-radius: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .tree .indent { padding-left: 18px; }
+    .tree .indent2 { padding-left: 30px; color: var(--muted); }
+    .tree .sel { background: var(--accent-soft); color: var(--text); }
+    .src { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; white-space: pre-wrap; color: var(--muted); margin: 0; }
+    .src b { color: var(--text); font-weight: 600; }
+    .pill { display: inline-block; font-size: 11px; border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; margin: 0 4px 10px 0; color: var(--muted); }
+    .preview h4 { margin: 0 0 6px; font-size: 15px; }
+    .preview p { margin: 0 0 8px; }
+    .math { font-family: "Times New Roman", serif; font-style: italic; font-size: 17px; text-align: center; margin: 10px 0; }
+
+    section { padding: 48px 0; border-top: 1px solid var(--border); }
+    section h2 { font-size: 26px; letter-spacing: -0.01em; margin: 0 0 8px; }
+    section > .wrap > p.sub { color: var(--muted); margin: 0 0 28px; max-width: 65ch; }
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+    .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 20px; }
+    .card h3 { font-size: 16px; margin: 0 0 6px; }
+    .card p { margin: 0; color: var(--muted); font-size: 14.5px; }
+    .icon { font-size: 22px; margin-bottom: 8px; display: block; }
+
+    .split { display: grid; grid-template-columns: 1.1fr 1fr; gap: 32px; align-items: start; }
+    ol.steps { margin: 0; padding-left: 20px; }
+    ol.steps li { margin-bottom: 10px; }
+    ul.checks { list-style: none; padding: 0; margin: 0; }
+    ul.checks li { padding-left: 26px; position: relative; margin-bottom: 10px; }
+    ul.checks li::before { content: "✓"; position: absolute; left: 0; color: var(--accent); font-weight: 700; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9em; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+
+    .oss { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+    .oss .card a.name { font-weight: 700; text-decoration: none; }
+
+    footer { border-top: 1px solid var(--border); padding: 28px 0 40px; color: var(--muted); font-size: 14px; }
+    footer .wrap { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+
+    [data-lang="ko"] .en, [data-lang="en"] .ko { display: none; }
+
+    @media (max-width: 820px) {
+      .grid { grid-template-columns: 1fr 1fr; }
+      .split { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 600px) {
+      .wrap { padding: 0 16px; }
+      .grid, .oss { grid-template-columns: 1fr; }
+      .mock-body { grid-template-columns: 1fr; }
+      .mock-pane { border-right: 0; border-bottom: 1px solid var(--border); }
+      .mock-pane.tree-pane { display: none; }
+      .hero { padding-top: 32px; }
+    }
+  </style>
+</head>
+<body id="landing" data-lang="en">
+  <div class="wrap">
+    <header class="top">
+      <a class="brand" href="/about">mark<span>-</span>vector</a>
+      <nav class="top-actions">
+        <button class="lang-toggle" id="lang-toggle" type="button">한국어</button>
+        <a class="btn btn-ghost btn-small" href="/login"><span class="en">Sign in</span><span class="ko">로그인</span></a>
+      </nav>
+    </header>
+
+    <div class="hero">
+      <h1>
+        <span class="en">Every turn is a document.</span>
+        <span class="ko">모든 턴이 하나의 문서입니다.</span>
+      </h1>
+      <p class="lede">
+        <span class="en">mark-vector is a writing-first LLM workspace. You write a prompt the way you'd write a note — in Markdown, with real math — and every reply comes back as a complete Markdown document you can edit, re-send, publish, or keep.</span>
+        <span class="ko">mark-vector는 글쓰기 중심의 LLM 작업 공간입니다. 노트를 쓰듯 마크다운과 수식으로 질문을 쓰면, 답변도 편집·재전송·공개·보관할 수 있는 완전한 마크다운 문서로 돌아옵니다.</span>
+      </p>
+      <div class="ctas">
+        <a class="btn btn-primary" href="/login"><span class="en">Sign in</span><span class="ko">로그인</span></a>
+        <a class="btn btn-ghost" href="#chatgpt"><span class="en">Use your ChatGPT plan</span><span class="ko">ChatGPT 플랜으로 쓰기</span></a>
+      </div>
+
+      <div class="mock" aria-hidden="true">
+        <div class="mock-bar"><i></i><i></i><i></i></div>
+        <div class="mock-body">
+          <div class="mock-pane tree-pane">
+            <div class="mock-label">Projects</div>
+            <div class="tree">
+              <div>📁 Linear algebra</div>
+              <div class="indent">🗂 Eigenvalues</div>
+              <div class="indent2">system.md</div>
+              <div class="indent2 sel">E1 · What is a…</div>
+              <div class="indent2">E2 · Diagonalize…</div>
+              <div class="indent">🗂 SVD notes</div>
+              <div>📁 Reading list</div>
+            </div>
+          </div>
+          <div class="mock-pane">
+            <div class="mock-label">Editor</div>
+            <span class="pill">ChatGPT · gpt-6.1-sol</span><span class="pill">reasoning: medium</span>
+<pre class="src"><b>## Question</b>
+Why does `A v = lambda v`
+imply `det(A - lambda I) = 0`?
+
+<b>## Answer</b>
+Rewrite as `(A - lambda I) v = 0`.
+A non-zero `v` exists only if
+the matrix is singular…</pre>
+          </div>
+          <div class="mock-pane preview">
+            <div class="mock-label">Preview</div>
+            <h4>Answer</h4>
+            <p>Rewrite the equation as</p>
+            <div class="math">(A − λI) v = 0</div>
+            <p>A non-zero <i>v</i> exists only if the matrix is singular, so</p>
+            <div class="math">det(A − λI) = 0</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <section>
+    <div class="wrap">
+      <h2><span class="en">What it does</span><span class="ko">주요 기능</span></h2>
+      <p class="sub">
+        <span class="en">Instead of a chat bubble stream, mark-vector keeps a tree of projects, sessions and turns, each turn a plain <code>.md</code> file on disk.</span>
+        <span class="ko">말풍선이 흘러가는 채팅 대신, 프로젝트 → 세션 → 턴의 트리로 정리하고 각 턴을 디스크의 평범한 <code>.md</code> 파일로 저장합니다.</span>
+      </p>
+      <div class="grid">
+        <div class="card">
+          <span class="icon">📝</span>
+          <h3><span class="en">Edit, then send</span><span class="ko">편집하고 보내기</span></h3>
+          <p><span class="en">Draft in a full editor with live preview. Every past turn stays an editable document you can revisit and build on.</span><span class="ko">실시간 미리보기가 있는 편집기에서 초안을 쓰고, 지난 턴도 언제든 다시 열어 고치고 이어 쓸 수 있는 문서로 남습니다.</span></p>
+        </div>
+        <div class="card">
+          <span class="icon">∑</span>
+          <h3><span class="en">Math that stays readable</span><span class="ko">읽히는 수식</span></h3>
+          <p><span class="en">LaTeX in replies can be converted to AsciiMath2 automatically, so the source stays as readable as the rendered KaTeX.</span><span class="ko">답변 속 LaTeX를 AsciiMath2로 자동 변환해, 렌더링된 KaTeX뿐 아니라 원문도 읽기 쉽게 유지합니다.</span></p>
+        </div>
+        <div class="card">
+          <span class="icon">🔀</span>
+          <h3><span class="en">Model per turn</span><span class="ko">턴마다 모델 선택</span></h3>
+          <p><span class="en">Pick provider, model and reasoning effort per message — ask GPT, follow up with Claude, in the same thread.</span><span class="ko">메시지마다 프로바이더·모델·사고 수준을 고릅니다. 같은 스레드에서 GPT에 묻고 Claude로 이어갈 수 있습니다.</span></p>
+        </div>
+        <div class="card">
+          <span class="icon">🧭</span>
+          <h3><span class="en">Layered system prompts</span><span class="ko">계층형 시스템 프롬프트</span></h3>
+          <p><span class="en">App-wide, project and folder prompts cascade down the tree, so context is set once and inherited.</span><span class="ko">앱 전체 → 프로젝트 → 폴더 순으로 프롬프트가 이어져, 한 번 정한 맥락이 아래로 상속됩니다.</span></p>
+        </div>
+        <div class="card">
+          <span class="icon">🔗</span>
+          <h3><span class="en">Share a single turn</span><span class="ko">턴 단위 공유</span></h3>
+          <p><span class="en">Publish any document to a read-only link — no account needed to read it.</span><span class="ko">어떤 문서든 읽기 전용 링크로 공개할 수 있고, 읽는 사람은 계정이 필요 없습니다.</span></p>
+        </div>
+        <div class="card">
+          <span class="icon">📱</span>
+          <h3><span class="en">Phone and glasses</span><span class="ko">휴대폰과 안경</span></h3>
+          <p><span class="en">A dedicated mobile layout, plus a live preview screen for smart-glasses displays.</span><span class="ko">휴대폰 전용 레이아웃과 스마트 안경 디스플레이용 실시간 미리보기 화면을 제공합니다.</span></p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="chatgpt">
+    <div class="wrap">
+      <h2><span class="en">Sign in with ChatGPT</span><span class="ko">ChatGPT로 로그인</span></h2>
+      <p class="sub">
+        <span class="en">Instead of pasting an OpenAI API key, you can connect your own ChatGPT plan. mark-vector then sends your OpenAI requests on that plan, within the limits you set in ChatGPT.</span>
+        <span class="ko">OpenAI API 키를 붙여 넣는 대신 본인의 ChatGPT 플랜을 연결할 수 있습니다. 그러면 mark-vector는 ChatGPT에서 정한 한도 안에서 그 플랜으로 OpenAI 요청을 보냅니다.</span>
+      </p>
+      <div class="split">
+        <div class="card">
+          <h3><span class="en">How it works</span><span class="ko">동작 방식</span></h3>
+          <ol class="steps">
+            <li><span class="en">Sign in with your ChatGPT account and approve plan usage on OpenAI's own consent screen.</span><span class="ko">ChatGPT 계정으로 로그인하고 OpenAI 동의 화면에서 플랜 사용을 허용합니다.</span></li>
+            <li><span class="en">OpenAI's models available to your account appear as the <b>ChatGPT</b> provider in the model picker.</span><span class="ko">계정에서 쓸 수 있는 모델이 모델 선택기의 <b>ChatGPT</b> 프로바이더로 나타납니다.</span></li>
+            <li><span class="en">Each reply is streamed from OpenAI's Responses API and saved as a Markdown turn.</span><span class="ko">답변은 OpenAI Responses API에서 스트리밍되어 마크다운 턴으로 저장됩니다.</span></li>
+            <li><span class="en">Track or cap usage anytime in <a href="https://chatgpt.com/settings/usage" rel="noopener">ChatGPT Settings → Usage</a>.</span><span class="ko">사용량은 언제든 <a href="https://chatgpt.com/settings/usage" rel="noopener">ChatGPT 설정 → Usage</a>에서 확인하고 제한할 수 있습니다.</span></li>
+          </ol>
+        </div>
+        <div class="card">
+          <h3><span class="en">What we do — and don't — access</span><span class="ko">접근하는 것과 하지 않는 것</span></h3>
+          <ul class="checks">
+            <li><span class="en">Only the permissions you approve: basic profile (email) and plan usage for model requests.</span><span class="ko">허용한 권한만 사용합니다: 기본 프로필(이메일)과 모델 요청을 위한 플랜 사용.</span></li>
+            <li><span class="en">No access to your ChatGPT conversations, memory or other account data.</span><span class="ko">ChatGPT 대화, 메모리 등 다른 계정 데이터에는 접근하지 않습니다.</span></li>
+            <li><span class="en">Requests are sent with <code>store: false</code>; your documents live in mark-vector, not in OpenAI's storage.</span><span class="ko">요청은 <code>store: false</code>로 보내며, 문서는 OpenAI가 아닌 mark-vector에 저장됩니다.</span></li>
+            <li><span class="en">Tokens are kept server-side in an owner-only file — never in the browser, logs or URLs.</span><span class="ko">토큰은 서버의 소유자 전용 파일에만 보관하며 브라우저·로그·URL에는 남기지 않습니다.</span></li>
+            <li><span class="en">Disconnect anytime from ChatGPT settings; signing out also revokes the session.</span><span class="ko">ChatGPT 설정에서 언제든 연결을 끊을 수 있고, 로그아웃하면 세션도 해지됩니다.</span></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <h2><span class="en">Open-source pieces</span><span class="ko">오픈소스 구성 요소</span></h2>
+      <p class="sub">
+        <span class="en">The reusable parts of mark-vector are published under the MIT license.</span>
+        <span class="ko">mark-vector에서 재사용할 수 있는 부분은 MIT 라이선스로 공개되어 있습니다.</span>
+      </p>
+      <div class="oss">
+        <div class="card">
+          <a class="name" href="https://github.com/iasandcb/asciimath2" rel="noopener">asciimath2</a>
+          <p><span class="en">The AsciiMath2 spec and a LaTeX → AsciiMath2 converter for Python (PyPI).</span><span class="ko">AsciiMath2 명세와 파이썬용 LaTeX → AsciiMath2 변환기 (PyPI).</span></p>
+        </div>
+        <div class="card">
+          <a class="name" href="https://github.com/iasandcb/asciimath-markdown" rel="noopener">asciimath-markdown</a>
+          <p><span class="en">The Markdown + math renderer behind mark-vector's preview (npm).</span><span class="ko">mark-vector 미리보기에 쓰이는 마크다운 + 수식 렌더러 (npm).</span></p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="wrap">
+      <span>© 2026 mark-vector · <span class="en">Early access — sign-in is currently invitation-only.</span><span class="ko">얼리 액세스 — 현재는 초대된 사용자만 로그인할 수 있습니다.</span></span>
+      <span><a href="https://github.com/iasandcb" rel="noopener">GitHub</a> · <a href="/login"><span class="en">Sign in</span><span class="ko">로그인</span></a></span>
+    </div>
+  </footer>
+
+  <script>
+    (function () {
+      const body = document.body;
+      const toggle = document.getElementById("lang-toggle");
+      function apply(lang) {
+        body.dataset.lang = lang;
+        document.documentElement.lang = lang;
+        toggle.textContent = lang === "ko" ? "English" : "한국어";
+      }
+      let lang = "en";
+      try {
+        lang = localStorage.getItem("mv-landing-lang") || (navigator.language || "").toLowerCase().startsWith("ko") && "ko" || "en";
+      } catch (e) {}
+      apply(lang);
+      toggle.addEventListener("click", function () {
+        const next = body.dataset.lang === "ko" ? "en" : "ko";
+        apply(next);
+        try { localStorage.setItem("mv-landing-lang", next); } catch (e) {}
+      });
+    })();
+  </script>
+</body>
+</html>

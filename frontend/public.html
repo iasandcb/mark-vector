@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>mark-vector</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.18.4/dist/katex.min.css">
+  <link rel="stylesheet" href="/static/css/style.css">
+  <style>
+    body {
+      display: flex;
+      justify-content: center;
+    }
+    .public-page {
+      width: 100%;
+      max-width: 760px;
+      padding: 32px 24px 80px;
+    }
+    .public-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 24px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    .public-filename {
+      flex: 1 1 auto;
+      min-width: 0;
+      font-size: 12.5px;
+      font-family: "SF Mono", Consolas, monospace;
+      color: var(--muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .public-error {
+      color: var(--muted);
+      font-size: 14px;
+      padding: 40px 0;
+      text-align: center;
+    }
+    @media print {
+      #export-pdf-btn,
+      #download-md-btn,
+      #view-toggle-btn {
+        display: none;
+      }
+    }
+
+    /* Slideshow mode (see public.js's setView) - the same rendered
+       .markdown-body content, split at its `---` lines into one <section
+       class="slide"> each, with only the current one shown. Font size is
+       set on the slide and everything inside (headings are browser-default
+       em sizes) scales with it. */
+    body.slides-mode {
+      display: block;
+    }
+    body.slides-mode .public-page {
+      max-width: none;
+      height: 100vh;
+      height: 100dvh;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    body.slides-mode .public-header {
+      margin: 0;
+      padding: 10px 16px;
+    }
+    body.slides-mode #public-content {
+      flex: 1 1 auto;
+      min-height: 0;
+      font-size: clamp(16px, 2.3vw, 30px);
+    }
+    .slide {
+      display: none;
+    }
+    body.slides-mode .slide.current {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      height: 100%;
+      overflow: auto;
+      padding: 3vh max(16px, 6vw);
+    }
+    /* Centered as a block, but text inside stays left-aligned - a column of
+       max-width content in the middle of a wide screen, not ragged centered
+       lines. `margin: auto 0` on the first/last child (rather than
+       justify-content alone) keeps an overflowing slide scrollable from its
+       top instead of clipping it. */
+    body.slides-mode .slide.current > * {
+      width: 100%;
+      max-width: 1100px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    body.slides-mode .slide.current > :first-child {
+      margin-top: auto;
+    }
+    body.slides-mode .slide.current > :last-child {
+      margin-bottom: auto;
+    }
+    body.slides-mode .slide pre,
+    body.slides-mode .slide code {
+      font-size: 0.8em;
+    }
+    body.slides-mode .slide pre code {
+      font-size: inherit;
+    }
+    .slide-nav {
+      display: none;
+      position: relative;
+    }
+    body.slides-mode .slide-nav {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      padding: 8px 16px calc(8px + env(safe-area-inset-bottom));
+      border-top: 1px solid var(--border);
+    }
+    .slide-counter {
+      min-width: 64px;
+      text-align: center;
+      font-size: 13px;
+      font-variant-numeric: tabular-nums;
+      color: var(--muted);
+    }
+    .slide-nav .icon-btn:disabled {
+      opacity: 0.35;
+      cursor: default;
+    }
+    #slide-prev-btn,
+    #slide-next-btn {
+      font-size: 22px;
+      padding: 2px 12px;
+    }
+    #slide-fullscreen-btn {
+      position: absolute;
+      right: 16px;
+      font-size: 16px;
+    }
+    /* Full screen is for presenting - the header's filename and buttons are
+       noise there; the nav bar stays for touch/mouse users. */
+    :fullscreen body.slides-mode .public-header {
+      display: none;
+    }
+    @media print {
+      body.slides-mode .public-page {
+        height: auto;
+        display: block;
+      }
+      body.slides-mode .public-header,
+      body.slides-mode .slide-nav {
+        display: none;
+      }
+      body.slides-mode #public-content {
+        font-size: 18px;
+      }
+      body.slides-mode .slide {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        min-height: 100vh;
+        padding: 0;
+        break-after: page;
+      }
+      body.slides-mode .slide:last-child {
+        break-after: auto;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="public-page">
+    <div id="public-header" class="public-header">
+      <span id="public-filename" class="public-filename"></span>
+      <span id="public-live-dot" class="live-status-dot" hidden data-i18n-title="public.liveTitle"></span>
+      <button id="view-toggle-btn" class="icon-btn" hidden></button>
+      <button id="download-md-btn" class="icon-btn" hidden data-i18n-title="preview.downloadMdTitle">⤓ MD</button>
+      <button id="export-pdf-btn" class="icon-btn" hidden data-i18n-title="preview.exportPdfTitle">⤓ PDF</button>
+    </div>
+    <div id="public-content" class="markdown-body"></div>
+    <nav id="slide-nav" class="slide-nav">
+      <button id="slide-prev-btn" class="icon-btn" data-i18n-title="public.prevSlide">‹</button>
+      <span id="slide-counter" class="slide-counter"></span>
+      <button id="slide-next-btn" class="icon-btn" data-i18n-title="public.nextSlide">›</button>
+      <button id="slide-fullscreen-btn" class="icon-btn" hidden data-i18n-title="public.fullscreen">⛶</button>
+    </nav>
+    <p id="public-error" class="public-error" hidden data-i18n="public.linkInvalid"></p>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.18.4/dist/katex.min.js"
+    integrity="sha384-ykMNcWQhhTUb0YV9SPpPUFURHZ+tWmubkakGBP+OgNK/UXdO2gtzglWx0Rj9hnO3"
+    crossorigin="anonymous"></script>
+  <script type="module" src="/static/js/public.js"></script>
+</body>
+</html>

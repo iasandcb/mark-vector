@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>mark-vector</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <style>
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+    }
+    .login-card {
+      text-align: center;
+      padding: 40px 36px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--panel);
+      min-width: 280px;
+    }
+    .login-card h1 {
+      font-size: 18px;
+      margin: 0 0 24px;
+    }
+    .login-error {
+      color: #b91c1c;
+      font-size: 13px;
+      margin: 0 0 16px;
+    }
+    .google-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 10px 20px;
+      border-radius: 6px;
+      background: var(--accent);
+      color: var(--accent-contrast);
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .google-btn:hover {
+      opacity: 0.9;
+    }
+    .login-divider {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 18px 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .login-divider::before,
+    .login-divider::after {
+      content: "";
+      flex: 1;
+      height: 1px;
+      background: var(--border);
+    }
+    .passcode-form {
+      display: flex;
+      gap: 8px;
+      justify-content: center;
+    }
+    .passcode-input {
+      width: 100px;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 20px;
+      letter-spacing: 6px;
+      text-align: center;
+      font-family: "SF Mono", Consolas, monospace;
+    }
+    .passcode-btn {
+      padding: 10px 16px;
+      border: none;
+      border-radius: 6px;
+      background: var(--accent);
+      color: var(--accent-contrast);
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .passcode-btn:hover {
+      opacity: 0.9;
+    }
+    .login-empty {
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .lang-select-row {
+      margin-top: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div class="login-card">
+    <h1>mark-vector</h1>
+    <p id="login-error" class="login-error" hidden></p>
+    <a id="google-btn" class="google-btn" href="/auth/login" data-i18n="login.signInWithGoogle" hidden></a>
+    <div id="login-divider" class="login-divider" hidden data-i18n="login.orDivider"></div>
+    <form id="passcode-form" class="passcode-form" hidden>
+      <input id="passcode-input" class="passcode-input" type="tel" inputmode="numeric" pattern="[0-9]*"
+        maxlength="4" autocomplete="off" data-i18n-placeholder="login.passcodePlaceholder">
+      <button type="submit" class="passcode-btn" data-i18n="login.passcodeSubmit"></button>
+    </form>
+    <p id="login-empty" class="login-empty" hidden data-i18n="login.notConfigured"></p>
+    <div class="lang-select-row">
+      <span id="lang-select-slot"></span>
+    </div>
+  </div>
+
+  <script type="module">
+    import { t, applyStaticTranslations, createLanguageSelect } from "/static/js/i18n.js";
+
+    applyStaticTranslations();
+    document.title = t("login.title");
+    document.getElementById("lang-select-slot").appendChild(createLanguageSelect());
+
+    const ERROR_KEYS = {
+      oauth_failed: "login.error.oauth_failed",
+      unauthorized: "login.error.unauthorized",
+    };
+    const errorEl = document.getElementById("login-error");
+    const error = new URLSearchParams(location.search).get("error");
+    if (error) {
+      errorEl.textContent = t(ERROR_KEYS[error] || "login.error.default");
+      errorEl.hidden = false;
+    }
+
+    // Which sign-in method(s) to show - google/passcode can each be on
+    // independently (see auth.py's GET /auth/config), and a fresh checkout
+    // with neither configured shouldn't show a Google button that would
+    // just 500 on click.
+    const googleBtn = document.getElementById("google-btn");
+    const dividerEl = document.getElementById("login-divider");
+    const passcodeForm = document.getElementById("passcode-form");
+    const passcodeInput = document.getElementById("passcode-input");
+    const emptyEl = document.getElementById("login-empty");
+
+    fetch("/auth/config")
+      .then((res) => res.json())
+      .then(({ google, passcode }) => {
+        googleBtn.hidden = !google;
+        passcodeForm.hidden = !passcode;
+        dividerEl.hidden = !(google && passcode);
+        emptyEl.hidden = google || passcode;
+      })
+      .catch(() => {
+        emptyEl.hidden = false;
+      });
+
+    passcodeInput.addEventListener("input", () => {
+      passcodeInput.value = passcodeInput.value.replace(/\D/g, "").slice(0, 4);
+    });
+
+    passcodeForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      errorEl.hidden = true;
+      try {
+        const res = await fetch("/auth/passcode", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code: passcodeInput.value }),
+        });
+        if (!res.ok) throw new Error();
+        location.href = "/";
+      } catch (err) {
+        errorEl.textContent = t("login.error.passcodeIncorrect");
+        errorEl.hidden = false;
+        passcodeInput.value = "";
+        passcodeInput.focus();
+      }
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+# This app's own persistent state (projects, published-link registry, the
+# session-signing secret) - never bake a snapshot of local dev data into the
+# image. In production this lives on the Fly volume mounted at DATA_DIR
+# instead (see fly.toml), starting empty - storage.py creates every path
+# under it lazily on first use.
+data/
+
+# Secrets - never in the image; set real values with `fly secrets set`.
+backend/.env
+
+# Local tooling output, not part of the app.
+.playwright-mcp/
+
+.git/
+.gitignore
+README.md
+
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+backend/.venv/

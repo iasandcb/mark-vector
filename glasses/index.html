@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <!-- Meta Ray-Ban Display web apps render into a fixed 600x600 viewport
+       with no page-level zoom/scroll (see
+       https://wearables.developer.meta.com/docs/develop/webapps/build/). -->
+  <meta name="viewport" content="width=600, height=600, initial-scale=1.0, user-scalable=no">
+  <meta name="description" content="Live preview of the mark-vector document currently being edited">
+  <meta name="mrbd-web-app-capable" content="yes">
+  <title>mark-vector Live</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.18.4/dist/katex.min.css">
+  <style>
+    /* The display is an additive waveguide: pure black contributes no
+       light, so it reads as transparent over the real world. Everything
+       drawn here has to be light/high-contrast to be visible at all - see
+       the Build guide's "Display Technology & Color Guidelines". */
+    * {
+      box-sizing: border-box;
+    }
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 600px;
+      height: 600px;
+      overflow: hidden;
+      background: #000;
+      color: #f5f5f0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    #screen {
+      width: 600px;
+      height: 600px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    #header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-shrink: 0;
+    }
+    #filename {
+      font-size: 14px;
+      font-family: "SF Mono", Consolas, monospace;
+      color: #9a9a92;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #status {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #5a2323;
+      flex-shrink: 0;
+      transition: background 200ms ease, box-shadow 200ms ease;
+    }
+    #status.live {
+      background: #00d4ff;
+      box-shadow: 0 0 8px #00d4ff;
+    }
+    /* JS-driven scroll only (see app.js's ArrowUp/ArrowDown handling) -
+       there's no page-level scroll here, but this inner pane is exactly the
+       kind of thing the Build guide's dpad pattern is meant for. */
+    #content {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      overflow-x: hidden;
+      font-size: 20px;
+      line-height: 1.5;
+    }
+    #content::-webkit-scrollbar {
+      display: none;
+    }
+    .hint {
+      color: #9a9a92;
+      font-size: 16px;
+    }
+    #content p, #content li, #content .math-display {
+      margin: 0 0 14px;
+    }
+    #content h1, #content h2, #content h3, #content h4 {
+      margin: 0 0 12px;
+      color: #ffffff;
+    }
+    #content pre {
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 6px;
+      padding: 10px;
+      overflow-x: auto;
+    }
+    #content code {
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 4px;
+      padding: 2px 5px;
+      font-size: 0.85em;
+    }
+    #content pre code {
+      padding: 0;
+      background: none;
+    }
+    #content blockquote {
+      border-left: 3px solid #00d4ff;
+      margin: 0 0 14px;
+      padding-left: 12px;
+      color: #c8c8c0;
+    }
+    #content table {
+      border-collapse: collapse;
+      width: 100%;
+      margin: 0 0 14px;
+      font-size: 0.85em;
+    }
+    #content th, #content td {
+      border: 1px solid rgba(255, 255, 255, 0.25);
+      padding: 4px 8px;
+      text-align: left;
+    }
+    #content a {
+      color: #00d4ff;
+    }
+    #content .math-error {
+      color: #ff6b6b;
+    }
+    /* KaTeX's own output is unstyled black text by default - repoint it to
+       the same light foreground as everything else, or every equation
+       renders invisible against the black background. */
+    #content .katex {
+      color: #f5f5f0;
+    }
+  </style>
+</head>
+<body>
+  <div id="screen">
+    <div id="header">
+      <span id="filename"></span>
+      <span id="status" title="Connection status"></span>
+    </div>
+    <div id="content">
+      <p class="hint">Connecting…</p>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.18.4/dist/katex.min.js"
+    integrity="sha384-ykMNcWQhhTUb0YV9SPpPUFURHZ+tWmubkakGBP+OgNK/UXdO2gtzglWx0Rj9hnO3"
+    crossorigin="anonymous"></script>
+  <script type="module" src="/glasses/app.js"></script>
+</body>
+</html>
