@@ -1986,8 +1986,9 @@ async function generateSlide(raw, context, onDelta) {
     "slide followed by more transcript. Turn all of it into exactly one clean slide in Markdown: " +
     "a `## ` title line, then 2-5 concise bullet points. Write in the speaker's own language, " +
     "fix obvious speech-recognition errors, and keep any math in the document's notation. " +
-    "Text between a pair of `$$` is math the speaker read aloud (e.g. \"x squared plus one\"): " +
-    "write it as a proper `$$...$$` formula on its own line. " +
+    "Text inside a `$$` block is math the speaker read aloud (e.g. \"x squared plus one\"): write it " +
+    "as real math and keep it a display block - a line with just `$$`, the formula, a line with just `$$` - " +
+    "on its own between bullets, never inside one. Short math inside bullet text uses `$...$`. " +
     "Output only the slide - no `---` lines, no code fence around it, nothing before or after.\n\n" +
     `Slide content:\n${raw}`;
   const neighbours = context.trim() ? splitSlides(stripInlineThreads(context)).slice(-SLIDE_CONTEXT_SLIDES).join("\n\n---\n\n") : "";
@@ -2117,50 +2118,68 @@ function openNewSlide() {
   showRemoteStatus(t("remote.newSlide"));
 }
 
-// Down: start a new paragraph where dictation is writing (the caret), so the
-// next thing said begins on a line of its own - a visible break on the
-// slide, unlike a single newline, which Markdown would fold into the same
-// paragraph. A no-op right after a break that's already there.
+// X: one line break where dictation is writing, so the next thing said
+// starts on the next line - inside a math block that's the formula's next
+// line; in text, two presses make a paragraph break.
 function breakLine() {
   if (!presenterUsable()) return;
   const pos = el.editor.selectionStart;
-  const before = el.editor.value.slice(0, pos);
-  if (!before.trim() || before.endsWith("\n\n")) return;
+  if (!el.editor.value.slice(0, pos).trim()) return;
   // Restarted rather than re-anchored, for the same reason as in
   // tidyCurrentSlide: the phrase in progress stays above the break.
   const wasDictating = !!dictation;
   if (wasDictating) stopDictation();
-  replaceEditorRange(pos, pos, before.endsWith("\n") ? "\n" : "\n\n");
+  replaceEditorRange(pos, pos, "\n");
   if (wasDictating) startDictation();
   showRemoteStatus(t("remote.lineBreak"));
 }
 
-// Y: math on/off. Inserts `$$` where dictation is writing - an opening one
-// if the current slide has no unclosed `$$` before the caret, a closing one
-// otherwise. The block gets a line of its own (a paragraph break before the
-// opening, one after the closing): a one-line `$$...$$` is what the
-// renderer shows as display math and what the LaTeX -> AsciiMath
-// conversion recognizes. Spoken math inside it ("x squared plus one") is
-// turned into real notation by a tidy (B) - see generateSlide's prompt.
+// Y: a math block. Outside one, inserts an empty block -
+//   $$
+//   (caret here)
+//   $$
+// - on lines of its own and puts the caret inside, so what's said next is
+// written into the formula. Inside one (an odd number of `$$` in the slide
+// before the caret), jumps past its closing `$$` to a new paragraph, back to
+// ordinary text. Spoken math inside ("x squared plus one") becomes real
+// notation on a tidy (B) - see generateSlide's prompt.
 function toggleMath() {
   if (!presenterUsable()) return;
   const value = el.editor.value;
   const pos = el.editor.selectionStart;
   const before = value.slice(0, pos);
-  const opening = (before.slice(lastSlideStart(before)).match(/\$\$/g) || []).length % 2 === 0;
-  let insert;
-  if (opening) {
-    insert = !before.trim() || before.endsWith("\n\n") ? "$$" : before.endsWith("\n") ? "\n$$" : "\n\n$$";
-  } else {
-    insert = (/\s$/.test(before) ? "" : " ") + "$$\n\n";
-  }
+  const inside = (before.slice(lastSlideStart(before)).match(/\$\$/g) || []).length % 2 === 1;
   // Restarted rather than re-anchored, for the same reason as in
-  // tidyCurrentSlide: the phrase in progress stays where it was said.
+  // tidyCurrentSlide: the phrase in progress stays where it was said, and
+  // dictation picks up again at the new caret.
   const wasDictating = !!dictation;
   if (wasDictating) stopDictation();
-  replaceEditorRange(pos, pos, insert);
+  if (!inside) {
+    const lead = !before.trim() || before.endsWith("\n\n") ? "" : before.endsWith("\n") ? "\n" : "\n\n";
+    const rest = value.slice(pos);
+    const tail = rest && !rest.startsWith("\n") ? "\n\n" : "";
+    replaceEditorRange(pos, pos, `${lead}$$\n\n$$${tail}`);
+    const caret = pos + lead.length + 3;
+    el.editor.setSelectionRange(caret, caret);
+  } else {
+    const close = value.indexOf("$$", pos);
+    if (close === -1) {
+      // No closing line (it was deleted): close the formula here instead.
+      const end = value.length;
+      replaceEditorRange(end, end, `${value.endsWith("\n") ? "" : "\n"}$$\n\n`);
+    } else {
+      const afterClose = close + 2;
+      const next = value.slice(afterClose, afterClose + 2);
+      const gap = next === "\n\n" ? "" : next.startsWith("\n") ? "\n" : "\n\n";
+      if (gap) replaceEditorRange(afterClose, afterClose, gap);
+    }
+    const caretAt = el.editor.value.indexOf("$$", pos) + 2;
+    let caret = caretAt;
+    while (el.editor.value[caret] === "\n" && caret < caretAt + 2) caret += 1;
+    el.editor.setSelectionRange(caret, caret);
+  }
   if (wasDictating) startDictation();
-  showRemoteStatus(t(opening ? "remote.mathOpen" : "remote.mathClose"));
+  showRemoteStatus(t(inside ? "remote.mathClose" : "remote.mathOpen"));
 }
 
 function locateLastMadeSlide() {
