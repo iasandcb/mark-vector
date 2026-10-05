@@ -1908,8 +1908,12 @@ function toggleDictation() {
 //
 // Where the audience is (presenter.slide, carried in every live update -
 // see currentLiveState and public.js's followPresenter): "last" follows the
-// slide being built; a number pins one. Making a slide pins the finished
-// one so it can be read; "next" past the end returns to following "last".
+// slide being built; a number pins one (prev/next). "Make slide" only ever
+// moves the audience *forward* - back to following "last", i.e. on to the
+// next slide as soon as speech reaches it - and the finished slide is
+// rewritten in place behind them without moving anyone: pinning it when
+// the model returned yanked an audience that had already moved on to the
+// next slide back to the previous one.
 const presenter = { slide: null };
 // The most recently made slide, for "undo" (put the raw transcript back) and
 // "regenerate" (ask again from the same transcript). Found again by its
@@ -1944,10 +1948,6 @@ function spliceKeepingCaret(from, to, text) {
 // the spacing around the `---` lines stays exactly as it was.
 function keepSurroundingWhitespace(old, text) {
   return `${old.match(/^\s*/)[0]}${text}${old.match(/\s*$/)[0]}`;
-}
-
-function slideIndexAt(endOffset) {
-  return splitSlides(stripInlineThreads(el.editor.value.slice(0, endOffset))).length - 1;
 }
 
 function sendPresenterUpdate() {
@@ -2010,6 +2010,9 @@ async function makeSlideFromSpeech() {
   replaceEditorRange(value.length, value.length, opener);
   if (wasDictating) startDictation();
 
+  presenter.slide = "last";
+  sendPresenterUpdate();
+
   const job = (slideJob = { rawRegion, start });
   showRemoteStatus(t("remote.making"), { sticky: true });
   try {
@@ -2020,9 +2023,7 @@ async function makeSlideFromSpeech() {
     if (at === -1) throw new Error(t("remote.lostTranscript"));
     const replacement = keepSurroundingWhitespace(rawRegion, slide);
     spliceKeepingCaret(at, at + rawRegion.length, replacement);
-    lastMadeSlide = { raw: rawRegion, slide: replacement, contextEnd: at };
-    presenter.slide = slideIndexAt(at + replacement.length);
-    sendPresenterUpdate();
+    lastMadeSlide = { raw: rawRegion, slide: replacement };
     showRemoteStatus(t("remote.made"));
   } catch (err) {
     showRemoteStatus(t("remote.failed", { message: err.message }));
@@ -2043,8 +2044,6 @@ function undoLastSlide() {
   const { raw, slide } = lastMadeSlide;
   spliceKeepingCaret(at, at + slide.length, raw);
   lastMadeSlide = null;
-  presenter.slide = slideIndexAt(at + raw.length);
-  sendPresenterUpdate();
   showRemoteStatus(t("remote.undone"));
 }
 
@@ -2063,8 +2062,6 @@ async function regenerateLastSlide() {
     const replacement = keepSurroundingWhitespace(target.slide, slide);
     spliceKeepingCaret(now, now + target.slide.length, replacement);
     lastMadeSlide = { ...target, slide: replacement };
-    presenter.slide = slideIndexAt(now + replacement.length);
-    sendPresenterUpdate();
     showRemoteStatus(t("remote.made"));
   } catch (err) {
     showRemoteStatus(t("remote.failed", { message: err.message }));
