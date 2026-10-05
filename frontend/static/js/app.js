@@ -1986,6 +1986,8 @@ async function generateSlide(raw, context, onDelta) {
     "slide followed by more transcript. Turn all of it into exactly one clean slide in Markdown: " +
     "a `## ` title line, then 2-5 concise bullet points. Write in the speaker's own language, " +
     "fix obvious speech-recognition errors, and keep any math in the document's notation. " +
+    "Text between a pair of `$$` is math the speaker read aloud (e.g. \"x squared plus one\"): " +
+    "write it as a proper `$$...$$` formula on its own line. " +
     "Output only the slide - no `---` lines, no code fence around it, nothing before or after.\n\n" +
     `Slide content:\n${raw}`;
   const neighbours = context.trim() ? splitSlides(stripInlineThreads(context)).slice(-SLIDE_CONTEXT_SLIDES).join("\n\n---\n\n") : "";
@@ -2133,6 +2135,34 @@ function breakLine() {
   showRemoteStatus(t("remote.lineBreak"));
 }
 
+// Y: math on/off. Inserts `$$` where dictation is writing - an opening one
+// if the current slide has no unclosed `$$` before the caret, a closing one
+// otherwise. The block gets a line of its own (a paragraph break before the
+// opening, one after the closing): a one-line `$$...$$` is what the
+// renderer shows as display math and what the LaTeX -> AsciiMath
+// conversion recognizes. Spoken math inside it ("x squared plus one") is
+// turned into real notation by a tidy (B) - see generateSlide's prompt.
+function toggleMath() {
+  if (!presenterUsable()) return;
+  const value = el.editor.value;
+  const pos = el.editor.selectionStart;
+  const before = value.slice(0, pos);
+  const opening = (before.slice(lastSlideStart(before)).match(/\$\$/g) || []).length % 2 === 0;
+  let insert;
+  if (opening) {
+    insert = !before.trim() || before.endsWith("\n\n") ? "$$" : before.endsWith("\n") ? "\n$$" : "\n\n$$";
+  } else {
+    insert = (/\s$/.test(before) ? "" : " ") + "$$\n\n";
+  }
+  // Restarted rather than re-anchored, for the same reason as in
+  // tidyCurrentSlide: the phrase in progress stays where it was said.
+  const wasDictating = !!dictation;
+  if (wasDictating) stopDictation();
+  replaceEditorRange(pos, pos, insert);
+  if (wasDictating) startDictation();
+  showRemoteStatus(t(opening ? "remote.mathOpen" : "remote.mathClose"));
+}
+
 function locateLastMadeSlide() {
   if (!lastMadeSlide) return -1;
   return el.editor.value.lastIndexOf(lastMadeSlide.slide);
@@ -2187,13 +2217,14 @@ function movePresenter(delta, to = null) {
 // audience sees. Face buttons are numbered by position (0 bottom, 1 right,
 // 2 left, 3 top), which on a Nintendo-labelled pad is B, A, Y, X; the D-pad
 // is 12 up, 13 down, 14 left, 15 right. A pad that reports differently is
-// fixed up once in the 🎮 dialog. Y is deliberately left free; undo/
-// regenerate exist but have no default button.
+// fixed up once in the 🎮 dialog. Undo/regenerate exist but have no
+// default button.
 const remote = createGamepadRemote({
   actions: [
     { id: "newSlide", label: t("remote.action.newSlide"), defaultBinding: { type: "button", index: 1 } },
     { id: "lineBreak", label: t("remote.action.lineBreak"), defaultBinding: { type: "button", index: 3 } },
     { id: "tidySlide", label: t("remote.action.tidySlide"), defaultBinding: { type: "button", index: 0 } },
+    { id: "toggleMath", label: t("remote.action.toggleMath"), defaultBinding: { type: "button", index: 2 } },
     { id: "prevSlide", label: t("remote.action.prevSlide"), defaultBinding: { type: "button", index: 12 } },
     { id: "nextSlide", label: t("remote.action.nextSlide"), defaultBinding: { type: "button", index: 13 } },
     { id: "firstSlide", label: t("remote.action.firstSlide"), defaultBinding: { type: "button", index: 15 } },
@@ -2206,6 +2237,7 @@ const remote = createGamepadRemote({
     if (id === "newSlide") openNewSlide();
     else if (id === "tidySlide") tidyCurrentSlide();
     else if (id === "lineBreak") breakLine();
+    else if (id === "toggleMath") toggleMath();
     else if (id === "prevSlide") movePresenter(-1);
     else if (id === "nextSlide") movePresenter(1);
     else if (id === "firstSlide") movePresenter(0, "first");
