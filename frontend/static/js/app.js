@@ -2437,8 +2437,7 @@ async function refreshSessionDocs(projectId, id) {
 
 // ---------- quick open (⌘/Ctrl+P, ⌘/Ctrl+K, or the 🔍 button) ----------
 // Fuzzy jump to any plain document in any project/folder - a wider net than
-// the ⌃/⌥ digit hints (recent + this folder only) or Alt+↑/↓ (this folder
-// only). Scoped to plain documents for the same reason selectDocumentB is:
+// the ⌃/⌥ digit hints (recent + this folder only). Scoped to plain documents for the same reason selectDocumentB is:
 // system prompts and Hermes transcripts aren't reached the same way a
 // regular document is, and folding them in would mean either a second kind
 // of result row or a result that silently can't do what the rest do.
@@ -2734,7 +2733,6 @@ function shortcutGroups() {
       rows: [
         { desc: "shortcuts.toggleTree", keys: [`${mod}B`] },
         { desc: "shortcuts.togglePreview", keys: [`${alt}${mod}B`] },
-        { desc: "shortcuts.prevNextDoc", keys: [`${alt}↑`, `${alt}↓`] },
         { desc: "shortcuts.jumpDoc", keys: [`${HINT_KEY_SYMBOL}1-9`] },
       ],
     },
@@ -3083,7 +3081,7 @@ async function toggleSession(projectId, id) {
 const PHONE_LAYOUT = window.matchMedia("(max-width: 700px)");
 
 // `focus` (on by default): every way of *going to* a document - a tree row,
-// quick open, the jump keys, Alt+up/down, an internal link - leaves the
+// quick open, the jump keys, an internal link - leaves the
 // caret at the top of the editor, ready to type. Off only for the page-load
 // restore, which isn't a navigation the user just made.
 async function selectDocument(projectId, sessionId, filename, { focus = true } = {}) {
@@ -3180,29 +3178,8 @@ function closeSplitView() {
   if (previewSource === "b") setPreviewSource("a");
 }
 
-// Alt+↑ / Alt+↓ step through the currently open session's documents (in the
-// same order the tree lists them, system.md included even though it's only
-// reachable there via the folder's "⋯" menu) so a document can be swapped for a
-// sibling without reaching for the mouse. No-op for the global/project
-// prompts (no sessionId) or a read-only Hermes transcript.
-async function navigateSessionDocument(delta) {
-  if (!active || !active.projectId || !active.sessionId) return;
-  const project = projects.get(active.projectId);
-  const session = project && project.sessions && project.sessions.get(active.sessionId);
-  if (!session) return;
-  if (session.documents === null) {
-    session.documents = await api.listDocuments(active.projectId, active.sessionId);
-  }
-  const docs = session.documents;
-  if (!docs || docs.length < 2) return;
-  const currentIndex = docs.findIndex((d) => d.filename === active.filename);
-  if (currentIndex === -1) return;
-  const next = docs[(currentIndex + delta + docs.length) % docs.length];
-  await selectDocument(active.projectId, active.sessionId, next.filename);
-}
-
-// Same lookup navigateSessionDocument uses, minus the lazy-fetch - alt-hint
-// mode fires on a bare keydown and must stay synchronous, so it only shows
+// The open document's folder listing, without a lazy fetch - alt-hint mode
+// fires on a bare keydown and must stay synchronous, so it only shows
 // hints when the session's documents happen to already be loaded (always
 // true in practice: you can't have a document from that session open in the
 // editor without having loaded the list first).
@@ -3273,8 +3250,8 @@ async function openInternalDocumentLink(event) {
 // Holding the jump modifier (see HINT_KEYS below) shows "⌃1".."⌃9" (⌥ off a
 // Mac) badges on the tree rows the digits open: 1-3 are the documents opened
 // most recently, 4-9 the rest of the open document's folder (see
-// buildAltHintEntries). Alt+↑/↓ still steps through the folder one at a time
-// and reaches past the ninth. altHintDocs is the source of truth for what a
+// buildAltHintEntries). Quick open reaches everything past the ninth.
+// altHintDocs is the source of truth for what a
 // digit press opens; the DOM badges are only a visual aid and may be missing
 // entirely (tree pane collapsed, folder collapsed - likelier now that a
 // recent document can live in another one) without affecting that.
@@ -3285,8 +3262,7 @@ async function openInternalDocumentLink(event) {
 // jumping; ⌘+digit is Safari's "go to tab N"; and ⇧⌘3/4/5 are the system
 // screenshot shortcuts, which never reach the page at all. Control+digit is
 // free of all three. Off a Mac there is no Option key, and the Windows/Meta
-// key is a worse modifier than Alt, so Alt stays. Alt+↑/↓ is unaffected -
-// only the digits collide.
+// key is a worse modifier than Alt, so Alt stays.
 const IS_MAC = /Mac|iPhone|iPad/i.test((navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "");
 const HINT_KEYS = IS_MAC ? ["Control"] : ["Alt"];
 const HINT_KEY_NAME = IS_MAC ? "⌃" : "Alt";
@@ -3381,9 +3357,9 @@ function exitAltHintMode() {
   for (const badge of el.sessionTree.querySelectorAll(".alt-hint-badge")) badge.remove();
 }
 
-// A quick Alt+↑/↓ tap shouldn't flash hint badges on its way through - only
-// arm the hints once Alt has been held long enough that it isn't obviously
-// the first half of some other Alt+key combo.
+// A quick modifier tap on its way to some other combo shouldn't flash hint
+// badges - only arm the hints once the key has been held long enough that it
+// isn't obviously the first half of something else.
 function scheduleAltHintMode() {
   if (altHintTimer || altHintActive) return;
   altHintTimer = setTimeout(() => {
@@ -5139,20 +5115,9 @@ el.editor.addEventListener("keydown", (e) => {
     }
   }
 });
-document.addEventListener("keydown", (e) => {
-  if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || !el.quickOpenOverlay.hidden || !el.shortcutsOverlay.hidden) return;
-  if (e.key === "ArrowDown") {
-    e.preventDefault();
-    exitAltHintMode();
-    navigateSessionDocument(1);
-  } else if (e.key === "ArrowUp") {
-    e.preventDefault();
-    exitAltHintMode();
-    navigateSessionDocument(-1);
-  }
-});
-// Its own listener because on a Mac the modifier is ⌘, which the Alt-only
-// guard above would reject.
+// Option/Alt+Up/Down are deliberately not bound to anything here: they're
+// the editor's own "move line up/down" (with Shift, "copy line"), and an
+// app-level document switch on the same keys took that away.
 document.addEventListener("keydown", (e) => {
   if (!hintModifierHeld(e) || !el.quickOpenOverlay.hidden || !el.shortcutsOverlay.hidden) return;
   // The physical key rather than e.key, so a layout or a modifier that
@@ -5175,7 +5140,7 @@ document.addEventListener("keydown", (e) => {
 // tied to either editor, so it fires the same way regardless of which pane
 // (or neither - the tree, a toolbar control) currently has focus.
 // Cmd/Ctrl+\ rather than a digit or arrow combo: every one of those is
-// already claimed by either this app (Alt+↑/↓, the jump-hint digits) or the
+// already claimed by either this app (the jump-hint digits) or the
 // OS/browser on some platform (Option+digit types a character on a Mac,
 // plain ⌘+digit is Safari's tab switcher, ⇧⌘3-5 are the screenshot
 // shortcuts, ⌃←/→ move between Spaces) - backslash isn't reserved by
