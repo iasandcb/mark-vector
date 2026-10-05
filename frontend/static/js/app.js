@@ -973,7 +973,11 @@ function currentLiveState() {
 // again with a different channel while already connected - it tears down
 // the old socket first, which is how switching documents re-targets the
 // "live" feature below without a separate disconnect step.
-function createLiveSocket(onConnectedChange) {
+// `belongsHere(channel)` (optional) is asked right before every send: a
+// socket tied to one document's channel must never carry another
+// document's content, even for the moment between `active` switching and
+// the socket being re-targeted (see livePublicSocket below).
+function createLiveSocket(onConnectedChange, { belongsHere = () => true } = {}) {
   let channel = null;
   let socket = null;
   let sendTimer = null;
@@ -992,27 +996,29 @@ function createLiveSocket(onConnectedChange) {
   // already passed, otherwise via exactly one trailing flush already
   // scheduled for whenever the current window closes - which keeps typing
   // just as cheap as before while still reading as "live" during a stream.
+  function sendNow() {
+    if (!socket || socket.readyState !== WebSocket.OPEN || !belongsHere(channel)) return;
+    lastSentAt = Date.now();
+    socket.send(JSON.stringify(currentLiveState()));
+  }
+
   function send(immediate) {
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
     if (immediate) {
       clearTimeout(sendTimer);
       sendTimer = null;
-      lastSentAt = Date.now();
-      socket.send(JSON.stringify(currentLiveState()));
+      sendNow();
       return;
     }
     const elapsed = Date.now() - lastSentAt;
     if (elapsed >= LIVE_SEND_INTERVAL_MS) {
-      lastSentAt = Date.now();
-      socket.send(JSON.stringify(currentLiveState()));
+      sendNow();
       return;
     }
     if (sendTimer) return; // a trailing flush for this window is already queued
     sendTimer = setTimeout(() => {
       sendTimer = null;
-      if (!socket || socket.readyState !== WebSocket.OPEN) return;
-      lastSentAt = Date.now();
-      socket.send(JSON.stringify(currentLiveState()));
+      sendNow();
     }, LIVE_SEND_INTERVAL_MS - elapsed);
   }
 
@@ -1178,7 +1184,15 @@ async function copyGlassesUrl() {
 // updates for other visitors to see.
 const LIVE_PUBLIC_ENABLED_KEY = "mark-vector:live-public-enabled";
 
-const livePublicSocket = createLiveSocket((connected) => el.livePublicStatusDot.classList.toggle("connected", connected));
+// A published page's channel only ever gets *that* document. Opening
+// another document swaps `active` (and the editor's content, which triggers
+// a send) before updateLivePublicTarget re-targets or drops this socket -
+// without the check, that one send pushed the newly opened document onto
+// the old document's public page, where the server then kept it as the
+// channel's latest state for every new visitor.
+const livePublicSocket = createLiveSocket((connected) => el.livePublicStatusDot.classList.toggle("connected", connected), {
+  belongsHere: (channel) => !!(active && active.publishToken) && channel === livePublicChannel(active.publishToken),
+});
 
 function livePublicChannel(token) {
   return `pub-${token}`;
