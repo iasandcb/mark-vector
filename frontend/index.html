@@ -131,6 +131,15 @@
           </button>
         </div>
       </div>
+      <!-- The open document was saved in another browser while this one has
+           unsaved edits of its own - see the "edits from elsewhere" section
+           in app.js. A strip of its own (not in the header, which a narrow
+           pane already fills with buttons), and never applied without asking. -->
+      <div id="sync-conflict" class="sync-conflict" hidden>
+        <span data-i18n="sync.conflict"></span>
+        <button id="sync-load-btn" class="secondary-btn" type="button" data-i18n="sync.load"></button>
+        <button id="sync-keep-btn" class="secondary-btn" type="button" data-i18n="sync.keep"></button>
+      </div>
       <!-- One row for every per-document control. The math format applies to
            any document mark-vector owns (system prompts included), while the
            provider/model/reasoning/context ones only mean anything for a

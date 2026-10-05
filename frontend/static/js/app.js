@@ -81,6 +81,9 @@ const el = {
   editorFilename: document.getElementById("editor-filename"),
   toolStatus: document.getElementById("tool-status"),
   remoteBtn: document.getElementById("remote-btn"),
+  syncConflict: document.getElementById("sync-conflict"),
+  syncLoadBtn: document.getElementById("sync-load-btn"),
+  syncKeepBtn: document.getElementById("sync-keep-btn"),
   saveBtn: document.getElementById("save-btn"),
   splitToggleBtn: document.getElementById("split-toggle-btn"),
   splitResizer: document.getElementById("split-resizer"),
@@ -2285,6 +2288,136 @@ const remote = createGamepadRemote({
 });
 el.remoteBtn.addEventListener("click", () => remote.openSettings());
 
+// ---------- edits from elsewhere (same document open in two browsers) ----------
+//
+// A Save writes the file; another browser with the same document open used
+// to keep showing its old copy until reloaded. Each open document now
+// remembers the version it was loaded/saved at (the file's mtime - see
+// storage.poll_document) and asks the server every few seconds while the
+// tab is visible, and right away when the window regains focus. When the
+// file moved on:
+//   - nothing unsaved here: the saved content is applied in place, caret
+//     kept (only the changed span is rewritten);
+//   - unsaved edits here (pane A): never overwritten - a "saved elsewhere"
+//     pill offers to load theirs or keep mine. Keeping just stops asking
+//     about that version; the next Save here wins, as before.
+// Pane B (split view) syncs the same way but only while it has no unsaved
+// edits of its own - it has no room for the pill.
+const SYNC_INTERVAL_MS = 4000;
+let pendingRemote = null; // { doc, content } while the pill is showing
+let syncInFlight = false;
+
+function syncable(doc) {
+  return !!doc && !!doc.sessionId && !!doc.filename && doc.version !== undefined;
+}
+
+function hideSyncConflict() {
+  pendingRemote = null;
+  el.syncConflict.hidden = true;
+}
+
+// Rewrites only what differs between the two texts, through the editor's
+// caret-preserving edit, so the caret and scroll stay put unless the change
+// was exactly where they are.
+function applyTextKeepingCaret(editor, next) {
+  const prev = editor.value;
+  let start = 0;
+  while (start < prev.length && start < next.length && prev[start] === next[start]) start += 1;
+  let endPrev = prev.length;
+  let endNext = next.length;
+  while (endPrev > start && endNext > start && prev[endPrev - 1] === next[endNext - 1]) {
+    endPrev -= 1;
+    endNext -= 1;
+  }
+  editor.replaceRangeKeepingSelection(start, endPrev, next.slice(start, endNext));
+}
+
+function cacheDocumentContent(doc, content) {
+  const project = projects.get(doc.projectId);
+  const session = project && project.sessions && project.sessions.get(doc.sessionId);
+  const cached = session && session.documents && session.documents.find((d) => d.filename === doc.filename);
+  if (cached) {
+    cached.content = content;
+    cached.version = doc.version;
+  }
+}
+
+function applyRemoteToA(content) {
+  applyTextKeepingCaret(el.editor, content);
+  active.savedContent = content;
+  cacheDocumentContent(active, content);
+  clearAutosave();
+  updateFilenameLabel();
+  updateFormatToolbar();
+  renderPreview();
+}
+
+async function pollPane(pane) {
+  const doc = pane === "a" ? active : activeB;
+  if (!syncable(doc)) return;
+  if (pane === "a" && (streaming || slideJob || dictation)) return;
+  let result;
+  try {
+    result = await api.pollDocument(doc.projectId, doc.sessionId, doc.filename, doc.version);
+  } catch (err) {
+    return; // offline, deleted, signed out - try again next round
+  }
+  // The document may have been switched (or a send started) meanwhile.
+  if ((pane === "a" ? active : activeB) !== doc || (pane === "a" && (streaming || slideJob || dictation))) return;
+  doc.version = result.version;
+  if (!result.changed) return;
+  const editor = pane === "a" ? el.editor : el.editorB;
+  const { content } = result;
+  if (content === editor.value || content === doc.savedContent) {
+    // Our own save, or a write that left the text as it is here already.
+    if (content === editor.value) doc.savedContent = content;
+    if (pane === "a") updateFilenameLabel();
+    else updateFilenameLabelB();
+    return;
+  }
+  if (pane === "a") {
+    if (!isDirty()) {
+      applyRemoteToA(content);
+      showRemoteStatus(t("sync.applied"));
+    } else {
+      pendingRemote = { doc, content };
+      el.syncConflict.hidden = false;
+    }
+    return;
+  }
+  if (!isDirtyB()) {
+    applyTextKeepingCaret(el.editorB, content);
+    activeB.savedContent = content;
+    cacheDocumentContent(activeB, content);
+    updateFilenameLabelB();
+    renderPreviewB();
+  }
+}
+
+async function syncOpenDocuments() {
+  if (syncInFlight || document.visibilityState !== "visible") return;
+  syncInFlight = true;
+  try {
+    await pollPane("a");
+    if (splitViewOpen()) await pollPane("b");
+  } finally {
+    syncInFlight = false;
+  }
+}
+
+setInterval(syncOpenDocuments, SYNC_INTERVAL_MS);
+window.addEventListener("focus", syncOpenDocuments);
+document.addEventListener("visibilitychange", syncOpenDocuments);
+el.syncLoadBtn.addEventListener("click", () => {
+  if (pendingRemote && pendingRemote.doc === active) applyRemoteToA(pendingRemote.content);
+  hideSyncConflict();
+  el.editor.focus();
+});
+el.syncKeepBtn.addEventListener("click", () => {
+  hideSyncConflict();
+  el.editor.focus();
+});
+
 // Unlike send/publish, exporting/downloading has no NON_SENDABLE_ROLES
 // restriction - a system prompt or a read-only Hermes transcript is just as
 // printable/downloadable as any other document, there's simply nothing
@@ -3514,7 +3647,8 @@ async function selectDocument(projectId, sessionId, filename, { focus = true } =
   // session shouldn't discard a deliberate in-session override back to
   // that session's last-used settings.
   const sessionChanged = !active || active.sessionId !== sessionId || active.projectId !== projectId;
-  active = { projectId, sessionId, filename, role: doc.role, savedContent: doc.content, turnId: doc.turn_id, publishToken: doc.publish_token, publishSlides: !!doc.publish_slides };
+  active = { projectId, sessionId, filename, role: doc.role, savedContent: doc.content, turnId: doc.turn_id, publishToken: doc.publish_token, publishSlides: !!doc.publish_slides, version: doc.version };
+  hideSyncConflict();
   saveActiveDocRef();
   rememberRecentDoc(projectId, sessionId, filename);
   el.editor.value = doc.content;
@@ -3555,7 +3689,7 @@ async function selectDocumentB(projectId, sessionId, filename, { focus = true } 
   const doc = session.documents.find((d) => d.filename === filename);
   if (!doc) return;
 
-  activeB = { projectId, sessionId, filename, role: doc.role, savedContent: doc.content };
+  activeB = { projectId, sessionId, filename, role: doc.role, savedContent: doc.content, version: doc.version };
   saveActiveDocRefB();
   rememberRecentDoc(projectId, sessionId, filename);
   setSplitView(true);
@@ -4098,7 +4232,9 @@ async function saveActive() {
     const project = projects.get(active.projectId);
     if (project) project.systemPromptContent = content;
   } else {
-    await api.saveDocument(active.projectId, active.sessionId, active.filename, content);
+    const saved = await api.saveDocument(active.projectId, active.sessionId, active.filename, content);
+    active.version = saved.version;
+    hideSyncConflict();
     const project = projects.get(active.projectId);
     const session = project && project.sessions && project.sessions.get(active.sessionId);
     const doc = session && session.documents && session.documents.find((d) => d.filename === active.filename);
@@ -4116,7 +4252,8 @@ async function saveActive() {
 async function saveDocumentB() {
   if (!activeB) return;
   const content = el.editorB.value;
-  await api.saveDocument(activeB.projectId, activeB.sessionId, activeB.filename, content);
+  const saved = await api.saveDocument(activeB.projectId, activeB.sessionId, activeB.filename, content);
+  activeB.version = saved.version;
   const project = projects.get(activeB.projectId);
   const session = project && project.sessions && project.sessions.get(activeB.sessionId);
   const doc = session && session.documents && session.documents.find((d) => d.filename === activeB.filename);

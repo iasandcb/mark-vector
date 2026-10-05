@@ -135,6 +135,15 @@ export function saveDocument(projectId, id, filename, content) {
   }).then(asJson);
 }
 
+// One open document's state on the server, for picking up saves made in
+// another browser (see app.js's "edits from elsewhere" section). With
+// `since` equal to the server's current version the reply is just
+// {changed: false, version} - no content - so polling costs next to nothing.
+export function pollDocument(projectId, id, filename, since) {
+  const query = since ? `?since=${encodeURIComponent(since)}` : "";
+  return fetch(`${BASE}/projects/${projectId}/conversations/${id}/documents/${encodeURIComponent(filename)}${query}`).then(asJson);
+}
+
 export function deleteDocument(projectId, id, filename) {
   return fetch(`${BASE}/projects/${projectId}/conversations/${id}/documents/${encodeURIComponent(filename)}`, {
     method: "DELETE",

@@ -865,6 +865,7 @@ def list_documents(project_id: str, conv_id: str) -> list[dict]:
                 "turn_id": turn_id,
                 "content": path.read_text(encoding="utf-8"),
                 "updated_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+                "version": _file_version(path),
                 "publish_token": published_by_file.get(path.name),
                 "publish_slides": path.name in slides_files,
             }
@@ -941,13 +942,36 @@ def create_draft(project_id: str, conv_id: str) -> dict:
     return {"filename": filename, "role": "draft", "turn_id": None, "content": "", "updated_at": _now()}
 
 
+def _file_version(path: Path) -> str:
+    """A document's version for change detection between browsers that have
+    it open (see poll_document): the file's own mtime in nanoseconds, so any
+    write - a Save, a finished exchange, another tab - moves it, with
+    nothing extra to keep in step."""
+    return str(path.stat().st_mtime_ns)
+
+
+def poll_document(project_id: str, conv_id: str, filename: str, since: str | None = None) -> dict:
+    """One document's current content and version - or, when `since` is
+    already its version, just {"changed": False}, so a browser polling an
+    open document for edits made elsewhere costs next to nothing while
+    nothing has changed."""
+    _validate_filename(filename)
+    path = _conversations_dir(project_id) / conv_id / filename
+    if not path.exists():
+        raise FileNotFoundError(filename)
+    version = _file_version(path)
+    if since is not None and since == version:
+        return {"changed": False, "version": version}
+    return {"changed": True, "filename": filename, "content": path.read_text(encoding="utf-8"), "version": version}
+
+
 def save_document(project_id: str, conv_id: str, filename: str, content: str) -> dict:
     _validate_filename(filename)
     path = _conversations_dir(project_id) / conv_id / filename
     if not path.exists():
         raise FileNotFoundError(filename)
     path.write_text(content, encoding="utf-8")
-    return {"filename": filename, "content": content, "updated_at": _now()}
+    return {"filename": filename, "content": content, "updated_at": _now(), "version": _file_version(path)}
 
 
 def rename_document(project_id: str, conv_id: str, old_filename: str, new_filename: str) -> dict:

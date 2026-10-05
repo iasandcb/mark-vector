@@ -1865,3 +1865,27 @@ kbd.shortcut-key {
   display: flex;
   justify-content: flex-end;
 }
+
+/* ---------- saved elsewhere while edited here (see app.js) ---------- */
+
+.sync-conflict {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--active-bg);
+  border-bottom: 1px solid var(--accent);
+}
+
+.sync-conflict > span {
+  margin-right: auto;
+}
+
+.sync-conflict .secondary-btn {
+  padding: 3px 10px;
+  font-size: 12px;
+}

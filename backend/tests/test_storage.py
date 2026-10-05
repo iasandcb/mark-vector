@@ -1023,3 +1023,38 @@ class TestPublishedLinks:
     def test_resolving_a_link_from_an_unknown_token_raises(self, isolated_data_dir):
         with pytest.raises(FileNotFoundError):
             storage.resolve_published_link("no-such-token", "0002.md")
+
+
+class TestDocumentVersion:
+    def test_poll_document_reports_changes_by_version(self, isolated_data_dir):
+        pid = storage.create_project("p")["id"]
+        cid = storage.create_conversation(pid, "c")["id"]
+        name = storage.create_draft(pid, cid)["filename"]
+        saved = storage.save_document(pid, cid, name, "first")
+
+        unchanged = storage.poll_document(pid, cid, name, since=saved["version"])
+        assert unchanged == {"changed": False, "version": saved["version"]}
+
+        import os, time
+        path = storage._conversations_dir(pid) / cid / name
+        path.write_text("second", encoding="utf-8")
+        os.utime(path, ns=(time.time_ns(), time.time_ns() + 1_000_000))
+        changed = storage.poll_document(pid, cid, name, since=saved["version"])
+        assert changed["changed"] is True
+        assert changed["content"] == "second"
+        assert changed["version"] != saved["version"]
+
+    def test_list_documents_carries_the_same_version(self, isolated_data_dir):
+        pid = storage.create_project("p")["id"]
+        cid = storage.create_conversation(pid, "c")["id"]
+        name = storage.create_draft(pid, cid)["filename"]
+        saved = storage.save_document(pid, cid, name, "x")
+        listed = next(d for d in storage.list_documents(pid, cid) if d["filename"] == name)
+        assert listed["version"] == saved["version"]
+
+    def test_poll_document_missing(self, isolated_data_dir):
+        pid = storage.create_project("p")["id"]
+        cid = storage.create_conversation(pid, "c")["id"]
+        import pytest as _pytest
+        with _pytest.raises(FileNotFoundError):
+            storage.poll_document(pid, cid, "nope.md")
