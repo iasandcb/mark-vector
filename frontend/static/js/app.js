@@ -1944,28 +1944,43 @@ function spliceKeepingCaret(from, to, text) {
   renderPreview();
 }
 
-// The new text takes over the old text's leading/trailing blank lines, so
-// the spacing around the `---` lines stays exactly as it was.
-function keepSurroundingWhitespace(old, text) {
-  return `${old.match(/^\s*/)[0]}${text}${old.match(/\s*$/)[0]}`;
-}
-
 function sendPresenterUpdate() {
   if (el.livePublicCheckbox.checked) livePublicSocket.send(false);
   else showRemoteStatus(t("remote.liveOff"));
 }
 
-// One slide from one stretch of transcript. `context` is the deck before
-// it. Resolves to the slide's Markdown, or throws.
-async function generateSlide(raw, context) {
+// Tidying is something the audience waits on, so it runs at the selected
+// model's *lowest* reasoning level whatever the toolbar says - measured on
+// the same prompt, reasoning was most of the wait (gpt-5.6-luna: first token
+// 2.4s at its default vs 0.8s at "none"). Anthropic's "off" means no
+// extended thinking at all, its fastest; an OpenAI reasoning model with no
+// "none"/"minimal" (gpt-6-astra) gets its lowest offered level, since "off"
+// there would mean the model's own, higher default.
+function fastestReasoning(providerId, model) {
+  if (providerId === "anthropic") return "off";
+  const provider = providers.find((p) => p.id === providerId);
+  const levels = provider && provider.reasoning_efforts && provider.reasoning_efforts[model];
+  return levels && levels.length ? levels[0] : "off";
+}
+
+// The slide's neighbours are enough for a consistent style; the whole deck
+// would only make every tidy slower as the talk goes on.
+const SLIDE_CONTEXT_SLIDES = 2;
+
+// One slide from one slide's worth of content, streamed: `onDelta(text)`
+// sees the reply as it arrives, and the promise resolves to the cleaned-up
+// final slide (post math-conversion, if the format asks for it).
+async function generateSlide(raw, context, onDelta) {
+  const provider = el.providerSelect.value;
+  const model = el.modelSelect.value;
+  if (!provider || !model) throw new Error(t("remote.noModel"));
   const settings = {
-    provider: el.providerSelect.value,
-    model: el.modelSelect.value,
-    reasoningEffort: el.reasoningSelect.value,
+    provider,
+    model,
+    reasoningEffort: fastestReasoning(provider, model),
     convertMath: el.formatSelect.value !== "latex",
     hybridMath: el.formatSelect.value === "hybrid",
   };
-  if (!settings.provider || !settings.model) throw new Error(t("remote.noModel"));
   const prompt =
     "Below is the content of one presentation slide: raw spoken transcript, or an already-finished " +
     "slide followed by more transcript. Turn all of it into exactly one clean slide in Markdown: " +
@@ -1973,10 +1988,12 @@ async function generateSlide(raw, context) {
     "fix obvious speech-recognition errors, and keep any math in the document's notation. " +
     "Output only the slide - no `---` lines, no code fence around it, nothing before or after.\n\n" +
     `Slide content:\n${raw}`;
+  const neighbours = context.trim() ? splitSlides(stripInlineThreads(context)).slice(-SLIDE_CONTEXT_SLIDES).join("\n\n---\n\n") : "";
   let text = "";
   let failed = null;
-  await api.inlineComplete(active.projectId, active.sessionId, prompt, [], stripInlineThreads(context).trim(), settings, async (event) => {
-    if (event.type === "done") text = event.text;
+  await api.inlineComplete(active.projectId, active.sessionId, prompt, [], neighbours.trim(), settings, async (event) => {
+    if (event.type === "delta") onDelta(event.text);
+    else if (event.type === "done") text = event.text;
     else if (event.type === "error") failed = event.message;
   });
   if (failed) throw new Error(failed);
@@ -1990,6 +2007,48 @@ async function generateSlide(raw, context) {
     .trim();
   if (!slide) throw new Error(t("remote.emptySlide"));
   return slide;
+}
+
+// Replaces `old` (found by `locate()` once the first words arrive) with a
+// slide written in as it streams, so the audience watches it form instead
+// of waiting for the whole reply; the streamed text is then swapped for the
+// cleaned-up final version. The old text's leading/trailing blank lines are
+// kept, so the spacing around the `---` lines stays as it was. On failure,
+// whatever was streamed is put back to `old`. Resolves to the final text
+// now in the document.
+async function streamSlideOver(old, locate, raw, context) {
+  const lead = old.match(/^\s*/)[0];
+  const trail = old.match(/\s*$/)[0];
+  let pos = null; // where the streamed text starts
+  let shown = "";
+  const stillThere = () => pos !== null && el.editor.value.slice(pos, pos + shown.length) === shown;
+  try {
+    const slide = await generateSlide(raw, context, (delta) => {
+      if (pos === null) {
+        const at = locate();
+        if (at === -1) throw new Error(t("remote.lostTranscript"));
+        spliceKeepingCaret(at, at + old.length, lead + trail);
+        pos = at + lead.length;
+      } else if (!stillThere()) {
+        throw new Error(t("remote.lostTranscript"));
+      }
+      spliceKeepingCaret(pos + shown.length, pos + shown.length, delta);
+      shown += delta;
+    });
+    if (pos === null) {
+      const at = locate();
+      if (at === -1) throw new Error(t("remote.lostTranscript"));
+      spliceKeepingCaret(at, at + old.length, lead + trail);
+      pos = at + lead.length;
+    } else if (!stillThere()) {
+      throw new Error(t("remote.lostTranscript"));
+    }
+    spliceKeepingCaret(pos, pos + shown.length, slide);
+    return lead + slide + trail;
+  } catch (err) {
+    if (stillThere()) spliceKeepingCaret(pos - lead.length, pos + shown.length + trail.length, old);
+    throw err;
+  }
 }
 
 // B: clean up the current (last) slide in place and keep talking on it -
@@ -2015,16 +2074,14 @@ async function tidyCurrentSlide() {
   if (opener) replaceEditorRange(value.length, value.length, opener);
   if (wasDictating) startDictation();
 
-  const job = (slideJob = { rawRegion, start });
+  const job = (slideJob = { tidy: true });
   showRemoteStatus(t("remote.making"), { sticky: true });
   try {
-    const slide = await generateSlide(raw, value.slice(0, start));
-    if (slideJob !== job) return;
-    const current = el.editor.value;
-    const at = current.slice(start, start + rawRegion.length) === rawRegion ? start : current.lastIndexOf(rawRegion);
-    if (at === -1) throw new Error(t("remote.lostTranscript"));
-    const replacement = keepSurroundingWhitespace(rawRegion, slide);
-    spliceKeepingCaret(at, at + rawRegion.length, replacement);
+    const locate = () => {
+      const current = el.editor.value;
+      return current.slice(start, start + rawRegion.length) === rawRegion ? start : current.lastIndexOf(rawRegion);
+    };
+    const replacement = await streamSlideOver(rawRegion, locate, raw, value.slice(0, start));
     lastMadeSlide = { raw: rawRegion, slide: replacement };
     showRemoteStatus(t("remote.made"));
   } catch (err) {
@@ -2080,11 +2137,8 @@ async function regenerateLastSlide() {
   showRemoteStatus(t("remote.making"), { sticky: true });
   try {
     const at = el.editor.value.lastIndexOf(target.slide);
-    const slide = await generateSlide(stripInlineThreads(target.raw).trim(), el.editor.value.slice(0, at));
-    const now = el.editor.value.lastIndexOf(target.slide);
-    if (now === -1) throw new Error(t("remote.lostTranscript"));
-    const replacement = keepSurroundingWhitespace(target.slide, slide);
-    spliceKeepingCaret(now, now + target.slide.length, replacement);
+    const locate = () => el.editor.value.lastIndexOf(target.slide);
+    const replacement = await streamSlideOver(target.slide, locate, stripInlineThreads(target.raw).trim(), el.editor.value.slice(0, at));
     lastMadeSlide = { ...target, slide: replacement };
     showRemoteStatus(t("remote.made"));
   } catch (err) {
