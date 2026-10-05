@@ -1967,11 +1967,12 @@ async function generateSlide(raw, context) {
   };
   if (!settings.provider || !settings.model) throw new Error(t("remote.noModel"));
   const prompt =
-    "Turn the following spoken transcript into exactly one presentation slide in Markdown: " +
-    "a `## ` title line, then 2-5 concise bullet points. Write in the transcript's own language, " +
+    "Below is the content of one presentation slide: raw spoken transcript, or an already-finished " +
+    "slide followed by more transcript. Turn all of it into exactly one clean slide in Markdown: " +
+    "a `## ` title line, then 2-5 concise bullet points. Write in the speaker's own language, " +
     "fix obvious speech-recognition errors, and keep any math in the document's notation. " +
     "Output only the slide - no `---` lines, no code fence around it, nothing before or after.\n\n" +
-    `Transcript:\n${raw}`;
+    `Slide content:\n${raw}`;
   let text = "";
   let failed = null;
   await api.inlineComplete(active.projectId, active.sessionId, prompt, [], stripInlineThreads(context).trim(), settings, async (event) => {
@@ -1991,7 +1992,12 @@ async function generateSlide(raw, context) {
   return slide;
 }
 
-async function makeSlideFromSpeech() {
+// `openNext` true ("make slide", A): finish this slide and start the next
+// one - the audience moves on with the speech. False ("tidy slide", B):
+// clean up the slide in place and keep talking on it - nobody moves, and
+// speech that arrives meanwhile lands in a fresh paragraph under it, ready
+// for the next tidy to fold in.
+async function makeSlideFromSpeech({ openNext }) {
   if (!presenterUsable()) return;
   if (slideJob) return showRemoteStatus(t("remote.busy"));
   const value = el.editor.value;
@@ -2000,18 +2006,22 @@ async function makeSlideFromSpeech() {
   const raw = stripInlineThreads(rawRegion).trim();
   if (!raw) return showRemoteStatus(t("remote.nothingToSlide"));
 
-  // Open the next slide first, so speech keeps flowing while the model
-  // works. Dictation is restarted rather than re-anchored: the recognizer
-  // may still deliver a final version of the phrase that's now frozen in
-  // the old slide, and it must not land at the top of the new one too.
+  // Give speech somewhere else to go first, so it keeps flowing while the
+  // model works: the next slide, or a new paragraph below this one.
+  // Dictation is restarted rather than re-anchored: the recognizer may
+  // still deliver a final version of the phrase that's now frozen in the
+  // text being rewritten, and it must not land in the new spot too.
   const wasDictating = !!dictation;
   if (wasDictating) stopDictation();
-  const opener = (value.endsWith("\n") ? "" : "\n") + "\n---\n\n";
-  replaceEditorRange(value.length, value.length, opener);
+  const lineBreak = value.endsWith("\n") ? "" : "\n";
+  const opener = openNext ? `${lineBreak}\n---\n\n` : value.endsWith("\n\n") ? "" : `${lineBreak}\n`;
+  if (opener) replaceEditorRange(value.length, value.length, opener);
   if (wasDictating) startDictation();
 
-  presenter.slide = "last";
-  sendPresenterUpdate();
+  if (openNext) {
+    presenter.slide = "last";
+    sendPresenterUpdate();
+  }
 
   const job = (slideJob = { rawRegion, start });
   showRemoteStatus(t("remote.making"), { sticky: true });
@@ -2083,7 +2093,7 @@ function movePresenter(delta) {
 const remote = createGamepadRemote({
   actions: [
     { id: "makeSlide", label: t("remote.action.makeSlide"), defaultBinding: { type: "button", index: 0 } },
-    { id: "toggleDictation", label: t("remote.action.toggleDictation"), defaultBinding: { type: "button", index: 1 } },
+    { id: "tidySlide", label: t("remote.action.tidySlide"), defaultBinding: { type: "button", index: 1 } },
     { id: "prevSlide", label: t("remote.action.prevSlide"), defaultBinding: { type: "button", index: 14 } },
     { id: "nextSlide", label: t("remote.action.nextSlide"), defaultBinding: { type: "button", index: 15 } },
     { id: "undoSlide", label: t("remote.action.undoSlide"), defaultBinding: { type: "button", index: 2 } },
@@ -2091,8 +2101,8 @@ const remote = createGamepadRemote({
   ],
   onAction(id) {
     if (presenter.slide === null) presenter.slide = "last";
-    if (id === "makeSlide") makeSlideFromSpeech();
-    else if (id === "toggleDictation") toggleDictation();
+    if (id === "makeSlide") makeSlideFromSpeech({ openNext: true });
+    else if (id === "tidySlide") makeSlideFromSpeech({ openNext: false });
     else if (id === "prevSlide") movePresenter(-1);
     else if (id === "nextSlide") movePresenter(1);
     else if (id === "undoSlide") undoLastSlide();
