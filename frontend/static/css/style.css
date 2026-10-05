@@ -1586,8 +1586,15 @@ body.row-dragging {
   font-weight: 700;
 }
 
-.quick-open-row-recent {
+.quick-open-row-tags {
   margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.quick-open-row-recent {
   flex-shrink: 0;
   padding: 0 6px;
   border: 1px solid var(--border);

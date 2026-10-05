@@ -2619,12 +2619,24 @@ function renderQuickOpenResults() {
     filename.className = "quick-open-row-filename";
     filename.innerHTML = markMatches(entry.filename, indices);
     main.append(badge, filename);
+    const tags = document.createElement("span");
+    tags.className = "quick-open-row-tags";
     if (result.recent) {
       const tag = document.createElement("span");
       tag.className = "quick-open-row-recent";
       tag.textContent = t("quickOpen.recent");
-      main.appendChild(tag);
+      tags.appendChild(tag);
     }
+    // The first nine rows open with the jump modifier + their number (see
+    // the quick-open keydown handler) - same key and badge look as the
+    // tree's hold-to-jump hints.
+    if (i < 9) {
+      const key = document.createElement("span");
+      key.className = "alt-hint-badge";
+      key.textContent = `${HINT_KEY_SYMBOL}${i + 1}`;
+      tags.appendChild(key);
+    }
+    if (tags.childElementCount) main.appendChild(tags);
 
     const path = document.createElement("div");
     path.className = "quick-open-row-path";
@@ -2714,6 +2726,7 @@ function shortcutGroups() {
         { desc: "shortcuts.qoNav", keys: ["↑", "↓"] },
         { desc: "shortcuts.qoOpen", keys: ["Enter"] },
         { desc: "shortcuts.qoOpenSide", keys: [`${mod}Enter`] },
+        { desc: "shortcuts.qoJump", keys: [`${HINT_KEY_SYMBOL}1-9`] },
         { desc: "shortcuts.qoClose", keys: ["Esc"] },
       ],
     },
@@ -4944,6 +4957,15 @@ el.quickOpenInput.addEventListener("input", () => {
   renderQuickOpenResults();
 });
 el.quickOpenInput.addEventListener("keydown", (e) => {
+  // The jump modifier (⌃ on a Mac, Alt elsewhere - see hintModifierHeld) +
+  // 1-9 opens that row directly. Bare digits stay search input (filenames
+  // are often numbers), and ⌘+digit is the browser's own tab switcher.
+  const digit = hintModifierHeld(e) && /^Digit([1-9])$/.exec(e.code);
+  if (digit) {
+    e.preventDefault();
+    chooseQuickOpenResult(quickOpenFiltered[Number(digit[1]) - 1], false);
+    return;
+  }
   if (e.key === "Escape") {
     e.preventDefault();
     closeQuickOpen();
