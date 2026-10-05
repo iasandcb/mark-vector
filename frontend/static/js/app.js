@@ -2113,6 +2113,24 @@ function openNewSlide() {
   showRemoteStatus(t("remote.newSlide"));
 }
 
+// Down: start a new paragraph where dictation is writing (the caret), so the
+// next thing said begins on a line of its own - a visible break on the
+// slide, unlike a single newline, which Markdown would fold into the same
+// paragraph. A no-op right after a break that's already there.
+function breakLine() {
+  if (!presenterUsable()) return;
+  const pos = el.editor.selectionStart;
+  const before = el.editor.value.slice(0, pos);
+  if (!before.trim() || before.endsWith("\n\n")) return;
+  // Restarted rather than re-anchored, for the same reason as in
+  // tidyCurrentSlide: the phrase in progress stays above the break.
+  const wasDictating = !!dictation;
+  if (wasDictating) stopDictation();
+  replaceEditorRange(pos, pos, before.endsWith("\n") ? "\n" : "\n\n");
+  if (wasDictating) startDictation();
+  showRemoteStatus(t("remote.lineBreak"));
+}
+
 function locateLastMadeSlide() {
   if (!lastMadeSlide) return -1;
   return el.editor.value.lastIndexOf(lastMadeSlide.slide);
@@ -2162,21 +2180,30 @@ function movePresenter(delta, to = null) {
   showRemoteStatus(t("remote.slidePosition", { n: next + 1, total: count }));
 }
 
+// Default layout for an 8BitDo Micro-style pad in the browser's "standard"
+// mapping: the D-pad (12 up, 13 down, 14 left, 15 right) drives the
+// writing, the face buttons drive what the audience sees. Face buttons are
+// numbered by position (0 bottom, 1 right, 2 left, 3 top), which on a
+// Nintendo-labelled pad is B, A, Y, X. A pad that reports differently is
+// fixed up once in the 🎮 dialog. Right on the D-pad is deliberately left
+// free; undo/regenerate exist but have no default button.
 const remote = createGamepadRemote({
   actions: [
-    { id: "newSlide", label: t("remote.action.newSlide"), defaultBinding: { type: "button", index: 0 } },
-    { id: "tidySlide", label: t("remote.action.tidySlide"), defaultBinding: { type: "button", index: 1 } },
-    { id: "prevSlide", label: t("remote.action.prevSlide"), defaultBinding: { type: "button", index: 14 } },
-    { id: "nextSlide", label: t("remote.action.nextSlide"), defaultBinding: { type: "button", index: 15 } },
-    { id: "firstSlide", label: t("remote.action.firstSlide"), defaultBinding: { type: "button", index: 12 } },
-    { id: "lastSlide", label: t("remote.action.lastSlide"), defaultBinding: { type: "button", index: 13 } },
-    { id: "undoSlide", label: t("remote.action.undoSlide"), defaultBinding: { type: "button", index: 2 } },
-    { id: "regenerateSlide", label: t("remote.action.regenerateSlide"), defaultBinding: { type: "button", index: 3 } },
+    { id: "newSlide", label: t("remote.action.newSlide"), defaultBinding: { type: "button", index: 14 } },
+    { id: "tidySlide", label: t("remote.action.tidySlide"), defaultBinding: { type: "button", index: 12 } },
+    { id: "lineBreak", label: t("remote.action.lineBreak"), defaultBinding: { type: "button", index: 13 } },
+    { id: "firstSlide", label: t("remote.action.firstSlide"), defaultBinding: { type: "button", index: 2 } },
+    { id: "prevSlide", label: t("remote.action.prevSlide"), defaultBinding: { type: "button", index: 0 } },
+    { id: "nextSlide", label: t("remote.action.nextSlide"), defaultBinding: { type: "button", index: 3 } },
+    { id: "lastSlide", label: t("remote.action.lastSlide"), defaultBinding: { type: "button", index: 1 } },
+    { id: "undoSlide", label: t("remote.action.undoSlide"), defaultBinding: null },
+    { id: "regenerateSlide", label: t("remote.action.regenerateSlide"), defaultBinding: null },
   ],
   onAction(id) {
     if (presenter.slide === null) presenter.slide = "last";
     if (id === "newSlide") openNewSlide();
     else if (id === "tidySlide") tidyCurrentSlide();
+    else if (id === "lineBreak") breakLine();
     else if (id === "prevSlide") movePresenter(-1);
     else if (id === "nextSlide") movePresenter(1);
     else if (id === "firstSlide") movePresenter(0, "first");

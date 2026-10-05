@@ -18,7 +18,9 @@
 
 import { t } from "./i18n.js";
 
-const BINDINGS_KEY = "mark-vector:gamepad-bindings";
+// Versioned: a new default layout ships under a new key, so bindings saved
+// against the previous layout don't silently override it.
+const BINDINGS_KEY = "mark-vector:gamepad-bindings-v2";
 const AXIS_PRESS_DELTA = 0.5;
 const AXIS_MATCH_TOLERANCE = 0.15;
 
