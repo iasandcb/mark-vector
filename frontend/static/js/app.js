@@ -2080,11 +2080,15 @@ async function regenerateLastSlide() {
   }
 }
 
-function movePresenter(delta) {
+// `delta` steps from where the audience is; `to` ("first" / "last") jumps.
+// Landing on the last slide always means following it ("last"), so the
+// audience rides along as new slides are built.
+function movePresenter(delta, to = null) {
   if (!active) return;
   const count = splitSlides(stripInlineThreads(el.editor.value)).length;
   const current = presenter.slide === null || presenter.slide === "last" ? count - 1 : Math.min(presenter.slide, count - 1);
-  const next = Math.max(0, Math.min(count - 1, current + delta));
+  const target = to === "first" ? 0 : to === "last" ? count - 1 : current + delta;
+  const next = Math.max(0, Math.min(count - 1, target));
   presenter.slide = next === count - 1 ? "last" : next;
   sendPresenterUpdate();
   showRemoteStatus(t("remote.slidePosition", { n: next + 1, total: count }));
@@ -2096,6 +2100,8 @@ const remote = createGamepadRemote({
     { id: "tidySlide", label: t("remote.action.tidySlide"), defaultBinding: { type: "button", index: 1 } },
     { id: "prevSlide", label: t("remote.action.prevSlide"), defaultBinding: { type: "button", index: 14 } },
     { id: "nextSlide", label: t("remote.action.nextSlide"), defaultBinding: { type: "button", index: 15 } },
+    { id: "firstSlide", label: t("remote.action.firstSlide"), defaultBinding: { type: "button", index: 12 } },
+    { id: "lastSlide", label: t("remote.action.lastSlide"), defaultBinding: { type: "button", index: 13 } },
     { id: "undoSlide", label: t("remote.action.undoSlide"), defaultBinding: { type: "button", index: 2 } },
     { id: "regenerateSlide", label: t("remote.action.regenerateSlide"), defaultBinding: { type: "button", index: 3 } },
   ],
@@ -2105,6 +2111,8 @@ const remote = createGamepadRemote({
     else if (id === "tidySlide") makeSlideFromSpeech({ openNext: false });
     else if (id === "prevSlide") movePresenter(-1);
     else if (id === "nextSlide") movePresenter(1);
+    else if (id === "firstSlide") movePresenter(0, "first");
+    else if (id === "lastSlide") movePresenter(0, "last");
     else if (id === "undoSlide") undoLastSlide();
     else if (id === "regenerateSlide") regenerateLastSlide();
   },
