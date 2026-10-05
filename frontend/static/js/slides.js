@@ -32,16 +32,22 @@ function separatorLines(content) {
   return found;
 }
 
-export function splitSlides(content) {
+// `keepEmptyLast`: a blank final slide (a trailing `---`) is kept instead of
+// dropped - while presenting with the remote, a fresh slide is opened empty
+// and has to be on screen before anything is said on it.
+export function splitSlides(content, { keepEmptyLast = false } = {}) {
   const slides = [];
   let cursor = 0;
-  for (const [start, end] of separatorLines(content)) {
+  const separators = separatorLines(content);
+  for (const [start, end] of separators) {
     slides.push(content.slice(cursor, start));
     cursor = end + 1;
   }
   slides.push(content.slice(cursor));
   // A leading/trailing/doubled separator shouldn't produce a blank slide.
+  const last = slides[slides.length - 1];
   const nonEmpty = slides.filter((s) => s.trim() !== "");
+  if (keepEmptyLast && separators.length && last.trim() === "") nonEmpty.push(last);
   return nonEmpty.length ? nonEmpty : [""];
 }
 

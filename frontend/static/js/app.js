@@ -1992,12 +1992,10 @@ async function generateSlide(raw, context) {
   return slide;
 }
 
-// `openNext` true ("make slide", A): finish this slide and start the next
-// one - the audience moves on with the speech. False ("tidy slide", B):
-// clean up the slide in place and keep talking on it - nobody moves, and
-// speech that arrives meanwhile lands in a fresh paragraph under it, ready
-// for the next tidy to fold in.
-async function makeSlideFromSpeech({ openNext }) {
+// B: clean up the current (last) slide in place and keep talking on it -
+// nobody moves, and speech that arrives meanwhile lands in a fresh
+// paragraph under it, ready for the next tidy to fold in.
+async function tidyCurrentSlide() {
   if (!presenterUsable()) return;
   if (slideJob) return showRemoteStatus(t("remote.busy"));
   const value = el.editor.value;
@@ -2006,22 +2004,16 @@ async function makeSlideFromSpeech({ openNext }) {
   const raw = stripInlineThreads(rawRegion).trim();
   if (!raw) return showRemoteStatus(t("remote.nothingToSlide"));
 
-  // Give speech somewhere else to go first, so it keeps flowing while the
-  // model works: the next slide, or a new paragraph below this one.
-  // Dictation is restarted rather than re-anchored: the recognizer may
-  // still deliver a final version of the phrase that's now frozen in the
-  // text being rewritten, and it must not land in the new spot too.
+  // Give speech somewhere else to go first - a new paragraph below - so it
+  // keeps flowing while the model works. Dictation is restarted rather than
+  // re-anchored: the recognizer may still deliver a final version of the
+  // phrase that's now frozen in the text being rewritten, and it must not
+  // land in the new paragraph too.
   const wasDictating = !!dictation;
   if (wasDictating) stopDictation();
-  const lineBreak = value.endsWith("\n") ? "" : "\n";
-  const opener = openNext ? `${lineBreak}\n---\n\n` : value.endsWith("\n\n") ? "" : `${lineBreak}\n`;
+  const opener = value.endsWith("\n\n") ? "" : value.endsWith("\n") ? "\n" : "\n\n";
   if (opener) replaceEditorRange(value.length, value.length, opener);
   if (wasDictating) startDictation();
-
-  if (openNext) {
-    presenter.slide = "last";
-    sendPresenterUpdate();
-  }
 
   const job = (slideJob = { rawRegion, start });
   showRemoteStatus(t("remote.making"), { sticky: true });
@@ -2040,6 +2032,28 @@ async function makeSlideFromSpeech({ openNext }) {
   } finally {
     if (slideJob === job) slideJob = null;
   }
+}
+
+// A: start a new, empty slide right now - no model call. The audience goes
+// straight to it (following "last"), blank until speech reaches it; the
+// slide just left stays as it is (B tidies a slide, if wanted, before or
+// after). Pressing it again on a slide that's still empty does nothing new.
+function openNewSlide() {
+  if (!presenterUsable()) return;
+  const value = el.editor.value;
+  if (value.trim() && stripInlineThreads(value.slice(lastSlideStart(value))).trim()) {
+    // Restarted rather than re-anchored, for the same reason as in
+    // tidyCurrentSlide: a late final result for the phrase just left
+    // behind must not also land on the new slide.
+    const wasDictating = !!dictation;
+    if (wasDictating) stopDictation();
+    const lineBreak = value.endsWith("\n") ? "" : "\n";
+    replaceEditorRange(value.length, value.length, `${lineBreak}\n---\n\n`);
+    if (wasDictating) startDictation();
+  }
+  presenter.slide = "last";
+  sendPresenterUpdate();
+  showRemoteStatus(t("remote.newSlide"));
 }
 
 function locateLastMadeSlide() {
@@ -2085,7 +2099,7 @@ async function regenerateLastSlide() {
 // audience rides along as new slides are built.
 function movePresenter(delta, to = null) {
   if (!active) return;
-  const count = splitSlides(stripInlineThreads(el.editor.value)).length;
+  const count = splitSlides(stripInlineThreads(el.editor.value), { keepEmptyLast: true }).length;
   const current = presenter.slide === null || presenter.slide === "last" ? count - 1 : Math.min(presenter.slide, count - 1);
   const target = to === "first" ? 0 : to === "last" ? count - 1 : current + delta;
   const next = Math.max(0, Math.min(count - 1, target));
@@ -2096,7 +2110,7 @@ function movePresenter(delta, to = null) {
 
 const remote = createGamepadRemote({
   actions: [
-    { id: "makeSlide", label: t("remote.action.makeSlide"), defaultBinding: { type: "button", index: 0 } },
+    { id: "newSlide", label: t("remote.action.newSlide"), defaultBinding: { type: "button", index: 0 } },
     { id: "tidySlide", label: t("remote.action.tidySlide"), defaultBinding: { type: "button", index: 1 } },
     { id: "prevSlide", label: t("remote.action.prevSlide"), defaultBinding: { type: "button", index: 14 } },
     { id: "nextSlide", label: t("remote.action.nextSlide"), defaultBinding: { type: "button", index: 15 } },
@@ -2107,8 +2121,8 @@ const remote = createGamepadRemote({
   ],
   onAction(id) {
     if (presenter.slide === null) presenter.slide = "last";
-    if (id === "makeSlide") makeSlideFromSpeech({ openNext: true });
-    else if (id === "tidySlide") makeSlideFromSpeech({ openNext: false });
+    if (id === "newSlide") openNewSlide();
+    else if (id === "tidySlide") tidyCurrentSlide();
     else if (id === "prevSlide") movePresenter(-1);
     else if (id === "nextSlide") movePresenter(1);
     else if (id === "firstSlide") movePresenter(0, "first");

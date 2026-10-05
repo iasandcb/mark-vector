@@ -114,7 +114,9 @@ function render() {
     return;
   }
   document.body.classList.add("slides-mode");
-  const slides = splitSlides(doc.content);
+  // While the owner presents with the remote, a just-opened slide is
+  // blank until something is said on it - and still has to be shown.
+  const slides = splitSlides(doc.content, { keepEmptyLast: presenting });
   slideCount = slides.length;
   contentEl.innerHTML = "";
   for (const source of slides) {
@@ -151,6 +153,7 @@ function goToSlide(index) {
 // Absent (undefined) when the owner isn't using the remote at all.
 let presenterSlide;
 let presenterSlideCount = 0;
+let presenting = false;
 function followPresenter(slide) {
   if (slide === undefined || slide === null || view !== "slides") {
     presenterSlide = slide;
@@ -313,6 +316,7 @@ function connectLive() {
       return;
     }
     if (!message || message.filename == null) return;
+    presenting = message.slide !== undefined && message.slide !== null;
     doc = { ...doc, filename: message.filename, content: message.content || "", dialect: message.dialect || (doc && doc.dialect) || "latex" };
     filenameEl.textContent = doc.filename;
     updatePageTitle();
