@@ -458,7 +458,7 @@ async function restoreActiveDocument(ref) {
       project.expanded = true;
       project.sessions.get(ref.sessionId).expanded = true;
       saveExpandedTreeState();
-      await selectDocument(ref.projectId, ref.sessionId, ref.filename);
+      await selectDocument(ref.projectId, ref.sessionId, ref.filename, { focus: false });
     }
   } catch (err) {
     // Any failed fetch along the way (deleted project/session/document,
@@ -3077,7 +3077,16 @@ async function toggleSession(projectId, id) {
   renderTree();
 }
 
-async function selectDocument(projectId, sessionId, filename) {
+// Same breakpoint as style.css's phone layout. There, putting the caret in
+// the editor would also pop the on-screen keyboard over a document you
+// probably opened to read.
+const PHONE_LAYOUT = window.matchMedia("(max-width: 700px)");
+
+// `focus` (on by default): every way of *going to* a document - a tree row,
+// quick open, the jump keys, Alt+up/down, an internal link - leaves the
+// caret at the top of the editor, ready to type. Off only for the page-load
+// restore, which isn't a navigation the user just made.
+async function selectDocument(projectId, sessionId, filename, { focus = true } = {}) {
   if (streaming) return;
   if (isDirty() && !confirm(t("confirm.unsavedChanges"))) return;
 
@@ -3111,6 +3120,10 @@ async function selectDocument(projectId, sessionId, filename) {
   renderPreview();
   renderTree();
   setMobileView("editor");
+  if (focus && !PHONE_LAYOUT.matches && editorViewMode !== "rendered") {
+    el.editor.setSelectionRange(0, 0);
+    el.editor.focus();
+  }
 }
 
 // selectDocument's split-view counterpart. Deliberately narrower: only a
