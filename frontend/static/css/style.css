@@ -1586,6 +1586,16 @@ body.row-dragging {
   font-weight: 700;
 }
 
+.quick-open-row-recent {
+  margin-left: auto;
+  flex-shrink: 0;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
 .quick-open-row-path {
   font-size: 11.5px;
   color: var(--muted);

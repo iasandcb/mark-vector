@@ -2552,9 +2552,26 @@ let quickOpenSelected = 0;
 // and against "project / folder / filename" (so typing part of a project or
 // folder name also finds something) - whichever matches, the better score
 // wins; a query that matches neither drops the entry.
+//
+// With nothing typed yet, the three most recently opened documents lead the
+// list (the same recentDocs the ⌥1-3 jump keys use, and likewise skipping the
+// one that's open right now, so the first row is "back to where I was"),
+// then everything else in tree order without repeating them.
+const QUICK_OPEN_RECENT_COUNT = 3;
 function quickOpenFilter(query) {
   if (!query.trim()) {
-    return quickOpenEntries.map((entry) => ({ entry, indices: [] }));
+    const sameDoc = (a, b) => a.projectId === b.projectId && a.sessionId === b.sessionId && a.filename === b.filename;
+    const recent = [];
+    for (const r of recentDocs) {
+      if (recent.length === QUICK_OPEN_RECENT_COUNT) break;
+      if (active && sameDoc(r, active)) continue;
+      const entry = quickOpenEntries.find((e) => sameDoc(e, r));
+      if (entry) recent.push(entry);
+    }
+    return [
+      ...recent.map((entry) => ({ entry, indices: [], recent: true })),
+      ...quickOpenEntries.filter((entry) => !recent.includes(entry)).map((entry) => ({ entry, indices: [] })),
+    ];
   }
   const results = [];
   for (const entry of quickOpenEntries) {
@@ -2603,6 +2620,12 @@ function renderQuickOpenResults() {
     filename.className = "quick-open-row-filename";
     filename.innerHTML = markMatches(entry.filename, indices);
     main.append(badge, filename);
+    if (result.recent) {
+      const tag = document.createElement("span");
+      tag.className = "quick-open-row-recent";
+      tag.textContent = t("quickOpen.recent");
+      main.appendChild(tag);
+    }
 
     const path = document.createElement("div");
     path.className = "quick-open-row-path";
