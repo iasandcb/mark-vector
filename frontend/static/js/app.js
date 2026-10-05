@@ -458,7 +458,7 @@ async function restoreActiveDocument(ref) {
       project.expanded = true;
       project.sessions.get(ref.sessionId).expanded = true;
       saveExpandedTreeState();
-      await selectDocument(ref.projectId, ref.sessionId, ref.filename, { focus: false });
+      await selectDocument(ref.projectId, ref.sessionId, ref.filename);
     }
   } catch (err) {
     // Any failed fetch along the way (deleted project/session/document,
@@ -3080,10 +3080,10 @@ async function toggleSession(projectId, id) {
 // probably opened to read.
 const PHONE_LAYOUT = window.matchMedia("(max-width: 700px)");
 
-// `focus` (on by default): every way of *going to* a document - a tree row,
-// quick open, the jump keys, an internal link - leaves the
-// caret at the top of the editor, ready to type. Off only for the page-load
-// restore, which isn't a navigation the user just made.
+// `focus` (on by default): every way of arriving at a document - a tree
+// row, quick open, the jump keys, an internal link, and the page-load
+// restore of the last open one - leaves the caret at the top of the editor,
+// ready to type.
 async function selectDocument(projectId, sessionId, filename, { focus = true } = {}) {
   if (streaming) return;
   if (isDirty() && !confirm(t("confirm.unsavedChanges"))) return;
