@@ -4,13 +4,12 @@
 // so unlike frontend/static/js/app.js there is nothing here to wire up
 // beyond receiving updates and rendering them.
 //
-// Custom AsciiMath symbols (see asciimath-markdown's setCustomAsciiMathSymbols) are
-// deliberately not fetched here - that endpoint sits behind the app's
-// Google-auth session cookie, which this device never has, and its own
-// 401 handling would bounce this page to a /login it has no way to complete
-// (no keyboard). Bare AsciiMath/LaTeX still renders fine without it; only a
-// project's custom symbol table would be missing.
-import { renderMarkdown, detectMathDirective } from "/static/js/markdown.js";
+// Custom AsciiMath symbols come from the same unauthenticated
+// /api/public/custom-symbols the public page uses (see routers/public.py) -
+// not /api/custom-symbols, which sits behind the app's session cookie this
+// device never has (and whose 401 handling would bounce this page to a
+// /login it can't complete - no keyboard).
+import { renderMarkdown, detectMathDirective, parseCustomSymbolsCsv, setCustomAsciiMathSymbols } from "/static/js/markdown.js";
 import { splitSlides } from "/static/js/slides.js";
 
 const filenameEl = document.getElementById("filename");
@@ -201,8 +200,33 @@ function connect() {
   socket.addEventListener("error", () => socket.close());
 }
 
+// Loaded before the first render (so a custom symbol never flashes as the
+// bare parser's guess), then re-checked every minute: this screen stays up
+// for hours, and an edit to the table in the editor should reach it without
+// anyone reloading a page that has no way to reload itself. Best-effort -
+// a failed fetch just keeps whatever table is already applied.
+const CUSTOM_SYMBOLS_REFRESH_MS = 60000;
+let customSymbolsContent = null;
+
+async function loadCustomSymbols() {
+  try {
+    const res = await fetch("/api/public/custom-symbols");
+    if (!res.ok) return false;
+    const { content } = await res.json();
+    if (content === customSymbolsContent) return false;
+    customSymbolsContent = content;
+    setCustomAsciiMathSymbols(parseCustomSymbolsCsv(content));
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
 renderIdle(channel ? "Waiting for that document to go live…" : "Waiting for a live preview, from any document…");
-connect();
+loadCustomSymbols().finally(connect);
+setInterval(async () => {
+  if ((await loadCustomSymbols()) && lastMessage) render(lastMessage);
+}, CUSTOM_SYMBOLS_REFRESH_MS);
 
 // The one interaction this screen supports: the Neural Band / touch strip's
 // dpad emits arrow key events (see the Build guide) - there's no focusable
