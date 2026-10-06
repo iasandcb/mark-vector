@@ -38,10 +38,11 @@ _latest_channel: str | None = None
 
 # Messages a screen may send back toward the editor on its channel - relayed
 # to the channel's other sockets as-is, never stored as its state. The
-# glasses screen's D-pad "next" past the last slide asks the editor to open
-# a new one, and its select (Enter) asks it to tidy the slide being built
-# (see app.js's handleScreenCommand).
-_COMMAND_ACTIONS = {"newSlide", "tidySlide"}
+# glasses screen's D-pad drives the editor the way the gamepad remote does:
+# "next" past the last slide opens a new one, select (Enter) tidies the
+# slide being built, and in slide view up/down start or leave a math block
+# and break a line (see app.js's handleScreenCommand).
+_COMMAND_ACTIONS = {"newSlide", "tidySlide", "toggleMath", "lineBreak"}
 
 
 def _is_command(message: object) -> bool:

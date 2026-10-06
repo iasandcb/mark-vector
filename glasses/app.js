@@ -292,6 +292,16 @@ document.addEventListener("keydown", (event) => {
     if (sendCommand("tidySlide")) filenameEl.textContent += " · ✨";
     return;
   }
+  // In slide view up/down write rather than scroll: up starts (or leaves) a
+  // math block, down breaks the line - the gamepad remote's Y and X. The
+  // slide being written follows its own bottom as text arrives, so there's
+  // little left to scroll there; document view still scrolls with them.
+  if ((event.key === "ArrowUp" || event.key === "ArrowDown") && slideMode(lastMessage)) {
+    event.preventDefault();
+    const math = event.key === "ArrowUp";
+    if (sendCommand(math ? "toggleMath" : "lineBreak")) filenameEl.textContent += math ? " · $$" : " · ↵";
+    return;
+  }
   if (event.key === "ArrowDown") {
     contentEl.scrollTop += SCROLL_STEP;
   } else if (event.key === "ArrowUp") {

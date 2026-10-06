@@ -78,10 +78,11 @@ class TestCommands:
                 ambient.send_json({"type": "command", "action": "newSlide", "filename": "b.md"})
                 assert editor.receive_json()["action"] == "newSlide"
 
-    def test_tidy_command_is_relayed(self, client, without_passcode):
+    def test_writing_commands_are_relayed(self, client, without_passcode):
         with client.websocket_connect("/ws/live/cmdtidy") as editor, client.websocket_connect("/ws/live/cmdtidy") as screen:
-            screen.send_json({"type": "command", "action": "tidySlide", "filename": "a.md"})
-            assert editor.receive_json()["action"] == "tidySlide"
+            for action in ("tidySlide", "toggleMath", "lineBreak"):
+                screen.send_json({"type": "command", "action": action, "filename": "a.md"})
+                assert editor.receive_json()["action"] == action
 
     def test_unknown_commands_are_dropped(self, client, without_passcode):
         with client.websocket_connect("/ws/live/cmdtest2") as editor, client.websocket_connect("/ws/live/cmdtest2") as screen:

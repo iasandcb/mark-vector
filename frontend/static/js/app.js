@@ -2093,7 +2093,8 @@ function toggleDictation() {
 // A command from a live screen (see createLiveSocket's onCommand) - the
 // glasses' D-pad standing in for the gamepad remote: "newSlide" (next past
 // the last slide) is the remote's new-slide button, "tidySlide" (select) its
-// tidy button. Only acted on for the document it was sent about - a screen
+// tidy button, "toggleMath" (up) its math button and "lineBreak" (down) its
+// line break. Only acted on for the document it was sent about - a screen
 // still showing the previous document mustn't change the one opened since.
 function handleScreenCommand(message) {
   if (!active || message.filename !== active.filename) return;
@@ -2102,6 +2103,10 @@ function handleScreenCommand(message) {
     openNewSlide();
   } else if (message.action === "tidySlide") {
     tidyCurrentSlide();
+  } else if (message.action === "toggleMath") {
+    toggleMath();
+  } else if (message.action === "lineBreak") {
+    breakLine();
   }
 }
 
@@ -2365,11 +2370,25 @@ function openNewSlide() {
   showRemoteStatus(t("remote.newSlide"));
 }
 
+// Presenting writes on the last slide - where dictation is when it's on.
+// When it's off, the caret can be anywhere (opening a document puts it at
+// the top), and a line break or math block from the remote or the glasses
+// landing on an earlier slide would be a surprise, so a caret outside the
+// last slide goes to the end first. One already on it (say, inside the
+// math block the previous press opened) stays where it is.
+function caretToDeckEndUnlessDictating() {
+  if (dictation) return;
+  const value = el.editor.value;
+  if (el.editor.selectionStart >= lastSlideStart(value)) return;
+  el.editor.setSelectionRange(value.length, value.length);
+}
+
 // X: one line break where dictation is writing, so the next thing said
 // starts on the next line - inside a math block that's the formula's next
 // line; in text, two presses make a paragraph break.
 function breakLine() {
   if (!presenterUsable()) return;
+  caretToDeckEndUnlessDictating();
   const pos = el.editor.selectionStart;
   if (!el.editor.value.slice(0, pos).trim()) return;
   // Through rebaseDictation: the phrase in progress stays above the break.
@@ -2388,6 +2407,7 @@ function breakLine() {
 // notation on a tidy (B) - see generateSlide's prompt.
 function toggleMath() {
   if (!presenterUsable()) return;
+  caretToDeckEndUnlessDictating();
   const value = el.editor.value;
   const pos = el.editor.selectionStart;
   const before = value.slice(0, pos);
