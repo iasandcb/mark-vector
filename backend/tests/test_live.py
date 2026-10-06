@@ -53,3 +53,40 @@ class TestAmbientPinGate:
         # a publish token) - unaffected by APP_PASSCODE either way.
         with client.websocket_connect("/ws/live/some-channel"):
             pass
+
+
+class TestCommands:
+    """A screen can send a whitelisted command back toward the editor on its
+    channel (the glasses D-pad asking for a new slide). Relayed to the
+    channel's other sockets, never stored as the channel's state."""
+
+    def test_command_reaches_the_other_sockets_and_is_not_stored(self, client, without_passcode):
+        with client.websocket_connect("/ws/live/cmdtest") as editor, client.websocket_connect("/ws/live/cmdtest") as screen:
+            editor.send_json({"type": "update", "filename": "a.md", "content": "x"})
+            assert screen.receive_json()["filename"] == "a.md"
+            screen.send_json({"type": "command", "action": "newSlide", "filename": "a.md"})
+            assert editor.receive_json() == {"type": "command", "action": "newSlide", "filename": "a.md"}
+            # A newcomer still gets the last *update*, not the command.
+            with client.websocket_connect("/ws/live/cmdtest") as late:
+                assert late.receive_json()["type"] == "update"
+
+    def test_ambient_screen_command_goes_to_the_channel_it_is_showing(self, client, without_passcode):
+        with client.websocket_connect("/ws/live/ambienttarget") as editor:
+            editor.send_json({"type": "update", "filename": "b.md", "content": "y"})
+            with client.websocket_connect("/ws/live") as ambient:
+                assert ambient.receive_json()["filename"] == "b.md"
+                ambient.send_json({"type": "command", "action": "newSlide", "filename": "b.md"})
+                assert editor.receive_json()["action"] == "newSlide"
+
+    def test_unknown_commands_are_dropped(self, client, without_passcode):
+        with client.websocket_connect("/ws/live/cmdtest2") as editor, client.websocket_connect("/ws/live/cmdtest2") as screen:
+            screen.send_json({"type": "command", "action": "deleteEverything"})
+            screen.send_json({"type": "update", "filename": "c.md", "content": "z"})
+            assert editor.receive_json()["type"] == "update"
+
+
+def test_version_endpoint_is_public(client, monkeypatch):
+    monkeypatch.setattr(settings, "app_passcode", "1234")
+    resp = client.get("/api/public/version")
+    assert resp.status_code == 200
+    assert len(resp.json()["version"]) == 16

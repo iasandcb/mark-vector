@@ -1915,3 +1915,30 @@ kbd.shortcut-key {
   padding: 3px 10px;
   font-size: 12px;
 }
+
+/* ---------- new version deployed (see app.js) ---------- */
+
+.update-banner {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px 10px 16px;
+  border-radius: 10px;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+@media (max-width: 700px) {
+  .update-banner {
+    left: 12px;
+    right: 12px;
+    bottom: 72px;
+  }
+}

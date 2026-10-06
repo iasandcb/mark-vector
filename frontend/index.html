@@ -313,6 +313,13 @@
   <script src="https://cdn.jsdelivr.net/npm/katex@0.18.4/dist/katex.min.js"
     integrity="sha384-ykMNcWQhhTUb0YV9SPpPUFURHZ+tWmubkakGBP+OgNK/UXdO2gtzglWx0Rj9hnO3"
     crossorigin="anonymous"></script>
+  <!-- A newer build is on the server than the one this tab loaded - see the
+       "new version deployed" section in app.js. -->
+  <div id="update-banner" class="update-banner" role="status" hidden>
+    <span data-i18n="update.available"></span>
+    <button id="update-reload-btn" class="primary-btn" type="button" data-i18n="update.reload"></button>
+  </div>
+
   <script type="module" src="/static/js/app.js"></script>
 </body>
 </html>

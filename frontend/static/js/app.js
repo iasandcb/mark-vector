@@ -82,6 +82,8 @@ const el = {
   toolStatus: document.getElementById("tool-status"),
   remoteBtn: document.getElementById("remote-btn"),
   syncConflict: document.getElementById("sync-conflict"),
+  updateBanner: document.getElementById("update-banner"),
+  updateReloadBtn: document.getElementById("update-reload-btn"),
   syncLoadBtn: document.getElementById("sync-load-btn"),
   syncKeepBtn: document.getElementById("sync-keep-btn"),
   saveBtn: document.getElementById("save-btn"),
@@ -984,7 +986,10 @@ function currentLiveState() {
 // socket tied to one document's channel must never carry another
 // document's content, even for the moment between `active` switching and
 // the socket being re-targeted (see livePublicSocket below).
-function createLiveSocket(onConnectedChange, { belongsHere = () => true } = {}) {
+// `onCommand(message)` (optional) receives a command a screen sent back on
+// the channel (see live.py's _COMMAND_ACTIONS) - e.g. the glasses D-pad
+// asking for a new slide.
+function createLiveSocket(onConnectedChange, { belongsHere = () => true, onCommand = () => {} } = {}) {
   let channel = null;
   let socket = null;
   let sendTimer = null;
@@ -1060,6 +1065,16 @@ function createLiveSocket(onConnectedChange, { belongsHere = () => true } = {}) 
         retryDelay = Math.min(retryDelay * 1.5, LIVE_RETRY_MAX_MS);
       }
     });
+    ws.addEventListener("message", (event) => {
+      if (socket !== ws) return;
+      let message;
+      try {
+        message = JSON.parse(event.data);
+      } catch (err) {
+        return;
+      }
+      if (message && message.type === "command") onCommand(message);
+    });
     ws.addEventListener("error", () => ws.close());
   }
 
@@ -1096,7 +1111,9 @@ function createLiveSocket(onConnectedChange, { belongsHere = () => true } = {}) 
 const GLASSES_CHANNEL_KEY = "mark-vector:live-channel";
 const GLASSES_ENABLED_KEY = "mark-vector:live-enabled";
 
-const glassesSocket = createLiveSocket((connected) => el.glassesStatusDot.classList.toggle("connected", connected));
+const glassesSocket = createLiveSocket((connected) => el.glassesStatusDot.classList.toggle("connected", connected), {
+  onCommand: handleScreenCommand,
+});
 
 function getOrCreateGlassesChannel() {
   let channel = null;
@@ -1117,8 +1134,12 @@ function getOrCreateGlassesChannel() {
   return channel;
 }
 
+// From the stored channel id, not the socket's current one: the toolbar
+// shows this URL before the socket has connected (page load with Glasses
+// already on), when the socket has no channel yet - which used to put
+// "?c=null" in the URL, a channel nothing ever sends to.
 function glassesUrl() {
-  return `${location.origin}/glasses/?c=${encodeURIComponent(glassesSocket.currentChannel())}`;
+  return `${location.origin}/glasses/?c=${encodeURIComponent(getOrCreateGlassesChannel())}`;
 }
 
 function saveGlassesEnabledPref() {
@@ -1199,6 +1220,9 @@ const LIVE_PUBLIC_ENABLED_KEY = "mark-vector:live-public-enabled";
 // channel's latest state for every new visitor.
 const livePublicSocket = createLiveSocket((connected) => el.livePublicStatusDot.classList.toggle("connected", connected), {
   belongsHere: (channel) => !!(active && active.publishToken) && channel === livePublicChannel(active.publishToken),
+  // An ambient glasses screen sends its commands to whichever channel it's
+  // showing, which can be this one.
+  onCommand: handleScreenCommand,
 });
 
 function livePublicChannel(token) {
@@ -1914,6 +1938,43 @@ function toggleDictation() {
   if (dictation) stopDictation();
   else startDictation();
 }
+
+// A command from a live screen (see createLiveSocket's onCommand). Only
+// acted on for the document it was sent about - a screen still showing the
+// previous document mustn't add a slide to the one opened since.
+function handleScreenCommand(message) {
+  if (message.action !== "newSlide" || !active || message.filename !== active.filename) return;
+  if (presenter.slide === null) presenter.slide = "last";
+  openNewSlide();
+}
+
+// ---------- new version deployed ----------
+// An open tab keeps running the JavaScript it loaded, so after a deploy it
+// can send live updates in the old shape without anyone noticing (a glasses
+// screen once stayed in document view because of exactly that). The
+// version (see backend app/version.py) is checked every minute and on
+// focus; when it moved, a strip offers a reload. Not automatic here: the
+// editor may hold unsaved work (the beforeunload prompt still guards it).
+const VERSION_CHECK_MS = 60000;
+let loadedVersion = null;
+
+async function checkForNewVersion() {
+  let version;
+  try {
+    const res = await fetch("/api/public/version");
+    if (!res.ok) return;
+    ({ version } = await res.json());
+  } catch (err) {
+    return;
+  }
+  if (loadedVersion === null) loadedVersion = version;
+  else if (version !== loadedVersion) el.updateBanner.hidden = false;
+}
+
+checkForNewVersion();
+setInterval(checkForNewVersion, VERSION_CHECK_MS);
+window.addEventListener("focus", checkForNewVersion);
+el.updateReloadBtn.addEventListener("click", () => location.reload());
 
 // ---------- presenter remote (gamepad -> live slides) ----------
 //

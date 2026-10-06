@@ -200,6 +200,31 @@ function connect() {
   socket.addEventListener("error", () => socket.close());
 }
 
+function requestNewSlide() {
+  if (!socket || socket.readyState !== WebSocket.OPEN || !lastMessage || !lastMessage.filename) return;
+  socket.send(JSON.stringify({ type: "command", action: "newSlide", filename: lastMessage.filename }));
+}
+
+// A deploy changes this page's own code too, and nobody can press reload
+// on the glasses - so when the server's frontend version (see backend
+// app/version.py) moves past the one this page loaded with, it reloads
+// itself.
+const VERSION_CHECK_MS = 60000;
+let loadedVersion = null;
+async function checkForNewVersion() {
+  try {
+    const res = await fetch("/api/public/version");
+    if (!res.ok) return;
+    const { version } = await res.json();
+    if (loadedVersion === null) loadedVersion = version;
+    else if (version !== loadedVersion) location.reload();
+  } catch (err) {
+    // offline for a moment - check again next round
+  }
+}
+checkForNewVersion();
+setInterval(checkForNewVersion, VERSION_CHECK_MS);
+
 // Loaded before the first render (so a custom symbol never flashes as the
 // bare parser's guess), then re-checked every minute: this screen stays up
 // for hours, and an edit to the table in the editor should reach it without
@@ -238,7 +263,15 @@ document.addEventListener("keydown", (event) => {
   if ((event.key === "ArrowLeft" || event.key === "ArrowRight") && slideMode(lastMessage)) {
     event.preventDefault();
     const next = slideIndex + (event.key === "ArrowRight" ? 1 : -1);
-    if (next < 0 || next >= slideCount) return;
+    if (next >= slideCount) {
+      // "Next" past the last slide asks the editor for a new, blank one
+      // (the same as the gamepad remote's new-slide button - see app.js's
+      // handleScreenCommand); the live update that follows brings this
+      // screen onto it.
+      requestNewSlide();
+      return;
+    }
+    if (next < 0) return;
     slideIndex = next;
     renderSlides(lastMessage, false);
     return;

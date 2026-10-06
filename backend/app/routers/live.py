@@ -32,6 +32,19 @@ _channels: dict[str, dict] = {}
 # below) - "most recent" should keep showing the last thing broadcast even
 # after that channel's sockets all disconnect, not blank out.
 _latest_state: dict | None = None
+# The channel _latest_state came from - where a command sent by an
+# ambient-mode screen (see below) is delivered.
+_latest_channel: str | None = None
+
+# Messages a screen may send back toward the editor on its channel - relayed
+# to the channel's other sockets as-is, never stored as its state. The
+# glasses screen's D-pad "next" past the last slide asks the editor to open
+# a new one (see app.js's live-socket onCommand / openNewSlide).
+_COMMAND_ACTIONS = {"newSlide"}
+
+
+def _is_command(message: object) -> bool:
+    return isinstance(message, dict) and message.get("type") == "command" and message.get("action") in _COMMAND_ACTIONS
 _latest_followers: set[WebSocket] = set()
 
 
@@ -55,7 +68,7 @@ async def live_channel(websocket: WebSocket, channel: str):
     # requests). The channel id itself is the access control, the same way a
     # publish token is: unguessable, and known only to whoever the editor's
     # "copy link" button gave it to.
-    global _latest_state
+    global _latest_state, _latest_channel
     await websocket.accept()
     entry = _channels.setdefault(channel, {"sockets": set(), "state": None})
     entry["sockets"].add(websocket)
@@ -71,10 +84,14 @@ async def live_channel(websocket: WebSocket, channel: str):
                 message = json.loads(raw)
             except ValueError:
                 continue
+            if _is_command(message):
+                await _broadcast(entry["sockets"], message, exclude=websocket)
+                continue
             if not isinstance(message, dict) or message.get("type") != "update":
                 continue
             entry["state"] = message
             _latest_state = message
+            _latest_channel = channel
             # Broadcast to every other socket on this channel (there may be
             # several glasses screens, or none yet) - never back to the
             # sender, which already has this exact state - and to every
@@ -118,10 +135,16 @@ async def live_latest(websocket: WebSocket):
         if _latest_state is not None:
             await websocket.send_json(_latest_state)
         while True:
-            # This connection is read-only from the client's side - just
-            # block here until it disconnects (glasses/app.js never sends
-            # anything), same idle-wait shape as live_channel's own loop.
-            await websocket.receive_text()
+            # The only thing a screen sends here is a command (see
+            # _COMMAND_ACTIONS). An ambient screen has no channel of its
+            # own, so it goes to whichever channel it's currently showing.
+            raw = await websocket.receive_text()
+            try:
+                message = json.loads(raw)
+            except ValueError:
+                continue
+            if _is_command(message) and _latest_channel in _channels:
+                await _broadcast(_channels[_latest_channel]["sockets"], message)
     except WebSocketDisconnect:
         pass
     finally:

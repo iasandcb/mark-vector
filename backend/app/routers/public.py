@@ -1,8 +1,17 @@
 from fastapi import APIRouter, HTTPException
 
 from .. import storage
+from ..version import APP_VERSION
 
 router = APIRouter(prefix="/api/public", tags=["public"])
+
+
+@router.get("/version")
+def get_version():
+    """The frontend build this server is running (see app/version.py) -
+    public, like custom-symbols below, because the glasses screen polls it
+    too and never has a session cookie."""
+    return {"version": APP_VERSION}
 
 
 @router.get("/custom-symbols")
