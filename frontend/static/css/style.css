@@ -1031,13 +1031,19 @@ body.row-dragging {
 /* Wraps rather than overflowing: a draft can show four buttons at once
    (save / publish / inline complete / send) plus the "live" checkbox, which
    is more than a phone-width header fits on one line. */
+/* Shrinkable (min-width: 0), so that when the buttons don't fit - a phone,
+   or a narrow split pane - flex-wrap actually wraps them onto a second line.
+   With flex-shrink: 0 the row stayed one line wider than the pane and ran
+   off-screen, taking the ⚙ (and with it the Live/Slides checkboxes in the
+   row it opens) out of reach on an iPhone. The title group still gives way
+   first: its flex-basis is 0, so it never holds any of the row's width. */
 .editor-actions {
   display: flex;
   align-items: center;
   justify-content: flex-end;
   flex-wrap: wrap;
   gap: 8px;
-  flex-shrink: 0;
+  min-width: 0;
 }
 
 .preview-actions {
