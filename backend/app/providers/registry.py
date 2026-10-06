@@ -213,6 +213,12 @@ async def list_providers() -> list[dict]:
                 # selector applies to, the values which levels it should
                 # offer for each. See LLMProvider.reasoning_efforts.
                 "reasoning_efforts": reasoning_efforts,
+                # {model: level} - what "Default" (no setting sent) means on
+                # each of those models, where known. See
+                # LLMProvider.reasoning_default.
+                "reasoning_defaults": {
+                    m: level for m in reasoning_efforts if (level := get_provider(provider_id).reasoning_default(m))
+                },
             }
         )
     return result

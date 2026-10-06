@@ -26,6 +26,9 @@ class _Provider:
     async def reasoning_efforts(self, models):
         return {m: ["low", "high"] for m in models if m.startswith("r")}
 
+    def reasoning_default(self, model):
+        return None
+
 
 @pytest.fixture(autouse=True)
 def _isolated(monkeypatch, tmp_path):

@@ -1,3 +1,4 @@
+import re
 from typing import AsyncIterator
 
 from anthropic import AsyncAnthropic
@@ -27,6 +28,18 @@ DEFAULT_MAX_TOKENS = 4096
 # on a hard problem - matches the general "streaming request" max_tokens
 # guidance rather than the small non-thinking default above.
 ADAPTIVE_THINKING_MAX_TOKENS = 64000
+
+# What a request with no thinking/effort setting at all ("off", shown as
+# "Default") gets on each model: from Claude Opus 5 / Sonnet 5 on, adaptive
+# thinking is on by default at the model's default effort (medium on Opus
+# 5.5, high elsewhere); the 4.x models don't think unless asked to. See
+# https://platform.claude.com/docs/en/build-with-claude/thinking and
+# .../effort. Matched most-specific-first; an unknown id reports nothing.
+_DEFAULT_EFFORT_RULES: tuple[tuple[re.Pattern, str], ...] = (
+    (re.compile(r"^claude-opus-5-5"), "medium"),
+    (re.compile(r"^claude-(opus|sonnet)-5|^claude-(fable|mythos)-"), "high"),
+    (re.compile(r"^claude-(opus|sonnet|haiku)-4"), "none"),
+)
 
 # Hosted server tool - runs on Anthropic's own infrastructure (no load on
 # this backend) and only fetches a URL already present in the conversation,
@@ -103,6 +116,9 @@ class AnthropicProvider(LLMProvider):
                 result[model] = list(THINKING_BUDGETS)
         return result
 
+    def reasoning_default(self, model: str) -> str | None:
+        return next((level for pattern, level in _DEFAULT_EFFORT_RULES if pattern.match(model)), None)
+
     async def stream(
         self,
         messages: list[dict],
@@ -147,7 +163,11 @@ class AnthropicProvider(LLMProvider):
             # request over a reasoning level it can't honor.
 
         if "max_tokens" not in kwargs:
-            kwargs["max_tokens"] = DEFAULT_MAX_TOKENS
+            # A model that thinks by default does so here too, and its
+            # thinking counts toward max_tokens - the small non-thinking cap
+            # would cut the answer off.
+            thinks_by_default = self.reasoning_default(model) not in (None, "none")
+            kwargs["max_tokens"] = ADAPTIVE_THINKING_MAX_TOKENS if thinks_by_default else DEFAULT_MAX_TOKENS
 
         # Switched from the .text_stream shortcut to the raw event iterator
         # so a web_fetch call in progress can be surfaced too - text_stream

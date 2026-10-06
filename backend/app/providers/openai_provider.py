@@ -51,11 +51,13 @@ _EFFORT_RULES: tuple[tuple[re.Pattern, tuple[str, ...]], ...] = (
     # starts at medium instead of none/low.
     (re.compile(r"^gpt-5-pro"), ("high",)),
     (re.compile(r"^gpt-5\.\d+-pro"), ("medium", "high", "xhigh")),
-    # GPT-6 Astra (and the bare "gpt-6" alias pointing at it): the one
-    # current family that rejects "none" outright. Deliberately not a plain
+    # GPT-6 Astra (and the bare "gpt-6" alias pointing at it) and GPT-6.1
+    # Sol reject "none" outright; GPT-6 Sol and Luna take it. Deliberately not a plain
     # "^gpt-6" prefix - an unrecognized future gpt-6 sibling is better off
     # on the conservative default below than offered a "max" it may not take.
     (re.compile(r"^gpt-6(-astra|$)"), ("low", "medium", "high", "xhigh", "max")),
+    (re.compile(r"^gpt-6\.1-sol"), ("low", "medium", "high", "xhigh", "max")),
+    (re.compile(r"^gpt-6-(sol|luna)"), ("none", "low", "medium", "high", "xhigh", "max")),
     # 5.6 (luna/sol/terra): the only non-pro family with "max".
     (re.compile(r"^gpt-5\.6"), ("none", "low", "medium", "high", "xhigh", "max")),
     # 5.2 through 5.5 share one set. 5.1 is the same minus xhigh, except for
@@ -75,6 +77,21 @@ _EFFORT_RULES: tuple[tuple[re.Pattern, tuple[str, ...]], ...] = (
 # behind a custom gateway) under-offers rather than risking a 400 on a level
 # that model doesn't have.
 _DEFAULT_EFFORTS = ("low", "medium", "high")
+
+# The level each model uses when no reasoning.effort is sent - what the
+# selector's "Default" entry stands for. Transcribed from the per-model docs
+# pages ("medium (default)" and the like), most-specific-first; a model none
+# of these match is simply shown as "Default" with no level, rather than a
+# guess. 5.1 through 5.4 really do default to no reasoning at all.
+_DEFAULT_EFFORT_RULES: tuple[tuple[re.Pattern, str], ...] = (
+    (re.compile(r"^gpt-5-pro"), "high"),
+    (re.compile(r"^gpt-5\.5-pro"), "high"),
+    (re.compile(r"^gpt-5\.4-pro"), "medium"),
+    (re.compile(r"^gpt-6\.1-sol|^gpt-6-(sol|luna)"), "medium"),
+    (re.compile(r"^gpt-5\.[56](?!\d)(?!-pro)"), "medium"),
+    (re.compile(r"^gpt-5\.[124](?!\d)(?!-pro)"), "none"),
+    (re.compile(r"^gpt-5(-(mini|nano)|$)"), "medium"),
+)
 
 
 def _is_current_chat_model(model_id: str) -> bool:
@@ -140,6 +157,10 @@ class OpenAIProvider(LLMProvider):
 
     async def reasoning_efforts(self, models: list[str]) -> dict[str, list[str]]:
         return {m: list(_effort_levels(m)) for m in models if _is_reasoning_model(m)}
+
+    def reasoning_default(self, model: str) -> str | None:
+        lower = model.lower()
+        return next((level for pattern, level in _DEFAULT_EFFORT_RULES if pattern.match(lower)), None)
 
     async def stream(
         self,

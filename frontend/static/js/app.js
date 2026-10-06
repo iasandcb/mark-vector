@@ -1686,14 +1686,18 @@ function updateReasoningAvailability(provider) {
   // "high" shouldn't silently reset the level that's already chosen.
   const previous = el.reasoningSelect.value;
   el.reasoningSelect.replaceChildren();
+  // A level the backend knows about but this build's dictionary doesn't
+  // (a new one added server-side) still shows up, just unlocalized,
+  // rather than silently disappearing from the selector.
+  const levelLabel = (level) => (REASONING_LEVEL_KEYS[level] ? t(REASONING_LEVEL_KEYS[level]) : level);
+  // "off" sends no setting, so the model runs at its own default - named
+  // here when the backend knows it ("Default (Medium)").
+  const fallback = provider && provider.reasoning_defaults && provider.reasoning_defaults[el.modelSelect.value];
   for (const level of ["off", ...(levels || [])]) {
     const option = document.createElement("option");
     option.value = level;
-    // A level the backend knows about but this build's dictionary doesn't
-    // (a new one added server-side) still shows up, just unlocalized,
-    // rather than silently disappearing from the selector.
-    const key = level === "off" ? "editor.reasoningOff" : REASONING_LEVEL_KEYS[level];
-    option.textContent = key ? t(key) : level;
+    if (level !== "off") option.textContent = levelLabel(level);
+    else option.textContent = fallback ? t("editor.reasoningDefaultIs", { level: levelLabel(fallback) }) : t("editor.reasoningDefault");
     el.reasoningSelect.appendChild(option);
   }
   el.reasoningSelect.disabled = !levels;

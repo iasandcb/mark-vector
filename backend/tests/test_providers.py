@@ -218,6 +218,14 @@ async def test_reasoning_off_skips_capability_lookup_entirely(monkeypatch):
     async for _ in provider.stream([{"role": "user", "content": "hi"}], "claude-opus-5", reasoning_effort="off"):
         pass
     assert "thinking" not in captured
+    # Claude Opus 5 thinks by default even with no setting sent, and that
+    # thinking counts toward max_tokens - so the cap is the thinking one.
+    assert captured["max_tokens"] == 64000
+
+    captured.clear()
+    async for _ in provider.stream([{"role": "user", "content": "hi"}], "claude-opus-4-8", reasoning_effort="off"):
+        pass
+    assert "thinking" not in captured
     assert captured["max_tokens"] == 4096
 
 

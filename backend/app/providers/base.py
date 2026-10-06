@@ -47,3 +47,10 @@ class LLMProvider(ABC):
         400. Default: empty, since a provider that doesn't override this has
         no way to tell reasoning-capable models apart from the rest."""
         return {}
+
+    def reasoning_default(self, model: str) -> str | None:
+        """The level `model` runs at when no setting is sent ("off" - the
+        selector's "Default" entry), so the UI can say what that default
+        actually is. One of REASONING_LEVELS, "none" for a model that doesn't
+        reason unless asked to, or None when not known."""
+        return None

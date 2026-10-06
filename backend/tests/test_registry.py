@@ -17,7 +17,8 @@ def async_test(fn):
 
 class _FakeProvider:
     """Stands in for AnthropicProvider/OpenAIProvider - list_providers()
-    only needs list_models() and reasoning_capable_models() from it."""
+    only needs list_models(), reasoning_efforts() and reasoning_default()
+    from it."""
 
     def __init__(self, models, reasoning_models):
         self._models = models
@@ -26,8 +27,11 @@ class _FakeProvider:
     async def list_models(self):
         return self._models
 
-    async def reasoning_capable_models(self, models):
-        return self._reasoning_models
+    async def reasoning_efforts(self, models):
+        return {m: ["low", "medium", "high"] for m in self._reasoning_models}
+
+    def reasoning_default(self, model):
+        return "high" if model == "claude-opus-5" else None
 
     async def stream(self, *args, **kwargs):
         raise NotImplementedError
@@ -61,7 +65,8 @@ async def test_list_providers_includes_reasoning_models(monkeypatch):
     assert len(result) == 1
     assert result[0]["id"] == "anthropic"
     assert result[0]["models"] == ["claude-opus-5", "claude-haiku-3"]
-    assert result[0]["reasoning_models"] == ["claude-opus-5"]
+    assert result[0]["reasoning_efforts"] == {"claude-opus-5": ["low", "medium", "high"]}
+    assert result[0]["reasoning_defaults"] == {"claude-opus-5": "high"}
 
 
 @async_test
