@@ -151,51 +151,10 @@
     #content .katex {
       color: #f5f5f0;
     }
-    /* Test field for the on-glasses composer / on-screen keyboard (see
-       app.js's "text input test"). Sized to the Build guide's tap-target
-       guidance, with the cyan focus ring it recommends. */
-    #input-test {
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-      flex-shrink: 0;
-    }
-    #test-input {
-      width: 100%;
-      min-height: 64px;
-      padding: 0 16px;
-      font-size: 20px;
-      color: #f5f5f0;
-      background: #111;
-      border: 2px solid #3a3a36;
-      border-radius: 12px;
-      outline: none;
-      transition: border-color 150ms ease, box-shadow 150ms ease;
-    }
-    #test-input::placeholder {
-      color: #7a7a72;
-    }
-    #test-input:focus {
-      border-color: #00d4ff;
-      box-shadow: 0 0 20px rgba(0, 212, 255, 0.4);
-    }
-    #test-echo {
-      font-size: 13px;
-      font-family: "SF Mono", Consolas, monospace;
-      color: #9a9a92;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      min-height: 1.3em;
-    }
   </style>
 </head>
 <body>
   <div id="screen">
-    <div id="input-test">
-      <input id="test-input" type="text" autocomplete="off" placeholder="Text input test - select to open the composer">
-      <div id="test-echo">↑ from the top of the page to focus · ↓ to leave</div>
-    </div>
     <div id="header">
       <span id="filename"></span>
       <span id="status" title="Connection status"></span>
