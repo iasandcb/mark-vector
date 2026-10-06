@@ -266,7 +266,43 @@ setInterval(async () => {
 // standing in for the page-level scroll this fixed viewport can't have, and
 // in slide view left/right step between slides.
 const SCROLL_STEP = 140;
+
+// ---------- text input test ----------
+// A plain text field at the top of the screen for trying the glasses'
+// on-glasses composer (handwriting / dictation) and its on-screen keyboard
+// (firmware v129+): with the field focused, select (Enter) opens the
+// composer, and its text arrives through ordinary input/change events -
+// shown under the field. Never focused on its own, so the D-pad keeps
+// driving the page: ArrowUp with the content scrolled to its top moves
+// focus up into the field, ArrowDown moves it back out.
+const testInput = document.getElementById("test-input");
+const testEcho = document.getElementById("test-echo");
+let testEventCount = 0;
+function echoTestEvent(type) {
+  testEventCount += 1;
+  testEcho.textContent = `#${testEventCount} ${type}: "${testInput.value}" (${testInput.value.length} chars)`;
+}
+testInput.addEventListener("input", () => echoTestEvent("input"));
+testInput.addEventListener("change", () => echoTestEvent("change"));
+testInput.addEventListener("focus", () => {
+  if (!testEventCount) testEcho.textContent = "focused - select (pinch/tap) to open the composer";
+});
+
 document.addEventListener("keydown", (event) => {
+  if (document.activeElement === testInput) {
+    // Everything else is the field's own (select opens the composer).
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      testInput.blur();
+    }
+    return;
+  }
+  if (event.key === "ArrowUp" && contentEl.scrollTop <= 0) {
+    event.preventDefault();
+    testInput.focus();
+    return;
+  }
+
   if ((event.key === "ArrowLeft" || event.key === "ArrowRight") && slideMode(lastMessage)) {
     event.preventDefault();
     const next = slideIndex + (event.key === "ArrowRight" ? 1 : -1);
