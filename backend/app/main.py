@@ -15,6 +15,7 @@ from .routers import (
     projects,
     providers,
     public,
+    stt,
     system_prompt,
     transcribe,
 )
@@ -41,6 +42,7 @@ app.include_router(hermes.router)
 app.include_router(public.router)
 app.include_router(live.router)
 app.include_router(transcribe.router)
+app.include_router(stt.router)
 
 
 class NoCacheStaticFiles(StaticFiles):

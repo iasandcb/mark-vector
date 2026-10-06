@@ -12,6 +12,7 @@ import { createEditor } from "./editor.js";
 import { openTranscribeDialog } from "./transcribe.js";
 import { createGamepadRemote } from "./remote.js";
 import { splitSlides, lastSlideStart } from "./slides.js";
+import { startRealtimeTranscription } from "./realtime-stt.js";
 
 // Inline-thread markers. Declared up here, away from the rest of the
 // inline-thread code further down, because `el` below builds the editor,
@@ -1745,11 +1746,17 @@ function updateInlineCompleteButton() {
 
 // ---------- dictation (live speech-to-text into the editor) ----------
 //
-// The browser's own Web Speech API - no server round trip, no API key, and
-// interim (still-being-spoken) results arrive continuously, which is what
-// makes it feel live. Chrome/Edge/Safari only (Firefox has no
-// SpeechRecognition), so the control is hidden where it can't work. The
-// audio itself goes to the browser vendor's recognizer, not to this app.
+// Two engines behind the one 🎤 button:
+//   - the browser's own Web Speech API wherever it works - no server round
+//     trip, no API key, free, interim results arriving continuously. The
+//     audio goes to the browser vendor's recognizer, not to this app.
+//   - realtime transcription through OpenAI (realtime-stt.js), where it
+//     doesn't: every non-Safari browser on iOS (Apple enables
+//     SpeechRecognition in Safari only - Chrome on iOS even exposes
+//     webkitSpeechRecognition, but it never works there) and Firefox.
+//     Needs the server's OPENAI_API_KEY and is billed per minute streamed,
+//     so it stops when the tab is hidden or nothing's been heard for a while.
+// The control is hidden only when neither is available.
 //
 // Text is written straight into the document at the caret: finalized
 // phrases stay, and the phrase still being spoken is shown in place and
@@ -1757,6 +1764,27 @@ function updateInlineCompleteButton() {
 // If the caret moves or the text under that span changes while listening,
 // the span is abandoned and dictation picks up again at the new caret.
 const SpeechRecognitionImpl = window.SpeechRecognition || window.webkitSpeechRecognition;
+const IOS_NON_SAFARI = /CriOS|FxiOS|EdgiOS|OPiOS/.test(navigator.userAgent);
+const WEB_SPEECH_USABLE = !!SpeechRecognitionImpl && !IOS_NON_SAFARI;
+// Set from /api/stt/config at startup (see loadRealtimeSttConfig below).
+let realtimeSttAvailable = false;
+// Realtime dictation stops itself after this long without hearing anything.
+const REALTIME_IDLE_MS = 3 * 60 * 1000;
+
+function dictationSupported() {
+  return WEB_SPEECH_USABLE || realtimeSttAvailable;
+}
+
+async function loadRealtimeSttConfig() {
+  if (WEB_SPEECH_USABLE) return;
+  try {
+    const res = await fetch("/api/stt/config");
+    if (res.ok) realtimeSttAvailable = !!(await res.json()).available;
+  } catch (err) {
+    realtimeSttAvailable = false;
+  }
+  updateDictationButton();
+}
 const DICTATION_LANG_KEY = "mark-vector:dictation-lang";
 const DICTATION_LANG_BY_UI = { ko: "ko-KR", en: "en-US", ja: "ja-JP" };
 
@@ -1789,7 +1817,9 @@ function dictationUsable() {
 }
 
 function updateDictationButton() {
-  el.dictationGroup.hidden = !SpeechRecognitionImpl || !active;
+  el.dictationGroup.hidden = !dictationSupported() || !active;
+  // Where the realtime engine stands in, say so - it's the one that costs.
+  if (!WEB_SPEECH_USABLE && realtimeSttAvailable) el.dictationBtn.title = t("editor.dictationRealtimeTitle");
   el.dictationBtn.disabled = !dictationUsable() && !dictation;
   if (dictation && (dictation.target !== active || !dictationUsable())) stopDictation();
   const listening = !!dictation;
@@ -1854,12 +1884,27 @@ function writeDictation(finalText, interimText) {
 }
 
 function startDictation() {
-  if (!SpeechRecognitionImpl || dictation || !dictationUsable()) return;
+  if (dictation || !dictationUsable() || !dictationSupported()) return;
+  if (WEB_SPEECH_USABLE) startWebSpeechDictation();
+  else startRealtimeDictation();
+}
+
+function startWebSpeechDictation() {
   const recognition = new SpeechRecognitionImpl();
   recognition.lang = el.dictationLang.value;
   recognition.continuous = true;
   recognition.interimResults = true;
-  dictation = { recognition, target: active, from: el.editor.selectionStart, interim: "", error: null };
+  dictation = {
+    engine: "webspeech",
+    recognition,
+    target: active,
+    from: el.editor.selectionStart,
+    interim: "",
+    error: null,
+    // abort(), not stop(): stop() would still deliver one last "result"
+    // after this point, into a session that's already been let go.
+    stop: () => recognition.abort(),
+  };
   // Replace a selection, the way typing would.
   if (el.editor.selectionEnd > el.editor.selectionStart) {
     replaceEditorRange(el.editor.selectionStart, el.editor.selectionEnd, "");
@@ -1919,20 +1964,126 @@ function startDictation() {
   el.editor.focus();
 }
 
+// The realtime engine (see the section comment). Pending transcript items
+// are shown as interim text in arrival order; a completed one becomes final
+// text. Items started before a rebase (see rebaseDictation) are abandoned:
+// their text stays where it was typed and their final version is dropped.
+function startRealtimeDictation() {
+  // Created here, inside the click, for iOS - see realtime-stt.js.
+  const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  const session = {
+    engine: "realtime",
+    target: active,
+    from: el.editor.selectionStart,
+    interim: "",
+    items: new Map(), // item_id -> text so far, in arrival order
+    abandoned: new Set(),
+    stop: () => audioContext.close().catch(() => {}),
+    commit: () => {},
+  };
+  dictation = session;
+  if (el.editor.selectionEnd > el.editor.selectionStart) {
+    replaceEditorRange(el.editor.selectionStart, el.editor.selectionEnd, "");
+  }
+  updateDictationButton();
+  el.editor.focus();
+  showRemoteStatus(t("editor.dictationConnecting"), { sticky: true });
+  const pendingText = () => [...session.items.values()].join(" ");
+  startRealtimeTranscription({
+    language: el.dictationLang.value.split("-")[0],
+    audioContext,
+    idleMs: REALTIME_IDLE_MS,
+    onIdle: () => {
+      if (dictation !== session) return;
+      stopDictation();
+      showRemoteStatus(t("editor.dictationIdleStopped"));
+    },
+    onEvent: (event) => {
+      if (dictation !== session) return;
+      if (session.target !== active || !dictationUsable()) {
+        stopDictation();
+        return;
+      }
+      if (event.type === "conversation.item.input_audio_transcription.delta") {
+        if (session.abandoned.has(event.item_id)) return;
+        session.items.set(event.item_id, (session.items.get(event.item_id) || "") + (event.delta || ""));
+        writeDictation("", pendingText());
+      } else if (event.type === "conversation.item.input_audio_transcription.completed") {
+        if (session.abandoned.delete(event.item_id)) return;
+        session.items.delete(event.item_id);
+        writeDictation(event.transcript || "", pendingText());
+      } else if (event.type === "error") {
+        showRemoteStatus(t("editor.dictationFailed", { message: (event.error && event.error.message) || "error" }));
+      }
+    },
+  })
+    .then((handle) => {
+      if (dictation !== session) {
+        handle.stop();
+        return;
+      }
+      session.stop = handle.stop;
+      session.commit = handle.commit;
+      showRemoteStatus(t("editor.dictationListening"));
+    })
+    .catch((err) => {
+      if (dictation === session) {
+        dictation = null;
+        updateDictationButton();
+      }
+      setToolStatus("");
+      const denied = err && (err.name === "NotAllowedError" || err.name === "SecurityError");
+      alert(denied ? t("editor.dictationDenied") : t("editor.dictationFailed", { message: err.message }));
+    });
+}
+
 function stopDictation() {
   const session = dictation;
   if (!session) return;
   dictation = null;
-  // abort(), not stop(): stop() would still deliver one last "result"
-  // after this point, into a session that's already been let go. Whatever
-  // interim text is on screen simply stays as typed.
+  // Whatever interim text is on screen simply stays as typed.
   try {
-    session.recognition.abort();
+    session.stop();
   } catch (err) {
     // already ended
   }
   updateDictationButton();
 }
+
+// For an edit made right where dictation is writing (the remote's tidy, new
+// slide, line break and math): the phrase in progress must stay where it
+// was said - the recognizer may still deliver a final version of it, and
+// that mustn't land at the new spot too - and dictation carries on at the
+// caret the edit leaves. Web Speech is simply restarted. The realtime
+// engine isn't (a new session would lose a second of speech to the
+// handshake): what's been said is committed, its pending items abandoned,
+// and the anchor moved.
+function rebaseDictation(edit) {
+  const session = dictation;
+  if (!session) {
+    edit();
+    return;
+  }
+  if (session.engine === "webspeech") {
+    stopDictation();
+    edit();
+    startDictation();
+    return;
+  }
+  session.commit();
+  for (const id of session.items.keys()) session.abandoned.add(id);
+  session.items.clear();
+  session.interim = "";
+  edit();
+  session.from = el.editor.selectionStart;
+}
+
+// Realtime dictation is billed per minute streamed: a hidden tab (another
+// app, a locked phone) stops it.
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden && dictation && dictation.engine === "realtime") stopDictation();
+});
+loadRealtimeSttConfig();
 
 function toggleDictation() {
   if (dictation) stopDictation();
@@ -2168,15 +2319,12 @@ async function tidyCurrentSlide() {
   if (!raw) return showRemoteStatus(t("remote.nothingToSlide"));
 
   // Give speech somewhere else to go first - a new paragraph below - so it
-  // keeps flowing while the model works. Dictation is restarted rather than
-  // re-anchored: the recognizer may still deliver a final version of the
-  // phrase that's now frozen in the text being rewritten, and it must not
-  // land in the new paragraph too.
-  const wasDictating = !!dictation;
-  if (wasDictating) stopDictation();
-  const opener = value.endsWith("\n\n") ? "" : value.endsWith("\n") ? "\n" : "\n\n";
-  if (opener) replaceEditorRange(value.length, value.length, opener);
-  if (wasDictating) startDictation();
+  // keeps flowing while the model works (see rebaseDictation for why the
+  // phrase in progress mustn't follow it there).
+  rebaseDictation(() => {
+    const opener = value.endsWith("\n\n") ? "" : value.endsWith("\n") ? "\n" : "\n\n";
+    if (opener) replaceEditorRange(value.length, value.length, opener);
+  });
 
   const job = (slideJob = { tidy: true });
   showRemoteStatus(t("remote.making"), { sticky: true });
@@ -2203,16 +2351,14 @@ function openNewSlide() {
   if (!presenterUsable()) return;
   const value = el.editor.value;
   if (value.trim() && stripInlineThreads(value.slice(lastSlideStart(value))).trim()) {
-    // Restarted rather than re-anchored, for the same reason as in
-    // tidyCurrentSlide: a late final result for the phrase just left
+    // Through rebaseDictation: a late final result for the phrase just left
     // behind must not also land on the new slide.
-    const wasDictating = !!dictation;
-    if (wasDictating) stopDictation();
-    // Exactly one blank line before the `---`, whatever the slide ends with
-    // (a line break from X leaves one already).
-    const gap = value.endsWith("\n\n") ? "" : value.endsWith("\n") ? "\n" : "\n\n";
-    replaceEditorRange(value.length, value.length, `${gap}---\n\n`);
-    if (wasDictating) startDictation();
+    rebaseDictation(() => {
+      // Exactly one blank line before the `---`, whatever the slide ends
+      // with (a line break from X leaves one already).
+      const gap = value.endsWith("\n\n") ? "" : value.endsWith("\n") ? "\n" : "\n\n";
+      replaceEditorRange(value.length, value.length, `${gap}---\n\n`);
+    });
   }
   presenter.slide = "last";
   sendPresenterUpdate();
@@ -2226,12 +2372,8 @@ function breakLine() {
   if (!presenterUsable()) return;
   const pos = el.editor.selectionStart;
   if (!el.editor.value.slice(0, pos).trim()) return;
-  // Restarted rather than re-anchored, for the same reason as in
-  // tidyCurrentSlide: the phrase in progress stays above the break.
-  const wasDictating = !!dictation;
-  if (wasDictating) stopDictation();
-  replaceEditorRange(pos, pos, "\n");
-  if (wasDictating) startDictation();
+  // Through rebaseDictation: the phrase in progress stays above the break.
+  rebaseDictation(() => replaceEditorRange(pos, pos, "\n"));
   showRemoteStatus(t("remote.lineBreak"));
 }
 
@@ -2250,36 +2392,34 @@ function toggleMath() {
   const pos = el.editor.selectionStart;
   const before = value.slice(0, pos);
   const inside = (before.slice(lastSlideStart(before)).match(/\$\$/g) || []).length % 2 === 1;
-  // Restarted rather than re-anchored, for the same reason as in
-  // tidyCurrentSlide: the phrase in progress stays where it was said, and
-  // dictation picks up again at the new caret.
-  const wasDictating = !!dictation;
-  if (wasDictating) stopDictation();
-  if (!inside) {
-    const lead = !before.trim() || before.endsWith("\n\n") ? "" : before.endsWith("\n") ? "\n" : "\n\n";
-    const rest = value.slice(pos);
-    const tail = rest && !rest.startsWith("\n") ? "\n\n" : "";
-    replaceEditorRange(pos, pos, `${lead}$$\n\n$$${tail}`);
-    const caret = pos + lead.length + 3;
-    el.editor.setSelectionRange(caret, caret);
-  } else {
-    const close = value.indexOf("$$", pos);
-    if (close === -1) {
-      // No closing line (it was deleted): close the formula here instead.
-      const end = value.length;
-      replaceEditorRange(end, end, `${value.endsWith("\n") ? "" : "\n"}$$\n\n`);
+  // Through rebaseDictation: the phrase in progress stays where it was
+  // said, and dictation picks up again at the new caret.
+  rebaseDictation(() => {
+    if (!inside) {
+      const lead = !before.trim() || before.endsWith("\n\n") ? "" : before.endsWith("\n") ? "\n" : "\n\n";
+      const rest = value.slice(pos);
+      const tail = rest && !rest.startsWith("\n") ? "\n\n" : "";
+      replaceEditorRange(pos, pos, `${lead}$$\n\n$$${tail}`);
+      const caret = pos + lead.length + 3;
+      el.editor.setSelectionRange(caret, caret);
     } else {
-      const afterClose = close + 2;
-      const next = value.slice(afterClose, afterClose + 2);
-      const gap = next === "\n\n" ? "" : next.startsWith("\n") ? "\n" : "\n\n";
-      if (gap) replaceEditorRange(afterClose, afterClose, gap);
+      const close = value.indexOf("$$", pos);
+      if (close === -1) {
+        // No closing line (it was deleted): close the formula here instead.
+        const end = value.length;
+        replaceEditorRange(end, end, `${value.endsWith("\n") ? "" : "\n"}$$\n\n`);
+      } else {
+        const afterClose = close + 2;
+        const next = value.slice(afterClose, afterClose + 2);
+        const gap = next === "\n\n" ? "" : next.startsWith("\n") ? "\n" : "\n\n";
+        if (gap) replaceEditorRange(afterClose, afterClose, gap);
+      }
+      const caretAt = el.editor.value.indexOf("$$", pos) + 2;
+      let caret = caretAt;
+      while (el.editor.value[caret] === "\n" && caret < caretAt + 2) caret += 1;
+      el.editor.setSelectionRange(caret, caret);
     }
-    const caretAt = el.editor.value.indexOf("$$", pos) + 2;
-    let caret = caretAt;
-    while (el.editor.value[caret] === "\n" && caret < caretAt + 2) caret += 1;
-    el.editor.setSelectionRange(caret, caret);
-  }
-  if (wasDictating) startDictation();
+  });
   showRemoteStatus(t(inside ? "remote.mathClose" : "remote.mathOpen"));
 }
 
