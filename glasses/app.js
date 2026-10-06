@@ -10,7 +10,8 @@
 // 401 handling would bounce this page to a /login it has no way to complete
 // (no keyboard). Bare AsciiMath/LaTeX still renders fine without it; only a
 // project's custom symbol table would be missing.
-import { renderMarkdown } from "/static/js/markdown.js";
+import { renderMarkdown, detectMathDirective } from "/static/js/markdown.js";
+import { splitSlides } from "/static/js/slides.js";
 
 const filenameEl = document.getElementById("filename");
 const statusEl = document.getElementById("status");
@@ -56,18 +57,74 @@ function isNearBottom() {
   return contentEl.scrollHeight - contentEl.scrollTop - contentEl.clientHeight <= NEAR_BOTTOM_PX;
 }
 
+// ---------- slide view ----------
+// One slide at a time, the same split the public slideshow uses (see
+// slides.js), whenever the document is published as a slideshow
+// (message.slides) - the same switch that puts the public page in slide
+// view. While the owner presents with the gamepad remote, its position
+// (message.slide) is followed exactly the way
+// public.js's followPresenter does - applied only when it changes, or for
+// "last" when a new slide appears - so the dpad's own left/right stepping
+// isn't undone by every keystroke on the owner's side.
+let lastMessage = null;
+let slideIndex = 0;
+let slideCount = 0;
+let presenterSlide;
+let presenterSlideCount = 0;
+
+function slideMode(message) {
+  return !!message && !!message.slides;
+}
+
+function renderSlides(message, isNewDocument) {
+  const presenting = message.slide !== undefined && message.slide !== null;
+  const slides = splitSlides(message.content || "", { keepEmptyLast: presenting });
+  slideCount = slides.length;
+  // Rendered one slide at a time, so the document's own math directive
+  // has to be resolved from the whole text first (only the first slide
+  // carries it) - same as public.js.
+  const dialect = detectMathDirective(message.content || "") || message.dialect || "latex";
+  const previousIndex = slideIndex;
+  if (isNewDocument) {
+    slideIndex = 0;
+    presenterSlide = undefined;
+  }
+  if (presenting) {
+    const changed = message.slide !== presenterSlide || (message.slide === "last" && slideCount !== presenterSlideCount);
+    presenterSlide = message.slide;
+    presenterSlideCount = slideCount;
+    if (changed) slideIndex = message.slide === "last" ? slideCount - 1 : message.slide;
+  }
+  slideIndex = Math.max(0, Math.min(slideIndex, slideCount - 1));
+  filenameEl.textContent = `${message.filename} · ${slideIndex + 1}/${slideCount}`;
+  const source = slides[slideIndex];
+  contentEl.innerHTML = source.trim() ? renderMarkdown(source, dialect) : '<p class="hint">(empty slide)</p>';
+  if (isNewDocument || slideIndex !== previousIndex) {
+    followBottom = true;
+    contentEl.scrollTop = 0;
+  } else if (followBottom) {
+    contentEl.scrollTop = contentEl.scrollHeight;
+  }
+}
+
 function render(message) {
+  lastMessage = message;
   if (!message || !message.filename) {
     renderIdle("No document open in mark-vector.");
     return;
   }
-  filenameEl.textContent = message.filename;
 
   // The live target switched to a different document entirely (not just
   // grown) - start over from its top, and follow-mode re-engages
   // regardless of where a previous document had been scrolled to.
   const isNewDocument = message.filename !== lastFilename;
   lastFilename = message.filename;
+
+  if (slideMode(message)) {
+    renderSlides(message, isNewDocument);
+    return;
+  }
+  filenameEl.textContent = message.filename;
 
   contentEl.innerHTML = (message.content || "").trim()
     ? renderMarkdown(message.content, message.dialect || "latex")
@@ -148,12 +205,20 @@ renderIdle(channel ? "Waiting for that document to go live…" : "Waiting for a 
 connect();
 
 // The one interaction this screen supports: the Neural Band / touch strip's
-// dpad emits ArrowUp/ArrowDown key events (see the Build guide) - there's no
-// focusable element to move between, so they scroll the content pane
-// instead, standing in for the page-level scroll this fixed viewport can't
-// have.
+// dpad emits arrow key events (see the Build guide) - there's no focusable
+// element to move between, so up/down scroll the content pane instead,
+// standing in for the page-level scroll this fixed viewport can't have, and
+// in slide view left/right step between slides.
 const SCROLL_STEP = 140;
 document.addEventListener("keydown", (event) => {
+  if ((event.key === "ArrowLeft" || event.key === "ArrowRight") && slideMode(lastMessage)) {
+    event.preventDefault();
+    const next = slideIndex + (event.key === "ArrowRight" ? 1 : -1);
+    if (next < 0 || next >= slideCount) return;
+    slideIndex = next;
+    renderSlides(lastMessage, false);
+    return;
+  }
   if (event.key === "ArrowDown") {
     contentEl.scrollTop += SCROLL_STEP;
   } else if (event.key === "ArrowUp") {

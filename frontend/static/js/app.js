@@ -963,6 +963,10 @@ function currentLiveState() {
         // storage.resolve_published's own stripping.
         content: stripInlineThreads(el.editor.value),
         dialect: sessionMathDialect(active.projectId, active.sessionId),
+        // The document's own "view as slideshow" publish option - the
+        // glasses screen shows slides when it's on (public pages already
+        // know it from the share link itself).
+        slides: !!active.publishSlides,
         // The presenter remote's slide (see the presenter section) - left
         // out entirely until the remote has been used, so a plain Live
         // session never moves anyone's slideshow.
@@ -1961,9 +1965,12 @@ function spliceKeepingCaret(from, to, text) {
   renderPreview();
 }
 
+// The presenter's position rides along in live updates, so both live
+// targets - the public page and the glasses screen - follow it.
 function sendPresenterUpdate() {
   if (el.livePublicCheckbox.checked) livePublicSocket.send(false);
-  else showRemoteStatus(t("remote.liveOff"));
+  if (el.glassesCheckbox.checked) glassesSocket.send(false);
+  if (!el.livePublicCheckbox.checked && !el.glassesCheckbox.checked) showRemoteStatus(t("remote.liveOff"));
 }
 
 // Tidying is something the audience waits on, so it runs at the selected
@@ -4365,6 +4372,8 @@ async function setPublishSlides(slides) {
     return;
   }
   target.publishSlides = slides;
+  // The glasses screen switches between document and slide view on this.
+  if (active === target && el.glassesCheckbox.checked) glassesSocket.send(true);
   const project = projects.get(projectId);
   const session = project && project.sessions && project.sessions.get(sessionId);
   const doc = session && session.documents && session.documents.find((d) => d.filename === filename);
