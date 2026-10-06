@@ -2383,16 +2383,20 @@ function caretToDeckEndUnlessDictating() {
   el.editor.setSelectionRange(value.length, value.length);
 }
 
-// X: one line break where dictation is writing, so the next thing said
-// starts on the next line - inside a math block that's the formula's next
-// line; in text, two presses make a paragraph break.
+// X: a line break where dictation is writing, so the next thing said starts
+// on the next line - inside a math block a single newline, the formula's
+// next line; in text a blank line, so the break shows on the slide too
+// (Markdown joins single-newline lines into one paragraph).
 function breakLine() {
   if (!presenterUsable()) return;
   caretToDeckEndUnlessDictating();
   const pos = el.editor.selectionStart;
-  if (!el.editor.value.slice(0, pos).trim()) return;
+  const before = el.editor.value.slice(0, pos);
+  if (!before.trim()) return;
+  const inMath = (before.slice(lastSlideStart(before)).match(/\$\$/g) || []).length % 2 === 1;
+  const insert = inMath ? "\n" : before.endsWith("\n\n") ? "" : before.endsWith("\n") ? "\n" : "\n\n";
   // Through rebaseDictation: the phrase in progress stays above the break.
-  rebaseDictation(() => replaceEditorRange(pos, pos, "\n"));
+  if (insert) rebaseDictation(() => replaceEditorRange(pos, pos, insert));
   showRemoteStatus(t("remote.lineBreak"));
 }
 
