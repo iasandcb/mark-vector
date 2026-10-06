@@ -1939,13 +1939,19 @@ function toggleDictation() {
   else startDictation();
 }
 
-// A command from a live screen (see createLiveSocket's onCommand). Only
-// acted on for the document it was sent about - a screen still showing the
-// previous document mustn't add a slide to the one opened since.
+// A command from a live screen (see createLiveSocket's onCommand) - the
+// glasses' D-pad standing in for the gamepad remote: "newSlide" (next past
+// the last slide) is the remote's new-slide button, "tidySlide" (select) its
+// tidy button. Only acted on for the document it was sent about - a screen
+// still showing the previous document mustn't change the one opened since.
 function handleScreenCommand(message) {
-  if (message.action !== "newSlide" || !active || message.filename !== active.filename) return;
-  if (presenter.slide === null) presenter.slide = "last";
-  openNewSlide();
+  if (!active || message.filename !== active.filename) return;
+  if (message.action === "newSlide") {
+    if (presenter.slide === null) presenter.slide = "last";
+    openNewSlide();
+  } else if (message.action === "tidySlide") {
+    tidyCurrentSlide();
+  }
 }
 
 // ---------- new version deployed ----------
@@ -2111,26 +2117,36 @@ async function streamSlideOver(old, locate, raw, context) {
   let shown = "";
   const stillThere = () => pos !== null && el.editor.value.slice(pos, pos + shown.length) === shown;
   try {
-    const slide = await generateSlide(raw, context, (delta) => {
+    let pending = ""; // leading whitespace held back until real text comes
+    const slide = await generateSlide(raw, context, (piece) => {
+      let delta = piece;
       if (pos === null) {
+        pending += piece;
+        if (!pending.trim()) return;
+        delta = pending;
+        // The old text and the first words swap in one edit: an empty
+        // slide in between would drop out of every slideshow's count for
+        // that instant (see slides.js), and a viewer on it would be
+        // clamped back onto the slide before - and stay there.
         const at = locate();
         if (at === -1) throw new Error(t("remote.lostTranscript"));
-        spliceKeepingCaret(at, at + old.length, lead + trail);
+        spliceKeepingCaret(at, at + old.length, lead + delta + trail);
         pos = at + lead.length;
       } else if (!stillThere()) {
         throw new Error(t("remote.lostTranscript"));
+      } else {
+        spliceKeepingCaret(pos + shown.length, pos + shown.length, delta);
       }
-      spliceKeepingCaret(pos + shown.length, pos + shown.length, delta);
       shown += delta;
     });
     if (pos === null) {
+      // Nothing streamed (a provider that only delivers the final text).
       const at = locate();
       if (at === -1) throw new Error(t("remote.lostTranscript"));
-      spliceKeepingCaret(at, at + old.length, lead + trail);
-      pos = at + lead.length;
-    } else if (!stillThere()) {
-      throw new Error(t("remote.lostTranscript"));
+      spliceKeepingCaret(at, at + old.length, lead + slide + trail);
+      return lead + slide + trail;
     }
+    if (!stillThere()) throw new Error(t("remote.lostTranscript"));
     spliceKeepingCaret(pos, pos + shown.length, slide);
     return lead + slide + trail;
   } catch (err) {

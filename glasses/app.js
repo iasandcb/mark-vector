@@ -200,9 +200,16 @@ function connect() {
   socket.addEventListener("error", () => socket.close());
 }
 
+// Commands back to the editor (see app.js's handleScreenCommand): returns
+// whether one was actually sent.
+function sendCommand(action) {
+  if (!socket || socket.readyState !== WebSocket.OPEN || !lastMessage || !lastMessage.filename) return false;
+  socket.send(JSON.stringify({ type: "command", action, filename: lastMessage.filename }));
+  return true;
+}
+
 function requestNewSlide() {
-  if (!socket || socket.readyState !== WebSocket.OPEN || !lastMessage || !lastMessage.filename) return;
-  socket.send(JSON.stringify({ type: "command", action: "newSlide", filename: lastMessage.filename }));
+  sendCommand("newSlide");
 }
 
 // A deploy changes this page's own code too, and nobody can press reload
@@ -274,6 +281,15 @@ document.addEventListener("keydown", (event) => {
     if (next < 0) return;
     slideIndex = next;
     renderSlides(lastMessage, false);
+    return;
+  }
+  // Select (a Neural Band pinch / touchpad tap arrives as Enter) tidies the
+  // slide being built - the gamepad remote's tidy button. The tidied slide
+  // streams back in as ordinary live updates; until the first of them
+  // arrives the header says it's on its way.
+  if (event.key === "Enter" && slideMode(lastMessage)) {
+    event.preventDefault();
+    if (sendCommand("tidySlide")) filenameEl.textContent += " · ✨";
     return;
   }
   if (event.key === "ArrowDown") {
