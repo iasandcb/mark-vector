@@ -1560,15 +1560,13 @@ function updateSendToolbarVisibility() {
 function updateEditorToolbarVisibility() {
   const visible = [...el.editorToolbar.children].some((child) => !child.hidden);
   el.editorToolbar.hidden = !visible;
-  // Nothing in the row means nothing to open, so the phone-only ⚙ goes with
+  // Nothing in the row means nothing to open, so the ⚙ goes with
   // it rather than opening an empty strip.
   el.toolbarToggleBtn.hidden = !visible;
 }
 
-// Phone-only in effect: the .open class only means anything inside the
-// 700px media query (see .editor-toolbar:not(.open) in style.css), so on a
-// wider screen this button isn't rendered and the row is always open.
-// Deliberately not persisted - "collapsed" is the point of the default, and
+// The row is folded behind this ⚙ at every width (see
+// .editor-toolbar:not(.open) in style.css). Deliberately not persisted - "collapsed" is the point of the default, and
 // the class survives switching documents within a session anyway.
 function toggleEditorToolbar() {
   const open = el.editorToolbar.classList.toggle("open");

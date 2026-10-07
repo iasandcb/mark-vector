@@ -880,46 +880,17 @@ body.row-dragging {
   50% { transform: scale(1.18); }
 }
 
-/* The ⚙ that opens the toolbar row is phone-only: on a wider screen that
-   row is always open, so a control for it would just be a button that does
-   nothing visible. */
-.toolbar-toggle {
+/* The toolbar row (format/provider/model/reasoning/context, Live/Slides)
+   is folded behind the ⚙ at every width, so the editor header stays one
+   line on a desktop too. Collapsed until the ⚙ adds .open (see
+   toggleEditorToolbar in app.js). [hidden] still wins over both states -
+   it's !important at the top of this file - so a row with nothing worth
+   showing stays gone either way. */
+.editor-toolbar:not(.open) {
   display: none;
 }
 
-@media (max-width: 700px) {
-  .toolbar-toggle {
-    display: inline-block;
-  }
-  /* Collapsed until the ⚙ adds .open (see toggleEditorToolbar in app.js).
-     [hidden] still wins over both states - it's !important at the top of
-     this file - so a row with nothing worth showing stays gone either way. */
-  .editor-toolbar:not(.open) {
-    display: none;
-  }
-}
 
-/* The phone rules above key off the *window*, which is exactly wrong for
-   split view: opening it halves the editor pane's own width while the
-   window itself stays as wide as ever, so a viewport media query never
-   fires and the six-plus buttons in .editor-actions (and the format/model/
-   reasoning/context row below them) just wrap or overflow instead. A
-   container query keys off the pane's own rendered width instead, so the
-   exact same collapse - the toolbar row folded behind ⚙ -
-   also kicks in whenever *this* pane is narrow, split view or not, at any
-   window width. */
-.editor-pane {
-  container: editor-pane / inline-size;
-}
-
-@container editor-pane (max-width: 520px) {
-  .toolbar-toggle {
-    display: inline-block;
-  }
-  .editor-toolbar:not(.open) {
-    display: none;
-  }
-}
 
 /* ---------- middle: editor / right: preview ---------- */
 
