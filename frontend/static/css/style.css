@@ -828,22 +828,16 @@ body.row-dragging {
   border-color: var(--accent);
 }
 
-/* Editor-header buttons carry an icon and a word (see index.html); the word
-   is what gets dropped on a phone, where four worded buttons don't fit the
-   header row. Both spans sit inside the button, so nothing about the
-   button's own sizing/disabled handling changes with the viewport. */
-.btn-icon {
-  margin-right: 5px;
+/* Editor-header buttons carry an icon and a word (see index.html), but only
+   the icon is shown, at every width - worded, the row wrapped onto a second
+   line even on a desktop. The word stays in the markup (and each button's
+   title says it on hover), and the publish/dictation labels are still kept
+   current by app.js. */
+.editor-actions .btn-label {
+  display: none;
 }
-
-@media (max-width: 700px) {
-  .editor-actions .btn-label {
-    display: none;
-  }
-  .editor-actions .btn-icon {
-    margin-right: 0;
-    font-size: 17px;
-  }
+.editor-actions .btn-icon {
+  font-size: 17px;
 }
 
 /* Dictation: the 🎤 button and its language select read as one joined
@@ -911,7 +905,7 @@ body.row-dragging {
    fires and the six-plus buttons in .editor-actions (and the format/model/
    reasoning/context row below them) just wrap or overflow instead. A
    container query keys off the pane's own rendered width instead, so the
-   exact same collapse - icon-only buttons, the toolbar row folded behind ⚙ -
+   exact same collapse - the toolbar row folded behind ⚙ -
    also kicks in whenever *this* pane is narrow, split view or not, at any
    window width. */
 .editor-pane {
@@ -919,13 +913,6 @@ body.row-dragging {
 }
 
 @container editor-pane (max-width: 520px) {
-  .editor-actions .btn-label {
-    display: none;
-  }
-  .editor-actions .btn-icon {
-    margin-right: 0;
-    font-size: 17px;
-  }
   .toolbar-toggle {
     display: inline-block;
   }
