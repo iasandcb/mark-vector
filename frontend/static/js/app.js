@@ -13,6 +13,7 @@ import { openTranscribeDialog } from "./transcribe.js";
 import { createGamepadRemote } from "./remote.js";
 import { splitSlides, lastSlideStart } from "./slides.js";
 import { startRealtimeTranscription } from "./realtime-stt.js";
+import { spokenMathToAsciiMath } from "./kor-math.js";
 
 // Inline-thread markers. Declared up here, away from the rest of the
 // inline-thread code further down, because `el` below builds the editor,
@@ -1890,9 +1891,34 @@ function reanchorDictation() {
   d.interim = "";
 }
 
+// Inside a $$ block, dictation is a formula: spoken Korean math becomes
+// AsciiMath (see kor-math.js). AsciiMath only renders as such in a document
+// whose math is AsciiMath, so a document that would read it as LaTeX gets
+// the directive added at the top - as long as nothing else in it is math
+// yet. One that already holds LaTeX math (or says so explicitly) gets plain
+// dictation instead. Returns whether this position takes a formula.
+const ASCIIMATH_DIRECTIVE = "<!-- math: asciimath -->\n\n";
+
+function prepareMathDictation(pos) {
+  const value = el.editor.value;
+  const before = value.slice(0, pos);
+  if ((before.slice(lastSlideStart(before)).match(/\$\$/g) || []).length % 2 === 0) return false;
+  if (currentDocumentFormat() !== "latex") return true;
+  if (detectMathDirective(value)) return false;
+  const close = value.indexOf("$$", pos);
+  const elsewhere = value.slice(0, before.lastIndexOf("$$")) + (close === -1 ? "" : value.slice(close + 2));
+  if (/\$|\\\(|\\\[/.test(elsewhere)) return false;
+  spliceKeepingCaret(0, 0, ASCIIMATH_DIRECTIVE);
+  return true;
+}
+
 function writeDictation(finalText, interimText) {
   const d = dictation;
   reanchorDictation();
+  if (prepareMathDictation(d.from)) {
+    finalText = spokenMathToAsciiMath(finalText);
+    interimText = spokenMathToAsciiMath(interimText);
+  }
   const end = d.from + d.interim.length;
   let insert = "";
   if (finalText) insert += dictationSeparator(d.from) + finalText.trim();
