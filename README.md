@@ -46,6 +46,7 @@ mark-vector/
   data/
     system.md             # 공통 시스템 프롬프트 (런타임 생성, git에는 커밋되지 않음)
     custom-symbols.csv    # 공용 커스텀 심볼 (런타임 생성, 기본값은 빈 파일, git에는 커밋되지 않음)
+    spoken-math.csv       # 공용 수식 말 (처음 읽을 때 backend/app/spoken_math_default.csv로 생성, git에는 커밋되지 않음)
     conversations/        # 대화별 폴더 (런타임 생성, git에는 커밋되지 않음)
 ```
 
@@ -147,7 +148,11 @@ uv run python -m app.chatgpt_auth status  # 확인 / logout: 세션 해지
 
 ### 수식 받아쓰기
 
-받아쓰는 위치가 `$$` 수식 블록 안이면(리모컨 Y, 안경 ↑로 엶) 말한 내용을 AsciiMath로 바꿔 씁니다(`frontend/static/js/kor-math.js`). 어휘는 [obsidian-publish-asciimath의 kor-math.js](https://github.com/iasandcb/obsidian-publish-asciimath/blob/main/kor-math.js)를 따르고, 소리 내어 말하기 좋은 괄호 말을 더했습니다.
+받아쓰는 위치가 `$$` 수식 블록 안이면(리모컨 Y, 안경 ↑로 엶) 말한 내용을 AsciiMath로 바꿔 씁니다(`frontend/static/js/kor-math.js`).
+
+바꾸는 규칙은 왼쪽 트리 맨 위의 **공용 수식 말**(`S` 배지) 문서 하나에 모두 있습니다. 실제로는 `data/spoken-math.csv`이고, 처음 열 때 기본 어휘(`backend/app/spoken_math_default.csv`)로 채워진 뒤로는 이 파일만 씁니다. 한 줄에 `말, 기호` 하나씩(첫 쉼표 앞이 말, 뒤가 기호라서 `과, ,`처럼 기호가 쉼표여도 됨), `#`로 시작하는 줄은 주석, 같은 말이 여러 번 있으면 아래쪽이 이깁니다. 저장하면 바로 다음 받아쓰기부터 적용되고, 다른 브라우저에서도 받아쓰기를 시작할 때 새로 읽어 옵니다.
+
+기본 어휘는 [obsidian-publish-asciimath의 kor-math.js](https://github.com/iasandcb/obsidian-publish-asciimath/blob/main/kor-math.js)를 옮겨 온 것에, 소리 내어 말하기 좋은 괄호 말을 더했습니다.
 
 | 말 | 기호 |
 |---|---|

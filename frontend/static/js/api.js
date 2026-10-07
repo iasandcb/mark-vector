@@ -225,6 +225,18 @@ export function saveCustomSymbols(content) {
   }).then(asJson);
 }
 
+export function getSpokenMath() {
+  return fetch(`${BASE}/spoken-math`).then(asJson);
+}
+
+export function saveSpokenMath(content) {
+  return fetch(`${BASE}/spoken-math`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content }),
+  }).then(asJson);
+}
+
 // On-demand whole-document LaTeX -> AsciiMath2 conversion for the format
 // radio in the editor toolbar - not tied to sending a message. The reverse
 // direction (AsciiMath2 -> LaTeX) is done client-side; see asciimath-markdown's

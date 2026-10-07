@@ -15,6 +15,7 @@ from .routers import (
     projects,
     providers,
     public,
+    spoken_math,
     stt,
     system_prompt,
     transcribe,
@@ -37,6 +38,7 @@ app.include_router(conversations.router)
 app.include_router(providers.router)
 app.include_router(system_prompt.router)
 app.include_router(custom_symbols.router)
+app.include_router(spoken_math.router)
 app.include_router(convert.router)
 app.include_router(hermes.router)
 app.include_router(public.router)

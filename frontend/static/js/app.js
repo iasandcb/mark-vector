@@ -13,7 +13,7 @@ import { openTranscribeDialog } from "./transcribe.js";
 import { createGamepadRemote } from "./remote.js";
 import { splitSlides, lastSlideStart } from "./slides.js";
 import { startRealtimeTranscription } from "./realtime-stt.js";
-import { spokenMathToAsciiMath } from "./kor-math.js";
+import { spokenMathToAsciiMath, parseSpokenMathCsv, setSpokenMathVocabulary } from "./kor-math.js";
 
 // Inline-thread markers. Declared up here, away from the rest of the
 // inline-thread code further down, because `el` below builds the editor,
@@ -44,6 +44,7 @@ const el = {
   authInfo: document.getElementById("auth-info"),
   langSelectSlot: document.getElementById("lang-select-slot"),
   globalCustomSymbolsRow: document.getElementById("global-custom-symbols-row"),
+  globalSpokenMathRow: document.getElementById("global-spoken-math-row"),
   sessionTree: document.getElementById("session-tree"),
   newProjectBtn: document.getElementById("new-project-btn"),
   providerSelect: document.getElementById("provider-select"),
@@ -284,7 +285,8 @@ function roleTitle(role) {
 const DEFAULT_PROVIDER_ID = "chatgpt";
 // "system"/"project-system" = per-session/per-project system.md,
 // "global-system" = the app-wide prompt at the very top, "global-custom-
-// symbols" = the app-wide custom-symbols.csv right below it, "hermes-
+// symbols" = the app-wide custom-symbols.csv right below it, "global-
+// spoken-math" = the app-wide spoken-math.csv below that, "hermes-
 // session" = a read-only transcript pulled from the local Hermes agent
 // gateway (see selectHermesSession below). None of these is a conversation
 // turn mark-vector itself owns, so none can be sent to the LLM directly.
@@ -293,6 +295,7 @@ const NON_SENDABLE_ROLES = new Set([
   "project-system",
   "global-system",
   "global-custom-symbols",
+  "global-spoken-math",
   "hermes-session",
 ]);
 
@@ -356,6 +359,7 @@ function activeDocRef() {
   if (!active) return null;
   if (active.role === "global-system") return { role: "global-system" };
   if (active.role === "global-custom-symbols") return { role: "global-custom-symbols" };
+  if (active.role === "global-spoken-math") return { role: "global-spoken-math" };
   if (active.role === "project-system") return { role: "project-system", projectId: active.projectId };
   if (active.role === "hermes-session") {
     return { role: "hermes-session", hermesSessionId: active.hermesSessionId, hermesTitle: active.filename };
@@ -456,6 +460,8 @@ async function restoreActiveDocument(ref) {
       await selectGlobalPrompt();
     } else if (ref.role === "global-custom-symbols") {
       await selectGlobalCustomSymbols();
+    } else if (ref.role === "global-spoken-math") {
+      await selectGlobalSpokenMath();
     } else if (ref.role === "project-system") {
       if (!projects.has(ref.projectId)) return;
       await selectProjectSystemPrompt(ref.projectId);
@@ -1487,7 +1493,7 @@ function currentDocumentFormat() {
 // as "hermes-session", a read-only transcript that isn't mark-vector's to
 // convert either).
 function updateFormatToolbar() {
-  const noFormat = !active || active.role === "hermes-session" || active.role === "global-custom-symbols";
+  const noFormat = !active || active.role === "hermes-session" || active.role === "global-custom-symbols" || active.role === "global-spoken-math";
   el.formatSelect.hidden = noFormat;
   updateEditorToolbarVisibility();
   if (noFormat) return;
@@ -1943,6 +1949,9 @@ function writeDictation(finalText, interimText) {
 
 function startDictation() {
   if (dictation || !dictationUsable() || !dictationSupported()) return;
+  // Picks up math vocabulary saved from another browser since this page
+  // loaded - in the background, the first phrase won't wait for it.
+  api.getSpokenMath().then(({ content }) => setSpokenMathVocabulary(parseSpokenMathCsv(content))).catch(() => {});
   if (useRealtimeDictation()) startRealtimeDictation();
   else startWebSpeechDictation();
 }
@@ -3059,6 +3068,7 @@ function renderTree() {
   }
   el.globalSystemRow.classList.toggle("active", !!active && active.role === "global-system");
   el.globalCustomSymbolsRow.classList.toggle("active", !!active && active.role === "global-custom-symbols");
+  el.globalSpokenMathRow.classList.toggle("active", !!active && active.role === "global-spoken-math");
   renderHermesList();
 }
 
@@ -4519,6 +4529,34 @@ async function renameDocument(projectId, sessionId, filename) {
   }
 }
 
+// "공용 수식 말" - the vocabulary math dictation uses (see kor-math.js), the
+// same kind of always-on, app-wide CSV document as the custom symbols.
+async function selectGlobalSpokenMath() {
+  if (streaming) return;
+  if (isDirty() && !confirm(t("confirm.unsavedChanges"))) return;
+
+  const { content } = await api.getSpokenMath();
+  setSpokenMathVocabulary(parseSpokenMathCsv(content));
+  active = {
+    projectId: null,
+    sessionId: null,
+    filename: t("doc.globalSpokenMathFilename"),
+    role: "global-spoken-math",
+    savedContent: content,
+  };
+  saveActiveDocRef();
+  el.editor.value = content;
+  maybeRestoreAutosave();
+  el.editor.disabled = false;
+  el.saveBtn.disabled = false;
+  updateSendToolbarVisibility();
+  updateFormatToolbar();
+  updateSendAvailability();
+  updateFilenameLabel();
+  renderPreview();
+  renderTree();
+}
+
 async function saveActive() {
   // The save button is disabled for a Hermes transcript, but Ctrl+S doesn't
   // check that - there's no mark-vector document to save it to.
@@ -4533,6 +4571,10 @@ async function saveActive() {
     // Takes effect immediately for every document's preview, not just on
     // the next reload - see asciimath-markdown's setCustomAsciiMathSymbols.
     setCustomAsciiMathSymbols(parseCustomSymbolsCsv(content));
+  } else if (active.role === "global-spoken-math") {
+    await api.saveSpokenMath(content);
+    // The next phrase dictated already uses it.
+    setSpokenMathVocabulary(parseSpokenMathCsv(content));
   } else if (active.role === "project-system") {
     await api.saveProjectSystemPrompt(active.projectId, content);
     const project = projects.get(active.projectId);
@@ -5639,6 +5681,7 @@ async function createSubfolder(projectId, parentId) {
 el.newProjectBtn.addEventListener("click", createProject);
 el.globalSystemRow.addEventListener("click", selectGlobalPrompt);
 el.globalCustomSymbolsRow.addEventListener("click", selectGlobalCustomSymbols);
+el.globalSpokenMathRow.addEventListener("click", selectGlobalSpokenMath);
 el.hermesHeader.addEventListener("click", toggleHermesSection);
 el.mobileTabs.addEventListener("click", (e) => {
   const btn = e.target.closest(".mobile-tab");
@@ -6102,6 +6145,7 @@ async function loadAuthInfo() {
   globalSystemPromptContent = (await api.getGlobalSystemPrompt()).content;
   globalCustomSymbolsContent = (await api.getCustomSymbols()).content;
   setCustomAsciiMathSymbols(parseCustomSymbolsCsv(globalCustomSymbolsContent));
+  setSpokenMathVocabulary(parseSpokenMathCsv((await api.getSpokenMath()).content));
   clearEditor();
   await restoreActiveDocument(urlDocRef || savedDocRef);
   await restoreActiveDocumentB(savedDocRefB);

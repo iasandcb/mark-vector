@@ -1058,3 +1058,14 @@ class TestDocumentVersion:
         import pytest as _pytest
         with _pytest.raises(FileNotFoundError):
             storage.poll_document(pid, cid, "nope.md")
+
+
+def test_spoken_math_is_seeded_once_then_edited_in_place(isolated_data_dir):
+    seeded = storage.get_global_spoken_math()
+    assert "집합 열고, {" in seeded
+    assert "엑스, x" in seeded
+    assert (isolated_data_dir / storage.SPOKEN_MATH_FILENAME).read_text(encoding="utf-8") == seeded
+
+    storage.save_global_spoken_math("제곱, ^2\n")
+    # The saved copy is the vocabulary from now on - never re-seeded.
+    assert storage.get_global_spoken_math() == "제곱, ^2\n"

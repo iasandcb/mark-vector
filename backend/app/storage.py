@@ -9,6 +9,10 @@ from .config import settings
 
 SYSTEM_FILENAME = "system.md"
 CUSTOM_SYMBOLS_FILENAME = "custom-symbols.csv"
+SPOKEN_MATH_FILENAME = "spoken-math.csv"
+# The vocabulary a fresh install starts with - copied into DATA_DIR the
+# first time it's read, and from then on only that copy is used and edited.
+SPOKEN_MATH_SEED = Path(__file__).with_name("spoken_math_default.csv")
 
 # A user message is almost always short; the reply is often long. Keeping
 # them as two separate tree entries per exchange was mostly clutter, so each
@@ -112,6 +116,34 @@ def get_global_custom_symbols() -> str:
 
 def save_global_custom_symbols(content: str) -> dict:
     path = _global_custom_symbols_path()
+    path.write_text(content, encoding="utf-8")
+    return {"content": content, "updated_at": _now()}
+
+
+# ---------- global spoken-math vocabulary ----------
+#
+# "공용 수식 말": the rules dictation uses inside a $$ block to turn spoken
+# Korean math into AsciiMath (see frontend/static/js/kor-math.js for the
+# format and matching). One file holds the whole vocabulary - the defaults
+# it was seeded with and every later edit alike - so there's no separate
+# built-in table to drift from it.
+
+
+def _global_spoken_math_path() -> Path:
+    path = Path(settings.data_dir)
+    path.mkdir(parents=True, exist_ok=True)
+    return path / SPOKEN_MATH_FILENAME
+
+
+def get_global_spoken_math() -> str:
+    path = _global_spoken_math_path()
+    if not path.exists():
+        shutil.copyfile(SPOKEN_MATH_SEED, path)
+    return path.read_text(encoding="utf-8")
+
+
+def save_global_spoken_math(content: str) -> dict:
+    path = _global_spoken_math_path()
     path.write_text(content, encoding="utf-8")
     return {"content": content, "updated_at": _now()}
 

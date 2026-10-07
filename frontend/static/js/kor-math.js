@@ -1,277 +1,36 @@
 // Spoken Korean math -> AsciiMath, for dictation inside a $$ block (see
 // writeDictation in app.js). Pure string work, no DOM.
 //
-// The vocabulary is kor-math.js from iasandcb/obsidian-publish-asciimath,
-// with two fixes: "피" was listed twice there (p, then phi - the later one
-// won), so it is phi here as it effectively was; and "집폐" (set close) was
-// "{" by mistake, it is "}" here. Spaces inside a key ("에 대해") don't
+// The vocabulary isn't built in: it's the "공용 수식 말" CSV (one shared
+// file, data/spoken-math.csv - seeded from backend/app/spoken_math_default.csv
+// and edited in the app from then on), loaded with setSpokenMathVocabulary.
+// One rule per line, "word, symbol": the word is everything before the
+// first comma and the symbol everything after it, so a symbol may itself be
+// a comma ("과, ,"). Lines starting with "#" are comments; a later line
+// wins over an earlier one for the same word. Spaces inside a word don't
 // matter - matching ignores spaces between Korean syllables, since
 // recognizers space Korean inconsistently ("빅 에이" and "빅에이" alike).
-const BASE = {
-  프라임: "'",
-  더블프라임: "''",
-  은개: "{:",
-  은폐: ":}",
-  겸: "^^",
-  정규부분군: "<=_N",
-  이상부분환: "<=_I",
-  부분구조: "<=",
-  부분가군: "<=",
-  부분군: "<=",
-  부분환: "<=",
-  핵: "ker",
-  상: "im",
-  공집합: "O/",
-  자연수: "NN",
-  정수: "ZZ",
-  유리수: "QQ",
-  실수: "RR",
-  복소수: "CC",
-  속함: "in",
-  소속: "in",
-  비소속: "!in",
-  포함: "sube",
-  진포함: "sub",
-  정의는: ":=",
-  는: "=",
-  은: "=",
-  총합집합: "uuu",
-  합집합: "uu",
-  총교집합: "nnn",
-  교집합: "nn",
-  차집합: "\\",
-  등등: "cdots",
-  종등등: "vdots",
-  모든: "AA",
-  어떤: "EE",
-  유일한: "!",
-  집개: "{",
-  집폐: "}",
-  집합끝: "}",
-  중개: "{",
-  중폐: "}",
-  중시작: "{",
-  중끝: "}",
-  행렬개: "[",
-  행렬폐: "]",
-  대개: "[",
-  대폐: "]",
-  대시작: "[",
-  대끝: "]",
-  각개: "(:",
-  각폐: ":)",
-  각시작: "(:",
-  각끝: ":)",
-  과: ",",
-  와: ",",
-  에이: "a",
-  빅에이: "A",
-  비: "b",
-  빅비: "B",
-  씨: "c",
-  빅씨: "C",
-  디: "d",
-  빅디: "D",
-  이: "e",
-  빅이: "E",
-  에프: "f",
-  빅에프: "F",
-  아이: "i",
-  빅아이: "I",
-  제이: "j",
-  빅제이: "J",
-  케이: "k",
-  빅케이: "K",
-  엘: "l",
-  빅엘: "L",
-  엠: "m",
-  빅엠: "M",
-  엔: "n",
-  빅엔: "N",
-  오: "o",
-  빅오: "O",
-  피: "phi",
-  빅피: "P",
-  큐: "q",
-  빅큐: "Q",
-  알: "r",
-  빅알: "R",
-  에스: "s",
-  빅에스: "S",
-  티: "t",
-  빅티: "T",
-  유: "u",
-  빅유: "U",
-  브이: "v",
-  빅브이: "V",
-  더블유: "w",
-  빅더블유: "W",
-  엑스: "x",
-  빅엑스: "X",
-  와이: "y",
-  빅와이: "Y",
-  제트: "z",
-  빅제트: "Z",
-  유형: ":",
-  비유형: "!:",
-  정의유형: "::",
-  조건: ":",
-  필충: "<=>",
-  이면: "=>",
-  개: "(",
-  폐: ")",
-  시작: "(",
-  끝: ")",
-  확률: "P",
-  멱집합: "P",
-  곱집합: "xx",
-  틸드: "~",
-  첫째: "i.",
-  둘째: "ii.",
-  셋째: "iii.",
-  넷째: "iv.",
-  다섯째: "v.",
-  여섯째: "vi.",
-  집합: "Set",
-  동치관계: "EquivalenceRelation",
-  부분순서: "PartialOrder",
-  전순서: "TotalOrder",
-  또는: "or",
-  그리고: "and",
-  이고: ",",
-  "에 대해": "s.t.",
-  더하기: "+",
-  플러스: "+",
-  덧셈: "+",
-  합: "+",
-  양: "+",
-  빼기: "-",
-  마이너스: "-",
-  음: "-",
-  곱셈: "*",
-  벡터합: "+",
-  스칼라곱: "*",
-  곱하기: "*",
-  별표: "**",
-  별: "***",
-  곱: "xx",
-  나누기: "//",
-  몫집합: "//",
-  모: "/",
-  승: "^",
-  아님: "!=",
-  부등: "!=",
-  작음: "<",
-  큼: ">",
-  미만: "<",
-  초과: ">",
-  이상: ">=",
-  이하: "<=",
-  크거나같음: ">=",
-  작거나같음: "<=",
-  서브: "_",
-  밑: "_",
-  슈퍼: "^",
-  위: "^",
-  정의역: "dom",
-  공역: "cod",
-  치역: "im",
-  대: "->",
-  대응: "->",
-  총합: "sum",
-  적분: "int",
-  극한: "lim",
-  총곱: "prod",
-  마그마: "Magma",
-  원군: "Magma",
-  반군: "Semigroup",
-  항등원반군: "Monoid",
-  단군: "Monoid",
-  모노이드: "Monoid",
-  군: "Group",
-  아벨군: "AbelianGroup",
-  가환군: "AbelianGroup",
-  환: "Ring",
-  체: "Field",
-  향량공간: "VectorSpace",
-  벡터공간: "VectorSpace",
-  유한벡터공간: "FiniteVectorSpace",
-  무한내적공간: "InfiniteInnerProductSpace",
-  내적공간: "InnerProductSpace",
-  유한내적공간: "FiniteInnerProductSpace",
-  법공간: "NormedSpace",
-  노름공간: "NormedSpace",
-  거리공간: "MetricSpace",
-  위상공간: "TopologicalSpace",
-  항등원: "Id",
-  역원: "Inv",
-  분배법칙: "distributive",
-  교환법칙: "commutative",
-  결합법칙: "associative",
-  가환환: "CommutativeRing",
-  생성: "span",
-  자명: "trivial",
-  비자명: "nontrivial",
-  절대개: "abs(",
-  절대폐: ")",
-  기수개: "abs(",
-  기수폐: ")",
-  기저: "Basis",
-  순서기저: "OrderedBasis",
-  그: "the",
-  개행: ";",
-  바이: "xx",
-  쌍선형: "bilinear",
-  선형: "linear",
-  동형: "~=",
-  준동형사상: "Homomorphism",
-  동형사상: "Isomorphism",
-  자기동형사상: "Automorphism",
-  부분동형사상: "Endomorphism",
-  위의: "-", // K-vector space
-  스타: "***",
-  대수: "Algebra",
-  닮음: "~",
-  행렬: "M_",
-  대각행렬: "M(diagonal)_",
-  실행렬: "M(RR)_",
-  복소행렬: "M(CC)_",
-  람다: "lambda",
-  베타: "beta",
-  감마: "gamma",
-  델타: "delta",
-  엡실론: "epsilon",
-  시그마: "sigma",
-  파이: "pi",
-  빅오메가: "Omega",
-  축소: "|",
-  나눈다: "|",
-  고유치: "Eigenvalue",
-  고유향량: "Eigenvector",
-  완전분해: "SplitOver",
-  특성다항식: "CharacteristicPolynomial",
-  판정식: "Determinant",
-  단적: "unital",
-  빈자리: "\\:",
-};
 
-// Bracket words meant for speaking a formula aloud: "열고 ... 닫고" for
-// parentheses, with 집합/행렬 in front for braces/brackets, and 다음줄 for
-// the next row (";", same as 개행).
-const SPOKEN = {
-  열고: "(",
-  닫고: ")",
-  집합열고: "{",
-  집합닫고: "}",
-  행렬열고: "[",
-  행렬닫고: "]",
-  다음줄: ";",
-};
+let vocabulary = new Map();
+let longestWord = 0;
 
-const VOCABULARY = new Map(
-  Object.entries({ ...BASE, ...SPOKEN }).map(([word, symbol]) => [word.replace(/\s+/g, ""), symbol])
-);
-const LONGEST_WORD = Math.max(...[...VOCABULARY.keys()].map((word) => word.length));
+export function parseSpokenMathCsv(content) {
+  const rules = new Map();
+  for (const line of content.split(/\r?\n/)) {
+    if (!line.trim() || line.trimStart().startsWith("#")) continue;
+    const comma = line.indexOf(",");
+    if (comma === -1) continue;
+    const word = line.slice(0, comma).replace(/\s+/g, "");
+    const symbol = line.slice(comma + 1).trim();
+    if (word && symbol) rules.set(word, symbol);
+  }
+  return rules;
+}
+
+export function setSpokenMathVocabulary(rules) {
+  vocabulary = rules;
+  longestWord = Math.max(0, ...[...rules.keys()].map((word) => word.length));
+}
 
 const HANGUL = /[가-힣]/;
 
@@ -291,8 +50,8 @@ function convertHangulRun(run, out) {
   let unknown = "";
   while (i < run.length) {
     let matched = null;
-    for (let len = Math.min(LONGEST_WORD, run.length - i); len > 0; len--) {
-      const symbol = VOCABULARY.get(run.slice(i, i + len));
+    for (let len = Math.min(longestWord, run.length - i); len > 0; len--) {
+      const symbol = vocabulary.get(run.slice(i, i + len));
       if (symbol !== undefined) {
         matched = { symbol, len };
         break;
