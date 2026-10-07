@@ -83,6 +83,11 @@
               <option value="en-US">EN</option>
               <option value="ja-JP">JA</option>
             </select>
+            <!-- Shown only where both engines work - see dictationEngine in app.js. -->
+            <select id="dictation-engine" class="dictation-lang" hidden data-i18n-title="editor.dictationEngineTitle">
+              <option value="builtin" data-i18n="editor.dictationEngineBuiltin"></option>
+              <option value="realtime" data-i18n="editor.dictationEngineRealtime"></option>
+            </select>
           </span>
           <!-- Gamepad remote settings (see remote.js) - shown only while a
                controller is connected; the controller itself drives the

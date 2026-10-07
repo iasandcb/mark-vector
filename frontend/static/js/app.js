@@ -112,6 +112,7 @@ const el = {
   dictationBtn: document.getElementById("dictation-btn"),
   dictationLabel: document.getElementById("dictation-label"),
   dictationLang: document.getElementById("dictation-lang"),
+  dictationEngine: document.getElementById("dictation-engine"),
   threadToggleBtn: document.getElementById("thread-toggle-btn"),
   sendBtn: document.getElementById("send-btn"),
   viewModeBtn: document.getElementById("view-mode-btn"),
@@ -1760,6 +1761,9 @@ function updateInlineCompleteButton() {
 //     webkitSpeechRecognition, but it never works there) and Firefox.
 //     Needs the server's OPENAI_API_KEY and is billed per minute streamed,
 //     so it stops when the tab is hidden or nothing's been heard for a while.
+//     Where both work, an engine select next to the language one lets the
+//     realtime engine be picked anyway (built-in recognizers vary a lot -
+//     Safari's is weak) - built-in stays the default since realtime costs.
 // The control is hidden only when neither is available.
 //
 // Text is written straight into the document at the caret: finalized
@@ -1779,8 +1783,14 @@ function dictationSupported() {
   return WEB_SPEECH_USABLE || realtimeSttAvailable;
 }
 
+// Where both engines work, the engine select picks one (remembered per
+// browser, built-in by default since realtime costs); elsewhere whichever
+// one exists is used.
+function useRealtimeDictation() {
+  return realtimeSttAvailable && (!WEB_SPEECH_USABLE || el.dictationEngine.value === "realtime");
+}
+
 async function loadRealtimeSttConfig() {
-  if (WEB_SPEECH_USABLE) return;
   try {
     const res = await fetch("/api/stt/config");
     if (res.ok) realtimeSttAvailable = !!(await res.json()).available;
@@ -1791,6 +1801,7 @@ async function loadRealtimeSttConfig() {
 }
 const DICTATION_LANG_KEY = "mark-vector:dictation-lang";
 const DICTATION_LANG_BY_UI = { ko: "ko-KR", en: "en-US", ja: "ja-JP" };
+const DICTATION_ENGINE_KEY = "mark-vector:dictation-engine";
 
 // null while idle. `target` is the `active` object dictation started on -
 // switching documents (a new `active`) stops it rather than typing into
@@ -1808,6 +1819,24 @@ function restoreDictationLang() {
   el.dictationLang.value = options.includes(stored) ? stored : DICTATION_LANG_BY_UI[getLanguage()] || "en-US";
 }
 
+function restoreDictationEngine() {
+  let stored = null;
+  try {
+    stored = localStorage.getItem(DICTATION_ENGINE_KEY);
+  } catch (err) {
+    stored = null;
+  }
+  el.dictationEngine.value = stored === "realtime" ? "realtime" : "builtin";
+}
+
+function saveDictationEngine() {
+  try {
+    localStorage.setItem(DICTATION_ENGINE_KEY, el.dictationEngine.value);
+  } catch (err) {
+    // localStorage unavailable - the choice just won't persist across reloads
+  }
+}
+
 function saveDictationLang() {
   try {
     localStorage.setItem(DICTATION_LANG_KEY, el.dictationLang.value);
@@ -1822,8 +1851,9 @@ function dictationUsable() {
 
 function updateDictationButton() {
   el.dictationGroup.hidden = !dictationSupported() || !active;
-  // Where the realtime engine stands in, say so - it's the one that costs.
-  if (!WEB_SPEECH_USABLE && realtimeSttAvailable) el.dictationBtn.title = t("editor.dictationRealtimeTitle");
+  el.dictationEngine.hidden = !(WEB_SPEECH_USABLE && realtimeSttAvailable);
+  // When the realtime engine is the one in use, say so - it's the one that costs.
+  el.dictationBtn.title = t(useRealtimeDictation() ? "editor.dictationRealtimeTitle" : "editor.dictationTitle");
   el.dictationBtn.disabled = !dictationUsable() && !dictation;
   if (dictation && (dictation.target !== active || !dictationUsable())) stopDictation();
   const listening = !!dictation;
@@ -1889,8 +1919,8 @@ function writeDictation(finalText, interimText) {
 
 function startDictation() {
   if (dictation || !dictationUsable() || !dictationSupported()) return;
-  if (WEB_SPEECH_USABLE) startWebSpeechDictation();
-  else startRealtimeDictation();
+  if (useRealtimeDictation()) startRealtimeDictation();
+  else startWebSpeechDictation();
 }
 
 function startWebSpeechDictation() {
@@ -5597,7 +5627,16 @@ el.publishBtn.addEventListener("click", togglePublish);
 el.toolbarToggleBtn.addEventListener("click", toggleEditorToolbar);
 el.inlineCompleteBtn.addEventListener("click", sendInlineCompletion);
 restoreDictationLang();
+restoreDictationEngine();
 el.dictationBtn.addEventListener("click", toggleDictation);
+el.dictationEngine.addEventListener("change", () => {
+  saveDictationEngine();
+  updateDictationButton();
+  if (dictation) {
+    stopDictation();
+    startDictation();
+  }
+});
 // A language change mid-dictation restarts it in the new language rather
 // than waiting for the next pause.
 el.dictationLang.addEventListener("change", () => {
