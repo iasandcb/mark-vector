@@ -9,7 +9,7 @@
 // a comma ("과, ,"). Lines starting with "#" are comments; a later line
 // wins over an earlier one for the same word. Spaces inside a word don't
 // matter - matching ignores spaces between Korean syllables, since
-// recognizers space Korean inconsistently ("빅 에이" and "빅에이" alike).
+// recognizers space Korean inconsistently ("라지 에이" and "라지에이" alike).
 
 let vocabulary = new Map();
 let longestWord = 0;
@@ -43,7 +43,7 @@ function dropSentencePunctuation(text) {
 }
 
 // Longest match first over a run of Korean syllables (spaces removed), so
-// "빅에이" is A rather than "빅" + a, and "집합 열고" is "{" rather than Set (.
+// "라지에이" is A rather than "라지" + a, and "집합 열고" is "{" rather than Set (.
 // A syllable no word starts with is kept as it was said (a particle, say).
 function convertHangulRun(run, out) {
   let i = 0;
@@ -70,7 +70,7 @@ function convertHangulRun(run, out) {
   if (unknown) out.push(unknown);
 }
 
-// "엑스 승 2 더하기 빅 와이 는 열고 에이 과 비 닫고" -> "x ^ 2 + Y = ( a , b )".
+// "엑스 승 2 더하기 라지 와이 는 열고 에이 과 비 닫고" -> "x ^ 2 + Y = ( a , b )".
 // Tokens come out space-separated; AsciiMath reads "x ^ 2" as x^2 all the
 // same. Anything that isn't Korean (digits, letters the recognizer already
 // wrote as x, symbols) passes through as its own token.
