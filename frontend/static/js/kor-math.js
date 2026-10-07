@@ -6,8 +6,9 @@
 // and edited in the app from then on), loaded with setSpokenMathVocabulary.
 // One rule per line, "word, symbol": the word is everything before the
 // first comma and the symbol everything after it, so a symbol may itself be
-// a comma ("과, ,"). Lines starting with "#" are comments; a later line
-// wins over an earlier one for the same word. Spaces inside a word don't
+// a comma ("과, ,"); "\n" is a line break. Lines starting with "#" are
+// comments; a later line wins over an earlier one for the same word.
+// Spaces inside a word don't
 // matter - matching ignores spaces between Korean syllables, since
 // recognizers space Korean inconsistently ("라지 에이" and "라지에이" alike).
 
@@ -21,7 +22,8 @@ export function parseSpokenMathCsv(content) {
     const comma = line.indexOf(",");
     if (comma === -1) continue;
     const word = line.slice(0, comma).replace(/\s+/g, "");
-    const symbol = line.slice(comma + 1).trim();
+    // "\n" as a symbol is a line break inside the formula.
+    const symbol = line.slice(comma + 1).trim().replace(/^\\n$/, "\n");
     if (word && symbol) rules.set(word, symbol);
   }
   return rules;
@@ -91,5 +93,5 @@ export function spokenMathToAsciiMath(text) {
     }
   }
   if (run) convertHangulRun(run, out);
-  return out.join(" ");
+  return out.join(" ").replace(/ *\n */g, "\n");
 }

@@ -150,7 +150,7 @@ uv run python -m app.chatgpt_auth status  # 확인 / logout: 세션 해지
 
 받아쓰는 위치가 `$$` 수식 블록 안이면(리모컨 Y, 안경 ↑로 엶) 말한 내용을 AsciiMath로 바꿔 씁니다(`frontend/static/js/kor-math.js`).
 
-바꾸는 규칙은 왼쪽 트리 맨 위의 **공용 수식 말**(`S` 배지) 문서 하나에 모두 있습니다. 실제로는 `data/spoken-math.csv`이고, 처음 열 때 기본 어휘(`backend/app/spoken_math_default.csv`)로 채워진 뒤로는 이 파일만 씁니다. 한 줄에 `말, 기호` 하나씩(첫 쉼표 앞이 말, 뒤가 기호라서 `과, ,`처럼 기호가 쉼표여도 됨), `#`로 시작하는 줄은 주석, 같은 말이 여러 번 있으면 아래쪽이 이깁니다. 저장하면 바로 다음 받아쓰기부터 적용되고, 다른 브라우저에서도 받아쓰기를 시작할 때 새로 읽어 옵니다.
+바꾸는 규칙은 왼쪽 트리 맨 위의 **공용 수식 말**(`S` 배지) 문서 하나에 모두 있습니다. 실제로는 `data/spoken-math.csv`이고, 처음 열 때 기본 어휘(`backend/app/spoken_math_default.csv`)로 채워진 뒤로는 이 파일만 씁니다. 한 줄에 `말, 기호` 하나씩(첫 쉼표 앞이 말, 뒤가 기호라서 `과, ,`처럼 기호가 쉼표여도 됨, 기호가 `\n`이면 수식 안 줄바꿈), `#`로 시작하는 줄은 주석, 같은 말이 여러 번 있으면 아래쪽이 이깁니다. 저장하면 바로 다음 받아쓰기부터 적용되고, 다른 브라우저에서도 받아쓰기를 시작할 때 새로 읽어 옵니다.
 
 기본 어휘는 [obsidian-publish-asciimath의 kor-math.js](https://github.com/iasandcb/obsidian-publish-asciimath/blob/main/kor-math.js)를 옮겨 온 것에, 소리 내어 말하기 좋은 괄호 말을 더했습니다.
 
@@ -160,6 +160,7 @@ uv run python -m app.chatgpt_auth status  # 확인 / logout: 세션 해지
 | 집합 열고 … 집합 닫고 | `{` … `}` |
 | 행렬 열고 … 행렬 닫고 | `[` … `]` |
 | 다음줄 | `;` (행렬의 다음 행) |
+| 이고 | 수식 안에서 줄바꿈 |
 
 예: "엑스 승 2 더하기 라지 와이 는 열고 에이 과 비 닫고" → `x ^ 2 + Y = ( a , b )`, "행렬 열고 1 과 2 다음줄 3 과 4 행렬 닫고" → 2×2 행렬.
 

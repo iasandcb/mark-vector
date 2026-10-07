@@ -1921,20 +1921,29 @@ function prepareMathDictation(pos) {
 function writeDictation(finalText, interimText) {
   const d = dictation;
   reanchorDictation();
-  if (prepareMathDictation(d.from)) {
+  // A formula can say "next line" (a rule whose symbol is \n), so there
+  // only spaces are trimmed - a line break at either end is kept, and needs
+  // no space in front of it.
+  const math = prepareMathDictation(d.from);
+  if (math) {
     finalText = spokenMathToAsciiMath(finalText);
     interimText = spokenMathToAsciiMath(interimText);
   }
+  const tidy = (text) => (math ? text.replace(/^ +| +$/g, "") : text.trim());
   const end = d.from + d.interim.length;
   let insert = "";
-  if (finalText) insert += dictationSeparator(d.from) + finalText.trim();
+  if (tidy(finalText)) {
+    const text = tidy(finalText);
+    insert += (text.startsWith("\n") ? "" : dictationSeparator(d.from)) + text;
+  }
   const committedEnd = d.from + insert.length;
   let interim = "";
-  if (interimText.trim()) {
+  if (tidy(interimText)) {
+    const text = tidy(interimText);
     // Separator judged against what the final text above will leave behind.
     const before = insert ? insert[insert.length - 1] : committedEnd > 0 ? el.editor.value[d.from - 1] : "\n";
-    const sep = el.dictationLang.value.startsWith("ja") || /\s/.test(before) || committedEnd === 0 ? "" : " ";
-    interim = sep + interimText.trim();
+    const sep = el.dictationLang.value.startsWith("ja") || /\s/.test(before) || committedEnd === 0 || text.startsWith("\n") ? "" : " ";
+    interim = sep + text;
   }
   if (!insert && !interim && !d.interim) return;
   // Dictating in front of existing text: keep a space between the two. The
