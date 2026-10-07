@@ -13,7 +13,7 @@ import { openTranscribeDialog } from "./transcribe.js";
 import { createGamepadRemote } from "./remote.js";
 import { splitSlides, lastSlideStart } from "./slides.js";
 import { startRealtimeTranscription } from "./realtime-stt.js";
-import { spokenMathToAsciiMath, parseSpokenMathCsv, setSpokenMathVocabulary } from "./kor-math.js";
+import { spokenMathToAsciiMath, parseSpokenMathCsv, setSpokenMathVocabulary, splitMathBlockCommands } from "./kor-math.js";
 
 // Inline-thread markers. Declared up here, away from the rest of the
 // inline-thread code further down, because `el` below builds the editor,
@@ -1908,7 +1908,7 @@ const ASCIIMATH_DIRECTIVE = "<!-- math: asciimath -->\n\n";
 function prepareMathDictation(pos) {
   const value = el.editor.value;
   const before = value.slice(0, pos);
-  if ((before.slice(lastSlideStart(before)).match(/\$\$/g) || []).length % 2 === 0) return false;
+  if (!insideMathBlock(pos)) return false;
   if (currentDocumentFormat() !== "latex") return true;
   if (detectMathDirective(value)) return false;
   const close = value.indexOf("$$", pos);
@@ -1918,9 +1918,36 @@ function prepareMathDictation(pos) {
   return true;
 }
 
+// Spoken block commands ("수식시작" / "수식끝" - rules whose symbol is $$,
+// see kor-math.js) split a finished phrase: what came before is written
+// where dictation was, the block is opened or left, and the rest is written
+// at the new position. A command still being spoken isn't shown at all.
 function writeDictation(finalText, interimText) {
   const d = dictation;
   reanchorDictation();
+  interimText = splitMathBlockCommands(interimText).join(" ");
+  const parts = splitMathBlockCommands(finalText);
+  if (parts.length === 1) {
+    writeDictationText(finalText, interimText);
+    return;
+  }
+  // Drop the phrase-in-progress span first; the pieces are written fresh.
+  if (d.interim) {
+    replaceEditorRange(d.from, d.from + d.interim.length, "");
+    d.interim = "";
+  }
+  parts.forEach((part, i) => {
+    if (i > 0) {
+      d.from = toggleMathBlockAt(d.from);
+      el.editor.setSelectionRange(d.from, d.from);
+    }
+    writeDictationText(part, "");
+  });
+  writeDictationText("", interimText);
+}
+
+function writeDictationText(finalText, interimText) {
+  const d = dictation;
   // A formula can say "next line" (a rule whose symbol is \n), so there
   // only spaces are trimmed - a line break at either end is kept, and needs
   // no space in front of it.
@@ -2469,8 +2496,7 @@ function breakLine() {
   const pos = el.editor.selectionStart;
   const before = el.editor.value.slice(0, pos);
   if (!before.trim()) return;
-  const inMath = (before.slice(lastSlideStart(before)).match(/\$\$/g) || []).length % 2 === 1;
-  const insert = inMath ? "\n" : before.endsWith("\n\n") ? "" : before.endsWith("\n") ? "\n" : "\n\n";
+  const insert = insideMathBlock(pos) ? "\n" : before.endsWith("\n\n") ? "" : before.endsWith("\n") ? "\n" : "\n\n";
   // Through rebaseDictation: the phrase in progress stays above the break.
   if (insert) rebaseDictation(() => replaceEditorRange(pos, pos, insert));
   showRemoteStatus(t("remote.lineBreak"));
@@ -2488,39 +2514,56 @@ function breakLine() {
 function toggleMath() {
   if (!presenterUsable()) return;
   caretToDeckEndUnlessDictating();
-  const value = el.editor.value;
   const pos = el.editor.selectionStart;
-  const before = value.slice(0, pos);
-  const inside = (before.slice(lastSlideStart(before)).match(/\$\$/g) || []).length % 2 === 1;
+  const inside = insideMathBlock(pos);
   // Through rebaseDictation: the phrase in progress stays where it was
   // said, and dictation picks up again at the new caret.
   rebaseDictation(() => {
-    if (!inside) {
-      const lead = !before.trim() || before.endsWith("\n\n") ? "" : before.endsWith("\n") ? "\n" : "\n\n";
-      const rest = value.slice(pos);
-      const tail = rest && !rest.startsWith("\n") ? "\n\n" : "";
-      replaceEditorRange(pos, pos, `${lead}$$\n\n$$${tail}`);
-      const caret = pos + lead.length + 3;
-      el.editor.setSelectionRange(caret, caret);
-    } else {
-      const close = value.indexOf("$$", pos);
-      if (close === -1) {
-        // No closing line (it was deleted): close the formula here instead.
-        const end = value.length;
-        replaceEditorRange(end, end, `${value.endsWith("\n") ? "" : "\n"}$$\n\n`);
-      } else {
-        const afterClose = close + 2;
-        const next = value.slice(afterClose, afterClose + 2);
-        const gap = next === "\n\n" ? "" : next.startsWith("\n") ? "\n" : "\n\n";
-        if (gap) replaceEditorRange(afterClose, afterClose, gap);
-      }
-      const caretAt = el.editor.value.indexOf("$$", pos) + 2;
-      let caret = caretAt;
-      while (el.editor.value[caret] === "\n" && caret < caretAt + 2) caret += 1;
-      el.editor.setSelectionRange(caret, caret);
-    }
+    const caret = toggleMathBlockAt(pos);
+    el.editor.setSelectionRange(caret, caret);
   });
   showRemoteStatus(t(inside ? "remote.mathClose" : "remote.mathOpen"));
+}
+
+// Whether `pos` is inside a $$ block (an odd number of $$ before it in the
+// same slide).
+function insideMathBlock(pos) {
+  const before = el.editor.value.slice(0, pos);
+  return (before.slice(lastSlideStart(before)).match(/\$\$/g) || []).length % 2 === 1;
+}
+
+// The edit behind both the Y button / glasses up and the spoken "수식시작"
+// / "수식끝": outside a block, inserts an empty one -
+//   $$
+//   (here)
+//   $$
+// - and inside one, leaves it past its closing $$ (adding one if it was
+// deleted). Returns where writing continues.
+function toggleMathBlockAt(pos) {
+  const value = el.editor.value;
+  const before = value.slice(0, pos);
+  if (!insideMathBlock(pos)) {
+    const lead = !before.trim() || before.endsWith("\n\n") ? "" : before.endsWith("\n") ? "\n" : "\n\n";
+    const rest = value.slice(pos);
+    const tail = rest && !rest.startsWith("\n") ? "\n\n" : "";
+    replaceEditorRange(pos, pos, `${lead}$$\n\n$$${tail}`);
+    return pos + lead.length + 3;
+  }
+  const close = value.indexOf("$$", pos);
+  if (close === -1) {
+    // No closing line (it was deleted): close the formula here instead.
+    const end = value.length;
+    replaceEditorRange(end, end, `${value.endsWith("\n") ? "" : "\n"}$$\n\n`);
+  } else {
+    const afterClose = close + 2;
+    const next = value.slice(afterClose, afterClose + 2);
+    const gap = next === "\n\n" ? "" : next.startsWith("\n") ? "\n" : "\n\n";
+    if (gap) replaceEditorRange(afterClose, afterClose, gap);
+  }
+  const caretAt = el.editor.value.indexOf("$$", pos) + 2;
+  let caret = caretAt;
+  while (el.editor.value[caret] === "\n" && caret < caretAt + 2) caret += 1;
+  return caret;
 }
 
 function locateLastMadeSlide() {

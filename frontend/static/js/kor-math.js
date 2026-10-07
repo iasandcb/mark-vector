@@ -6,7 +6,8 @@
 // and edited in the app from then on), loaded with setSpokenMathVocabulary.
 // One rule per line, "word, symbol": the word is everything before the
 // first comma and the symbol everything after it, so a symbol may itself be
-// a comma ("과, ,"); "\n" is a line break. Lines starting with "#" are
+// a comma ("과, ,"); "\n" is a line break and "$$" opens or closes the
+// math block (see blockCommand below). Lines starting with "#" are
 // comments; a later line wins over an earlier one for the same word.
 // Spaces inside a word don't
 // matter - matching ignores spaces between Korean syllables, since
@@ -29,9 +30,33 @@ export function parseSpokenMathCsv(content) {
   return rules;
 }
 
+// Words whose symbol is "$$" aren't written as symbols: they open a math
+// block where dictation is writing, or close the one it's in - what typing
+// $$ there would do ("수식시작, $$" / "수식끝, $$"). Heard anywhere, not
+// just inside a block, so they're split out of the raw transcript before
+// anything else (see splitMathBlockCommands).
+let blockCommand = null;
+
 export function setSpokenMathVocabulary(rules) {
   vocabulary = rules;
   longestWord = Math.max(0, ...[...rules.keys()].map((word) => word.length));
+  const words = [...rules].filter(([, symbol]) => symbol === "$$").map(([word]) => word);
+  // Longest first, spaces allowed between syllables like everywhere else.
+  blockCommand = words.length
+    ? new RegExp(
+        words
+          .sort((a, b) => b.length - a.length)
+          .map((word) => [...word].map((ch) => ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s*"))
+          .join("|"),
+        "g"
+      )
+    : null;
+}
+
+// "엑스 더하기 와이 수식끝 다음은" -> ["엑스 더하기 와이 ", "다음은"]: the
+// text between block commands, each boundary being one command.
+export function splitMathBlockCommands(text) {
+  return blockCommand ? text.split(blockCommand) : [text];
 }
 
 const HANGUL = /[가-힣]/;
