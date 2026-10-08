@@ -218,7 +218,8 @@
 총합, sum
 적분, int
 극한, lim
-리밋, lim
+리밋, lim _ (
+갈때, )
 총곱, prod
 마그마, Magma
 원군, Magma
