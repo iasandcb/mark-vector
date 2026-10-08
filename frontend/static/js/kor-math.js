@@ -115,6 +115,72 @@ function convertHangulRun(run, out) {
   if (unknown) out.push(unknown);
 }
 
+// Words whose order differs from AsciiMath's are templates: in a symbol,
+// {1} stands for the chunk said just before the word and {2} for the one
+// just after - Korean reads a fraction denominator first ("삼 분의 일" with
+// "분의, {2} / {1}" -> 1 / 3) and puts a bound's particle after it ("영 에서"
+// with "에서, _ {1}" -> _ 0). A chunk is one token, or one bracket group as
+// a whole ("열고 엑스 더하기 일 닫고"); a template's result is a chunk in
+// turn ("영 에서 삼 분의 일 까지" -> _ 0 ^ (1 / 3)). A chunk that wasn't said
+// (yet) is left out.
+const TEMPLATE = /\{[12]\}/;
+const OPENER = /^(\(:?|\[|\{:?|[A-Za-z]+\()$/;
+const CLOSER = /^(\)|\]|\}|:\)|:\})$/;
+
+// A chunk inside another template: a multi-token one is bracketed so it
+// stays one piece (AsciiMath drops those brackets under _, ^ and /).
+function asChunk(item) {
+  return item.composite && item.text.includes(" ") ? `( ${item.text} )` : item.text;
+}
+
+function chunkBefore(done) {
+  const last = done[done.length - 1];
+  if (!last || last.text === "\n" || TEMPLATE.test(last.text)) return "";
+  if (!CLOSER.test(last.text)) return asChunk(done.pop());
+  let depth = 0;
+  for (let i = done.length - 1; i >= 0; i--) {
+    if (CLOSER.test(done[i].text)) depth += 1;
+    else if (OPENER.test(done[i].text)) depth -= 1;
+    if (depth === 0) return done.splice(i).map(asChunk).join(" ");
+  }
+  return asChunk(done.pop());
+}
+
+// Returns [chunk, index after it].
+function chunkAfter(tokens, at) {
+  const first = tokens[at];
+  if (first === undefined || first === "\n" || TEMPLATE.test(first)) return ["", at];
+  if (!OPENER.test(first)) return [first, at + 1];
+  let depth = 0;
+  for (let i = at; i < tokens.length; i++) {
+    if (OPENER.test(tokens[i])) depth += 1;
+    else if (CLOSER.test(tokens[i])) depth -= 1;
+    if (depth === 0) return [resolveTemplates(tokens.slice(at, i + 1)), i + 1];
+  }
+  return [resolveTemplates(tokens.slice(at)), tokens.length];
+}
+
+function resolveTemplates(tokens) {
+  const done = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (!TEMPLATE.test(token)) {
+      done.push({ text: token, composite: false });
+      continue;
+    }
+    const before = token.includes("{1}") ? chunkBefore(done) : "";
+    let after = "";
+    if (token.includes("{2}")) {
+      const [chunk, next] = chunkAfter(tokens, i + 1);
+      after = chunk;
+      i = next - 1;
+    }
+    const text = token.replace("{1}", before).replace("{2}", after).replace(/ +/g, " ").trim();
+    if (text) done.push({ text, composite: true });
+  }
+  return done.map((item) => item.text).join(" ");
+}
+
 // "엑스 승 2 더하기 라지 와이 는 열고 에이 과 비 닫고" -> "x ^ 2 + Y = ( a , b )".
 // Tokens come out space-separated; AsciiMath reads "x ^ 2" as x^2 all the
 // same. Anything that isn't Korean (digits, letters the recognizer already
@@ -141,5 +207,5 @@ export function spokenMathToAsciiMath(text) {
     }
   }
   if (run) convertHangulRun(run, out);
-  return out.join(" ").replace(/ *\n */g, "\n");
+  return resolveTemplates(out).replace(/ *\n */g, "\n");
 }
