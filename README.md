@@ -148,7 +148,7 @@ uv run python -m app.chatgpt_auth status  # 확인 / logout: 세션 해지
 
 ### 수식 받아쓰기
 
-받아쓰는 위치가 `$$` 수식 블록 안이면(리모컨 Y, 안경 ↑, 또는 "수식시작"이라고 말해서 엶) 말한 내용을 AsciiMath로 바꿔 씁니다(`frontend/static/js/kor-math.js`).
+받아쓰는 위치가 `$$` 수식 블록 안이면(리모컨 Y, 안경 ↑, 또는 "수식시작"이라고 말해서 엶) 말한 내용을 AsciiMath로 바꿔 씁니다. 변환기는 [asciimath-markdown](https://github.com/iasandcb/asciimath-markdown)의 `spoken-math.js`(0.3.0부터)이고, [scripter](https://github.com/iasandcb/scripter)도 같은 것을 씁니다.
 
 바꾸는 규칙은 왼쪽 트리 맨 위의 **공용 수식 말**(`S` 배지) 문서 하나에 모두 있습니다. 실제로는 `data/spoken-math.csv`이고, 처음 열 때 기본 어휘(`backend/app/spoken_math_default.csv`)로 채워진 뒤로는 이 파일만 씁니다. 한 줄에 `말, 기호` 하나씩(첫 쉼표 앞이 말, 뒤가 기호라서 `과, ,`처럼 기호가 쉼표여도 됨, 기호가 `\n`이면 수식 안 줄바꿈, `$$`이면 `$$`를 친 것처럼 수식 블록을 열거나 닫음, `{1}`·`{2}`가 들어 있으면 순서를 바꾸는 말 — 아래 참고), `#`로 시작하는 줄은 주석, 같은 말이 여러 번 있으면 아래쪽이 이깁니다. 저장하면 바로 다음 받아쓰기부터 적용되고, 다른 브라우저에서도 받아쓰기를 시작할 때 새로 읽어 옵니다.
 

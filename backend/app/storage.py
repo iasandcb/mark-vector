@@ -123,7 +123,7 @@ def save_global_custom_symbols(content: str) -> dict:
 # ---------- global spoken-math vocabulary ----------
 #
 # "공용 수식 말": the rules dictation uses inside a $$ block to turn spoken
-# Korean math into AsciiMath (see frontend/static/js/kor-math.js for the
+# Korean math into AsciiMath (see asciimath-markdown's src/spoken-math.js for the
 # format and matching). One file holds the whole vocabulary - the defaults
 # it was seeded with and every later edit alike - so there's no separate
 # built-in table to drift from it.

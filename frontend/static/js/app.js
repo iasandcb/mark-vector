@@ -4,6 +4,10 @@ import {
   detectMathDirective,
   convertAsciiMathToLatex,
   setCustomAsciiMathSymbols,
+  spokenMathToAsciiMath,
+  parseSpokenMathCsv,
+  setSpokenMathVocabulary,
+  splitMathBlockCommands,
   parseCustomSymbolsCsv,
   firstH1Heading,
 } from "./markdown.js";
@@ -13,7 +17,6 @@ import { openTranscribeDialog } from "./transcribe.js";
 import { createGamepadRemote } from "./remote.js";
 import { splitSlides, lastSlideStart } from "./slides.js";
 import { startRealtimeTranscription } from "./realtime-stt.js";
-import { spokenMathToAsciiMath, parseSpokenMathCsv, setSpokenMathVocabulary, splitMathBlockCommands } from "./kor-math.js";
 
 // Inline-thread markers. Declared up here, away from the rest of the
 // inline-thread code further down, because `el` below builds the editor,
@@ -1898,7 +1901,7 @@ function reanchorDictation() {
 }
 
 // Inside a $$ block, dictation is a formula: spoken Korean math becomes
-// AsciiMath (see kor-math.js). AsciiMath only renders as such in a document
+// AsciiMath (see asciimath-markdown's spoken-math.js). AsciiMath only renders as such in a document
 // whose math is AsciiMath, so a document that would read it as LaTeX gets
 // the directive added at the top - as long as nothing else in it is math
 // yet. One that already holds LaTeX math (or says so explicitly) gets plain
@@ -1919,7 +1922,7 @@ function prepareMathDictation(pos) {
 }
 
 // Spoken block commands ("수식시작" / "수식끝" - rules whose symbol is $$,
-// see kor-math.js) split a finished phrase: what came before is written
+// see asciimath-markdown's spoken-math.js) split a finished phrase: what came before is written
 // where dictation was, the block is opened or left, and the rest is written
 // at the new position. A command still being spoken isn't shown at all.
 function writeDictation(finalText, interimText) {
@@ -4581,7 +4584,7 @@ async function renameDocument(projectId, sessionId, filename) {
   }
 }
 
-// "공용 수식 말" - the vocabulary math dictation uses (see kor-math.js), the
+// "공용 수식 말" - the vocabulary math dictation uses (see asciimath-markdown's spoken-math.js), the
 // same kind of always-on, app-wide CSV document as the custom symbols.
 async function selectGlobalSpokenMath() {
   if (streaming) return;
