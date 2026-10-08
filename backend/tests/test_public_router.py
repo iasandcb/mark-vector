@@ -99,3 +99,14 @@ def test_slides_option_on_unpublished_document_is_404(isolated_data_dir, client)
         json={"slides": True},
     )
     assert resp.status_code == 404
+
+
+def test_spoken_math_vocabulary_is_readable_without_auth(isolated_data_dir, client, monkeypatch):
+    # Auth on: everything outside the public paths needs a session.
+    monkeypatch.setattr(settings, "app_passcode", "1234")
+    storage.save_global_spoken_math("엑스, x\n")
+    assert client.get("/api/spoken-math").status_code in (401, 403)
+    resp = client.get("/api/public/spoken-math")
+    assert resp.status_code == 200
+    assert resp.json() == {"content": "엑스, x\n"}
+    assert client.put("/api/public/spoken-math", json={"content": "x"}).status_code == 405

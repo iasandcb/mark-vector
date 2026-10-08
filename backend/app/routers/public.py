@@ -29,6 +29,16 @@ def get_custom_symbols():
     return {"content": storage.get_global_custom_symbols()}
 
 
+@router.get("/spoken-math")
+def get_spoken_math():
+    """The "공용 수식 말" vocabulary, read-only and without auth like
+    custom-symbols above, so scripter (github.com/iasandcb/scripter) can
+    fetch the current rules before rendering instead of someone copying the
+    file over by hand. Editing still goes through the authenticated
+    /api/spoken-math. Registered before GET /{token} for the same reason."""
+    return {"content": storage.get_global_spoken_math()}
+
+
 @router.get("/{token}")
 def get_published(token: str):
     """No auth - a published token is itself the access control (unguessable,
