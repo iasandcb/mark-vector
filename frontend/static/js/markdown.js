@@ -15,4 +15,4 @@
 // KaTeX is still picked up from the global that index.html's <script> tag
 // leaves behind - the package reads `globalThis.katex` per call unless a
 // host hands it an instance with setKatex(), which nothing here needs to do.
-export * from "https://cdn.jsdelivr.net/npm/asciimath-markdown@0.4.1/+esm";
+export * from "https://cdn.jsdelivr.net/npm/asciimath-markdown@0.4.2/+esm";
