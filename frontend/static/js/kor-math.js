@@ -134,9 +134,10 @@ export function spokenMathToAsciiMath(text) {
       if (prefix) run = run.slice(0, -prefix.length);
       if (run) convertHangulRun(run, out);
       run = "";
-      // A letter standing alone (not part of a word like "sin") is a
-      // variable the recognizer spelled out - lowercase unless capitalized.
-      out.push(prefix ? piece.toUpperCase() : piece.replace(/(?<![A-Za-z])[A-Z](?![A-Za-z])/g, (c) => c.toLowerCase()));
+      // Capitals standing alone - one letter, or two or three run together
+      // ("DX" for 디엑스) - are variables the recognizer spelled out:
+      // lowercase unless capitalized. Mixed-case words ("sin") stay as said.
+      out.push(prefix ? piece.toUpperCase() : piece.replace(/(?<![A-Za-z])[A-Z]{1,3}(?![A-Za-z])/g, (c) => c.toLowerCase()));
     }
   }
   if (run) convertHangulRun(run, out);
