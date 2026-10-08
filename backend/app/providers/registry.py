@@ -13,13 +13,13 @@ from .chatgpt_provider import ChatGPTProvider
 from .openai_provider import OpenAIProvider
 
 STATIC_PROVIDER_INFO: dict[str, dict] = {
-    "openai": {"label": "OpenAI", "preferred_default_model": "gpt-5.6-luna"},
+    "openai": {"label": "OpenAI", "preferred_default_model": "gpt-6.1-sol"},
     "anthropic": {"label": "Anthropic", "preferred_default_model": None},
     # The user's own ChatGPT plan instead of an API key - configured by
     # signing in with `python -m app.chatgpt_auth login` (+ `push` for Fly).
     # The frontend shows a translated label instead when it has one for this
     # id (i18n "provider.label.chatgpt") - this English one is the fallback.
-    "chatgpt": {"label": "ChatGPT (my plan)", "preferred_default_model": "gpt-5.6-luna"},
+    "chatgpt": {"label": "ChatGPT (my plan)", "preferred_default_model": "gpt-6.1-sol"},
 }
 
 _instances: dict[str, LLMProvider] = {}
