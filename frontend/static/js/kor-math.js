@@ -37,6 +37,14 @@ export function parseSpokenMathCsv(content) {
 // anything else (see splitMathBlockCommands).
 let blockCommand = null;
 
+// Capitals are spoken with a prefix ("라지에프" -> F). A recognizer often
+// writes a letter name as the letter itself, though - "에프" as "F", and
+// just as often upper- as lowercase - so a lone Latin letter it wrote is
+// read as lowercase, and as a capital only right after the prefix ("라지 F").
+// The prefix isn't fixed here: it's whatever the vocabulary puts in front
+// of a lowercase letter's word to get its capital (라지 + 에프 -> F).
+let capitalPrefixes = [];
+
 export function setSpokenMathVocabulary(rules) {
   vocabulary = rules;
   longestWord = Math.max(0, ...[...rules.keys()].map((word) => word.length));
@@ -51,6 +59,16 @@ export function setSpokenMathVocabulary(rules) {
         "g"
       )
     : null;
+  const prefixes = new Set();
+  for (const [word, symbol] of rules) {
+    if (!/^[A-Z]$/.test(symbol)) continue;
+    for (const [lower, lowerSymbol] of rules) {
+      if (lowerSymbol === symbol.toLowerCase() && word.length > lower.length && word.endsWith(lower)) {
+        prefixes.add(word.slice(0, -lower.length));
+      }
+    }
+  }
+  capitalPrefixes = [...prefixes].sort((a, b) => b.length - a.length);
 }
 
 // "엑스 더하기 와이 수식끝 다음은" -> ["엑스 더하기 와이 ", "다음은"]: the
@@ -110,11 +128,15 @@ export function spokenMathToAsciiMath(text) {
     for (const piece of token.match(/[가-힣]+|[^가-힣]+/g)) {
       if (HANGUL.test(piece)) {
         run += piece;
-      } else {
-        if (run) convertHangulRun(run, out);
-        run = "";
-        out.push(piece);
+        continue;
       }
+      const prefix = /^[A-Za-z]$/.test(piece) && capitalPrefixes.find((p) => run.endsWith(p));
+      if (prefix) run = run.slice(0, -prefix.length);
+      if (run) convertHangulRun(run, out);
+      run = "";
+      // A letter standing alone (not part of a word like "sin") is a
+      // variable the recognizer spelled out - lowercase unless capitalized.
+      out.push(prefix ? piece.toUpperCase() : piece.replace(/(?<![A-Za-z])[A-Z](?![A-Za-z])/g, (c) => c.toLowerCase()));
     }
   }
   if (run) convertHangulRun(run, out);
