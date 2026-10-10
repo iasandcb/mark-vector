@@ -85,6 +85,7 @@ const el = {
   previewScrollTopBtn: document.getElementById("preview-scroll-top-btn"),
   previewScrollBottomBtn: document.getElementById("preview-scroll-bottom-btn"),
   editorFilename: document.getElementById("editor-filename"),
+  tabStrip: document.getElementById("tab-strip"),
   toolStatus: document.getElementById("tool-status"),
   remoteBtn: document.getElementById("remote-btn"),
   syncConflict: document.getElementById("sync-conflict"),
@@ -378,6 +379,16 @@ function activeDocRef() {
 // sites below.
 function saveActiveDocRef() {
   const ref = activeDocRef();
+  // The tab on screen follows its document through renames, and through
+  // flows that put another document in its place (a send landing on the
+  // next draft) - except while openInTab/switchToTab is filling a tab,
+  // which do their own bookkeeping.
+  if (!openingTab && currentTab >= 0 && ref) {
+    tabs[currentTab].ref = ref;
+    tabs[currentTab].title = active.filename;
+    saveTabs();
+    renderTabs();
+  }
   try {
     if (ref) localStorage.setItem(ACTIVE_DOC_KEY, JSON.stringify(ref));
     else localStorage.removeItem(ACTIVE_DOC_KEY);
@@ -392,6 +403,285 @@ function loadActiveDocRef() {
   } catch (err) {
     return null;
   }
+}
+
+// ---------- tabs ----------
+//
+// Pane A keeps several documents open as tabs. Only the one on screen is
+// `active`; any other tab is just its ref (see activeDocRef), reopened
+// from the server when switched back to - so an edit saved elsewhere in
+// the meantime shows up - except a tab left with unsaved edits, which
+// keeps them (with its `active` object, caret and scroll) in `stash` until
+// it's switched back to or closed. Opening a document from anywhere - the
+// tree, quick open, a link, a new draft - goes through openInTab: a tab of
+// its own, or the one it already has. Split view's pane B has no tabs.
+// The list of tabs (not their unsaved contents - autosave already keeps
+// those per document) survives a reload.
+const TABS_KEY = "mark-vector:tabs";
+let tabs = []; // [{ ref, title, stash }]
+let currentTab = -1;
+// True while openInTab/switchToTab has a loader (selectDocument & co.)
+// filling a tab: the document being left is safe in its own tab, so the
+// loader's "unsaved changes, leave anyway?" doesn't apply.
+let openingTab = false;
+
+function docRef(projectId, sessionId, filename) {
+  return { role: "document", projectId, sessionId, filename };
+}
+
+// A session's system.md is an ordinary document under the hood (see
+// selectDocument's "system" role), so its tab is that document's.
+async function openSessionSystemPrompt(projectId, sessionId) {
+  const project = projects.get(projectId);
+  const session = project && project.sessions && project.sessions.get(sessionId);
+  if (!session) return;
+  if (session.documents === null) session.documents = await api.listDocuments(projectId, sessionId);
+  const doc = session.documents.find((d) => d.role === "system");
+  if (doc) await openInTab(docRef(projectId, sessionId, doc.filename));
+}
+
+function sameDocRef(a, b) {
+  if (!a || !b || a.role !== b.role) return false;
+  return a.projectId === b.projectId && a.sessionId === b.sessionId && a.filename === b.filename &&
+    a.hermesSessionId === b.hermesSessionId;
+}
+
+function saveTabs() {
+  try {
+    localStorage.setItem(TABS_KEY, JSON.stringify({ tabs: tabs.map(({ ref, title }) => ({ ref, title })), current: currentTab }));
+  } catch (err) {
+    // localStorage unavailable - the tabs just won't survive a reload
+  }
+}
+
+function loadTabs() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(TABS_KEY) || "null");
+    if (saved && Array.isArray(saved.tabs)) return saved;
+  } catch (err) {
+    // fall through
+  }
+  return null;
+}
+
+function stashDirty(stash) {
+  return !!stash && stash.content !== stash.active.savedContent;
+}
+
+function tabDirty(index) {
+  return index === currentTab ? isDirty() : stashDirty(tabs[index] && tabs[index].stash);
+}
+
+// Snapshot of the tab being left: its document state, unsaved text, caret
+// and scroll - restored as-is if it had unsaved edits, otherwise just the
+// caret and scroll over a fresh copy from the server.
+function stashCurrentTab() {
+  if (currentTab < 0 || !active) return;
+  tabs[currentTab].ref = activeDocRef();
+  tabs[currentTab].title = active.filename;
+  tabs[currentTab].stash = {
+    active: { ...active },
+    content: el.editor.value,
+    selectionStart: el.editor.selectionStart,
+    selectionEnd: el.editor.selectionEnd,
+    scrollTop: el.editor.scrollElement.scrollTop,
+  };
+}
+
+function restoreTabView(stash) {
+  if (!stash) return;
+  const length = el.editor.value.length;
+  el.editor.setSelectionRange(Math.min(stash.selectionStart, length), Math.min(stash.selectionEnd, length));
+  el.editor.scrollElement.scrollTop = stash.scrollTop;
+  if (!PHONE_LAYOUT.matches && editorViewMode !== "rendered") el.editor.focus();
+}
+
+// A tab with unsaved edits coming back: its text from memory rather than
+// the server - the same screen updates selectDocument makes.
+function showStashedTab(stash) {
+  const previous = active;
+  active = stash.active;
+  hideSyncConflict();
+  saveActiveDocRef();
+  el.editor.value = stash.content;
+  el.editor.disabled = false;
+  el.saveBtn.disabled = false;
+  updateSendToolbarVisibility();
+  updateFormatToolbar();
+  const sessionChanged = !previous || previous.sessionId !== active.sessionId || previous.projectId !== active.projectId;
+  if (sessionChanged && active.sessionId && !NON_SENDABLE_ROLES.has(active.role)) {
+    const project = projects.get(active.projectId);
+    const session = project && project.sessions && project.sessions.get(active.sessionId);
+    if (session) applyTurnDefaults(session);
+  }
+  updateSendAvailability();
+  updateFilenameLabel();
+  renderPreview();
+  renderTree();
+  setMobileView("editor");
+  restoreTabView(stash);
+}
+
+async function loadIntoTab(ref) {
+  openingTab = true;
+  try {
+    await restoreActiveDocument(ref);
+  } finally {
+    openingTab = false;
+  }
+  return sameDocRef(activeDocRef(), ref);
+}
+
+// Opens `ref` in a new tab right after the current one, or switches to the
+// tab it already has. The same document again just reloads it, as before.
+async function openInTab(ref) {
+  if (streaming || !ref) return;
+  const at = tabs.findIndex((tab) => sameDocRef(tab.ref, ref));
+  if (at >= 0 && at === currentTab && active) {
+    await restoreActiveDocument(ref);
+    return;
+  }
+  if (at >= 0) {
+    await switchToTab(at);
+    return;
+  }
+  const previous = currentTab;
+  stashCurrentTab();
+  if (await loadIntoTab(ref)) {
+    tabs.splice(previous + 1, 0, { ref: activeDocRef(), title: active.filename, stash: null });
+    currentTab = previous + 1;
+  } else if (previous >= 0) {
+    // Didn't open (gone, or a fetch failed): the screen never changed.
+    tabs[previous].stash = null;
+  }
+  saveTabs();
+  renderTabs();
+}
+
+async function switchToTab(index, { keepCurrent = true } = {}) {
+  if (streaming || index < 0 || index >= tabs.length || (index === currentTab && active)) return;
+  if (keepCurrent) stashCurrentTab();
+  currentTab = index;
+  const tab = tabs[index];
+  const stash = tab.stash;
+  tab.stash = null;
+  if (stashDirty(stash)) {
+    showStashedTab(stash);
+  } else if (await loadIntoTab(tab.ref)) {
+    restoreTabView(stash);
+  } else {
+    // Its document is gone - drop the tab and show a neighbor instead.
+    tabs.splice(index, 1);
+    currentTab = -1;
+    if (tabs.length) {
+      await switchToTab(Math.min(index, tabs.length - 1), { keepCurrent: false });
+      return;
+    }
+    clearEditor();
+  }
+  saveTabs();
+  renderTabs();
+}
+
+async function closeTab(index, { force = false } = {}) {
+  if (streaming || index < 0 || index >= tabs.length) return;
+  const tab = tabs[index];
+  if (!force && tabDirty(index) && !confirm(t("tabs.confirmClose", { name: tab.title || "" }))) return;
+  const wasCurrent = index === currentTab;
+  // Closing means discarding: don't offer the edits back next time it opens.
+  if (wasCurrent && isDirty()) clearAutosave();
+  tabs.splice(index, 1);
+  if (!wasCurrent) {
+    if (index < currentTab) currentTab -= 1;
+  } else {
+    currentTab = -1;
+    if (tabs.length) {
+      await switchToTab(Math.min(index, tabs.length - 1), { keepCurrent: false });
+      return;
+    }
+    clearEditor();
+  }
+  saveTabs();
+  renderTabs();
+}
+
+// Closes every tab whose document `matches` (deleted, or inside something
+// deleted) - no questions asked, there's nothing left to save to.
+async function dropTabs(matches) {
+  for (let i = tabs.length - 1; i >= 0; i--) {
+    if (i !== currentTab && tabs[i].ref && matches(tabs[i].ref)) {
+      tabs.splice(i, 1);
+      if (i < currentTab) currentTab -= 1;
+    }
+  }
+  if (currentTab >= 0 && tabs[currentTab].ref && matches(tabs[currentTab].ref)) {
+    await closeTab(currentTab, { force: true });
+    return;
+  }
+  saveTabs();
+  renderTabs();
+}
+
+function tabTooltip(tab) {
+  const ref = tab.ref || {};
+  const project = ref.projectId && projects.get(ref.projectId);
+  const session = project && ref.sessionId && project.sessions && project.sessions.get(ref.sessionId);
+  const where = [project && project.meta && project.meta.title, session && session.meta && session.meta.title].filter(Boolean);
+  return [...where, tab.title].filter(Boolean).join(" / ");
+}
+
+// Shown once there's more than one tab - a single document is already
+// named in the header below.
+function renderTabs() {
+  const strip = el.tabStrip;
+  strip.hidden = tabs.length < 2;
+  // With tabs showing, the current one already names the document - the
+  // header's own filename would just take room from its buttons.
+  el.editorFilename.hidden = !strip.hidden;
+  if (strip.hidden) {
+    strip.replaceChildren();
+    return;
+  }
+  strip.replaceChildren(
+    ...tabs.map((tab, index) => {
+      const item = document.createElement("div");
+      item.className = "editor-tab" + (index === currentTab ? " current" : "") + (tabDirty(index) ? " dirty" : "");
+      item.setAttribute("role", "tab");
+      item.setAttribute("aria-selected", index === currentTab ? "true" : "false");
+      item.title = tabTooltip(tab);
+      const label = document.createElement("span");
+      label.className = "editor-tab-label";
+      label.textContent = tab.title || "…";
+      const close = document.createElement("button");
+      close.type = "button";
+      close.className = "editor-tab-close";
+      close.textContent = "×";
+      close.title = t("tabs.close");
+      close.addEventListener("click", (e) => {
+        e.stopPropagation();
+        closeTab(index);
+      });
+      item.append(label, close);
+      item.addEventListener("click", () => switchToTab(index));
+      // Middle click closes, as in a browser.
+      item.addEventListener("auxclick", (e) => {
+        if (e.button === 1) {
+          e.preventDefault();
+          closeTab(index);
+        }
+      });
+      return item;
+    })
+  );
+  const current = strip.children[currentTab];
+  if (current) current.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+
+// Cheap per-keystroke update of the current tab's unsaved marker (see
+// updateFilenameLabel).
+function updateCurrentTabMarker() {
+  const item = el.tabStrip.children[currentTab];
+  if (item) item.classList.toggle("dirty", isDirty());
 }
 
 // activeB's own, much smaller counterpart to the above - only ever a plain
@@ -799,6 +1089,7 @@ function updateFilenameLabel() {
     return;
   }
   const dirty = isDirty();
+  updateCurrentTabMarker();
   el.editorFilename.textContent = active.filename + (dirty ? " •" : "");
   el.editorFilename.title = active.sessionId ? t("doc.altHintTooltip", { hintKey: HINT_KEY_NAME, hintSymbol: HINT_KEY_SYMBOL }) : "";
   el.saveBtn.classList.toggle("dirty", dirty);
@@ -2867,7 +3158,7 @@ function buildDocumentRow(projectId, sessionId, doc) {
       selectDocumentB(projectId, sessionId, doc.filename);
       return;
     }
-    selectDocument(projectId, sessionId, doc.filename);
+    openInTab(docRef(projectId, sessionId, doc.filename));
   });
 
   // system.md never appears as a row here (filtered out where this is
@@ -2978,7 +3269,7 @@ function buildSessionNode(projectId, id, session, allSessions) {
     { icon: "📁", label: t("folder.newSubfolder"), onSelect: () => createSubfolder(projectId, id) },
     { icon: "🎙", label: t("folder.transcribe"), onSelect: () => transcribeIntoSession(projectId, id) },
     "-",
-    { icon: "S", label: t("folder.systemPrompt"), onSelect: () => selectSessionSystemPrompt(projectId, id) },
+    { icon: "S", label: t("folder.systemPrompt"), onSelect: () => openSessionSystemPrompt(projectId, id) },
     { icon: "✎", label: t("doc.rename"), onSelect: () => renameSession(projectId, id) },
     { icon: "⤓", label: t("folder.exportPdfShort"), onSelect: () => exportSessionToPdf(projectId, id) },
     "-",
@@ -3072,7 +3363,7 @@ function buildProjectNode(id, project) {
   attachRowMenu(row, actions, () => [
     { icon: "+", label: t("project.newFolder"), onSelect: () => createSession(id) },
     "-",
-    { icon: "S", label: t("project.systemPrompt"), onSelect: () => selectProjectSystemPrompt(id) },
+    { icon: "S", label: t("project.systemPrompt"), onSelect: () => openInTab({ role: "project-system", projectId: id }) },
     { icon: "✎", label: t("doc.rename"), onSelect: () => renameProject(id) },
     "-",
     { icon: "×", label: t("project.delete"), danger: true, onSelect: () => removeProject(id) },
@@ -3156,7 +3447,7 @@ function buildHermesRow(session) {
   meta.textContent = bits.filter(Boolean).join(" · ");
 
   row.append(title, meta);
-  row.addEventListener("click", () => selectHermesSession(session));
+  row.addEventListener("click", () => openInTab({ role: "hermes-session", hermesSessionId: session.id, hermesTitle: session.title }));
   return row;
 }
 
@@ -3261,7 +3552,7 @@ function buildHermesTranscript(messages) {
 
 async function selectHermesSession(session) {
   if (streaming) return;
-  if (isDirty() && !confirm(t("confirm.unsavedChanges"))) return;
+  if (!openingTab && isDirty() && !confirm(t("confirm.unsavedChanges"))) return;
 
   let text;
   try {
@@ -3582,7 +3873,7 @@ function chooseQuickOpenResult(result, toSide) {
   const { entry } = result;
   closeQuickOpen();
   if (toSide) selectDocumentB(entry.projectId, entry.sessionId, entry.filename);
-  else selectDocument(entry.projectId, entry.sessionId, entry.filename);
+  else openInTab(docRef(entry.projectId, entry.sessionId, entry.filename));
 }
 
 async function openQuickOpen() {
@@ -3649,6 +3940,8 @@ function shortcutGroups() {
         { desc: "shortcuts.toggleTree", keys: [`${mod}B`] },
         { desc: "shortcuts.togglePreview", keys: [`${alt}${mod}B`] },
         { desc: "shortcuts.jumpDoc", keys: [`${HINT_KEY_SYMBOL}1-9`] },
+        { desc: "shortcuts.tabPrevNext", keys: [`${alt}[`, `${alt}]`] },
+        { desc: "shortcuts.tabClose", keys: [`${alt}W`] },
       ],
     },
     {
@@ -4001,7 +4294,7 @@ const PHONE_LAYOUT = window.matchMedia("(max-width: 700px)");
 // ready to type.
 async function selectDocument(projectId, sessionId, filename, { focus = true } = {}) {
   if (streaming) return;
-  if (isDirty() && !confirm(t("confirm.unsavedChanges"))) return;
+  if (!openingTab && isDirty() && !confirm(t("confirm.unsavedChanges"))) return;
 
   const project = projects.get(projectId);
   if (!project) return;
@@ -4140,7 +4433,7 @@ async function openInternalDocumentLink(event) {
     const doc = docs && docs.find((d) => d.filename === targetFilename);
     if (!doc) return;
     event.preventDefault();
-    selectDocument(active.projectId, active.sessionId, targetFilename);
+    openInTab(docRef(active.projectId, active.sessionId, targetFilename));
     return;
   }
 
@@ -4160,7 +4453,7 @@ async function openInternalDocumentLink(event) {
   }
   const doc = session.documents.find((d) => d.filename === targetFilename);
   if (!doc) return;
-  selectDocument(active.projectId, targetSessionId, targetFilename);
+  openInTab(docRef(active.projectId, targetSessionId, targetFilename));
 }
 
 // Holding the jump modifier (see HINT_KEYS below) shows "⌃1".."⌃9" (⌥ off a
@@ -4288,12 +4581,12 @@ async function openAltHint(index) {
   const entry = altHintDocs && altHintDocs[index - 1];
   exitAltHintMode();
   if (!entry) return;
-  await selectDocument(entry.projectId, entry.sessionId, entry.filename);
+  await openInTab(docRef(entry.projectId, entry.sessionId, entry.filename));
 }
 
 async function selectProjectSystemPrompt(projectId) {
   if (streaming) return;
-  if (isDirty() && !confirm(t("confirm.unsavedChanges"))) return;
+  if (!openingTab && isDirty() && !confirm(t("confirm.unsavedChanges"))) return;
 
   const { content } = await api.getProjectSystemPrompt(projectId);
   const project = projects.get(projectId);
@@ -4319,42 +4612,9 @@ async function selectProjectSystemPrompt(projectId) {
   setMobileView("editor");
 }
 
-async function selectSessionSystemPrompt(projectId, sessionId) {
-  if (streaming) return;
-  if (isDirty() && !confirm(t("confirm.unsavedChanges"))) return;
-
-  const project = projects.get(projectId);
-  if (!project) return;
-  const session = project.sessions && project.sessions.get(sessionId);
-  if (!session) return;
-  if (session.documents === null) {
-    session.documents = await api.listDocuments(projectId, sessionId);
-  }
-  const doc = session.documents.find((d) => d.role === "system");
-  if (!doc) return;
-
-  // Reuses the ordinary "system" role/save path (saveActive's generic
-  // api.saveDocument branch already handles it - system.md is a real
-  // document under the hood, just no longer listed as a row - see
-  // buildSessionNode) rather than inventing a session-system-specific one.
-  active = { projectId, sessionId, filename: doc.filename, role: "system", savedContent: doc.content };
-  saveActiveDocRef();
-  el.editor.value = doc.content;
-  maybeRestoreAutosave();
-  el.editor.disabled = false;
-  el.saveBtn.disabled = false;
-  updateSendToolbarVisibility();
-  updateFormatToolbar();
-  updateSendAvailability();
-  updateFilenameLabel();
-  renderPreview();
-  renderTree();
-  setMobileView("editor");
-}
-
 async function selectGlobalPrompt() {
   if (streaming) return;
-  if (isDirty() && !confirm(t("confirm.unsavedChanges"))) return;
+  if (!openingTab && isDirty() && !confirm(t("confirm.unsavedChanges"))) return;
 
   const { content } = await api.getGlobalSystemPrompt();
   globalSystemPromptContent = content;
@@ -4386,7 +4646,7 @@ async function selectGlobalPrompt() {
 // variant.
 async function selectGlobalCustomSymbols() {
   if (streaming) return;
-  if (isDirty() && !confirm(t("confirm.unsavedChanges"))) return;
+  if (!openingTab && isDirty() && !confirm(t("confirm.unsavedChanges"))) return;
 
   const { content } = await api.getCustomSymbols();
   globalCustomSymbolsContent = content;
@@ -4415,7 +4675,7 @@ async function createDraft(projectId, sessionId) {
   const draft = await api.createDraft(projectId, sessionId);
   await refreshSessionDocs(projectId, sessionId);
   renderTree();
-  await selectDocument(projectId, sessionId, draft.filename);
+  await openInTab(docRef(projectId, sessionId, draft.filename));
 }
 
 // The transcript arrives as an ordinary draft already written to disk (see
@@ -4428,7 +4688,7 @@ function transcribeIntoSession(projectId, sessionId) {
     onDone: async (doc) => {
       await refreshSessionDocs(projectId, sessionId);
       renderTree();
-      await selectDocument(projectId, sessionId, doc.filename);
+      await openInTab(docRef(projectId, sessionId, doc.filename));
     },
   });
 }
@@ -4453,7 +4713,7 @@ async function removeProject(id) {
   if (!confirm(t("confirm.deleteProject", { note: countNote }))) return;
   await api.deleteProject(id);
   projects.delete(id);
-  if (active && active.projectId === id) clearEditor();
+  await dropTabs((ref) => ref.projectId === id);
   renderTree();
 }
 
@@ -4480,11 +4740,9 @@ async function removeSession(projectId, id) {
   await api.deleteConversation(projectId, id);
   await refreshProjectSessions(projectId);
   const project = projects.get(projectId);
-  const activeFolderStillExists =
-    project && project.sessions && active && active.sessionId && project.sessions.has(active.sessionId);
-  if (active && active.projectId === projectId && active.sessionId && !activeFolderStillExists) {
-    clearEditor();
-  }
+  // Deleting a folder deletes its subfolders too - close every tab whose
+  // folder is gone.
+  await dropTabs((ref) => ref.projectId === projectId && ref.sessionId && !(project && project.sessions && project.sessions.has(ref.sessionId)));
   renderTree();
 }
 
@@ -4501,9 +4759,7 @@ async function removeDocument(projectId, sessionId, filename, role) {
   if (!confirm(message)) return;
   await api.deleteDocument(projectId, sessionId, filename);
   await refreshSessionDocs(projectId, sessionId);
-  if (active && active.projectId === projectId && active.sessionId === sessionId && active.filename === filename) {
-    clearEditor();
-  }
+  await dropTabs((ref) => ref.role === "document" && ref.projectId === projectId && ref.sessionId === sessionId && ref.filename === filename);
   // Deleted out from under the split-view pane too - closeSplitView's own
   // unsaved-changes confirm would be asking about content that no longer
   // has anywhere to save to, so this clears it directly instead.
@@ -4588,7 +4844,7 @@ async function renameDocument(projectId, sessionId, filename) {
 // same kind of always-on, app-wide CSV document as the custom symbols.
 async function selectGlobalSpokenMath() {
   if (streaming) return;
-  if (isDirty() && !confirm(t("confirm.unsavedChanges"))) return;
+  if (!openingTab && isDirty() && !confirm(t("confirm.unsavedChanges"))) return;
 
   const { content } = await api.getSpokenMath();
   setSpokenMathVocabulary(parseSpokenMathCsv(content));
@@ -5734,9 +5990,9 @@ async function createSubfolder(projectId, parentId) {
 }
 
 el.newProjectBtn.addEventListener("click", createProject);
-el.globalSystemRow.addEventListener("click", selectGlobalPrompt);
-el.globalCustomSymbolsRow.addEventListener("click", selectGlobalCustomSymbols);
-el.globalSpokenMathRow.addEventListener("click", selectGlobalSpokenMath);
+el.globalSystemRow.addEventListener("click", () => openInTab({ role: "global-system" }));
+el.globalCustomSymbolsRow.addEventListener("click", () => openInTab({ role: "global-custom-symbols" }));
+el.globalSpokenMathRow.addEventListener("click", () => openInTab({ role: "global-spoken-math" }));
 el.hermesHeader.addEventListener("click", toggleHermesSection);
 el.mobileTabs.addEventListener("click", (e) => {
   const btn = e.target.closest(".mobile-tab");
@@ -6132,12 +6388,25 @@ function toggleSplitFocus() {
   // useful to focus there, so pressing this while in pane A just does
   // nothing rather than moving focus into an uneditable, empty pane.
 }
+// Tabs: ⌥W (Alt+W) closes the current one, ⌥[ / ⌥] (Alt+[ / Alt+]) go to
+// the previous / next. ⌘W and ⌃Tab belong to the browser and can't be had.
+document.addEventListener("keydown", (e) => {
+  if (!e.altKey || e.metaKey || e.ctrlKey || e.shiftKey || !el.quickOpenOverlay.hidden || !el.shortcutsOverlay.hidden) return;
+  if (e.code === "KeyW" && currentTab >= 0) {
+    e.preventDefault();
+    closeTab(currentTab);
+  } else if ((e.code === "BracketLeft" || e.code === "BracketRight") && tabs.length > 1) {
+    e.preventDefault();
+    const step = e.code === "BracketLeft" ? -1 : 1;
+    switchToTab((currentTab + step + tabs.length) % tabs.length);
+  }
+});
 document.addEventListener("keyup", (e) => {
   if (HINT_KEYS.includes(e.key)) exitAltHintMode();
 });
 window.addEventListener("blur", exitAltHintMode);
 window.addEventListener("beforeunload", (e) => {
-  if (isDirty() || isDirtyB()) {
+  if (isDirty() || isDirtyB() || tabs.some((tab, i) => i !== currentTab && stashDirty(tab.stash))) {
     e.preventDefault();
     e.returnValue = "";
   }
@@ -6202,6 +6471,17 @@ async function loadAuthInfo() {
   setCustomAsciiMathSymbols(parseCustomSymbolsCsv(globalCustomSymbolsContent));
   setSpokenMathVocabulary(parseSpokenMathCsv((await api.getSpokenMath()).content));
   clearEditor();
-  await restoreActiveDocument(urlDocRef || savedDocRef);
+  // Tabs come back as they were; the one that was on screen (or the one a
+  // /d/... URL names) is the one loaded now - the rest load when switched to.
+  const savedTabs = loadTabs();
+  if (savedTabs) tabs = savedTabs.tabs.filter((tab) => tab.ref).map(({ ref, title }) => ({ ref, title, stash: null }));
+  const startRef = urlDocRef || (savedTabs && tabs[savedTabs.current] && tabs[savedTabs.current].ref) || savedDocRef;
+  const startAt = tabs.findIndex((tab) => sameDocRef(tab.ref, startRef));
+  if (startAt >= 0) await switchToTab(startAt, { keepCurrent: false });
+  else if (startRef) {
+    currentTab = tabs.length - 1;
+    await openInTab(startRef);
+  }
+  renderTabs();
   await restoreActiveDocumentB(savedDocRefB);
 })();

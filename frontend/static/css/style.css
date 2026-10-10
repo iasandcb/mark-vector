@@ -958,6 +958,94 @@ body.row-dragging {
   display: none;
 }
 
+/* Open documents (see the tabs section in app.js). One row that scrolls
+   sideways rather than wrapping, so the editor never loses height to it. */
+.tab-strip {
+  display: flex;
+  gap: 2px;
+  padding: 6px 8px 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tab-strip::-webkit-scrollbar {
+  display: none;
+}
+
+.editor-tab {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  max-width: 220px;
+  padding: 5px 6px 5px 12px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.editor-tab:hover {
+  color: var(--text);
+}
+
+.editor-tab.current {
+  background: var(--panel);
+  border-color: var(--border);
+  color: var(--text);
+  margin-bottom: -1px;
+}
+
+.editor-tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Unsaved: a dot in place of the ×, which comes back on hover. */
+.editor-tab-close {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: inherit;
+  font-size: 14px;
+  line-height: 18px;
+  cursor: pointer;
+  opacity: 0.6;
+}
+
+.editor-tab-close:hover {
+  background: var(--active-bg);
+  opacity: 1;
+}
+
+.editor-tab.dirty .editor-tab-close {
+  font-size: 0;
+}
+
+.editor-tab.dirty .editor-tab-close::before {
+  content: "●";
+  font-size: 10px;
+  color: var(--accent);
+}
+
+.editor-tab.dirty:hover .editor-tab-close {
+  font-size: 14px;
+}
+
+.editor-tab.dirty:hover .editor-tab-close::before {
+  content: none;
+}
+
 .pane-header {
   padding: 10px 16px;
   border-bottom: 1px solid var(--border);
