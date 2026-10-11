@@ -852,6 +852,32 @@ body.row-dragging {
   border-bottom-right-radius: 0;
 }
 
+/* Phone: the editor header's icon buttons (eight with dictation's two
+   selects) need about 470px at desktop spacing and wrapped to a second row
+   on a 390px screen - tighter padding and gaps keep them on one, down to
+   360px. */
+@media (max-width: 700px) {
+  .editor-pane > .pane-header {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+  .editor-actions {
+    gap: 4px;
+  }
+  .editor-actions .secondary-btn,
+  .editor-actions .primary-btn {
+    padding: 6px;
+  }
+  .editor-actions .dictation-lang {
+    padding: 0 2px;
+  }
+  /* What room is left is a sliver - the filename showed as a stray "0".
+     The document is named by its tab (two or more open) and in the list. */
+  #editor-filename {
+    display: none;
+  }
+}
+
 .dictation-lang {
   border: 1px solid var(--border);
   border-left: none;
