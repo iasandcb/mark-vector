@@ -933,43 +933,47 @@ def revert_turn_to_draft(project_id: str, conv_id: str, filename: str) -> dict:
 _DATE_FILENAME_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})\.md$")
 
 
-def _next_draft_filename(meta: dict, conv_dir: Path) -> str:
-    """A folder used as a daily log/journal - every document named exactly
-    "YYYY-MM-DD.md" - continues that sequence with the next calendar day
-    instead of the usual NNNN.md numbering, so "새 문서" just keeps writing
-    tomorrow's entry. Only the *last* filename (plain alphabetical order,
+def _next_draft_filename(meta: dict, conv_dir: Path, today: date) -> str:
+    """A folder used as a daily log/journal - its last document named
+    "YYYY-MM-DD.md" - gets a new document named for today instead of the
+    usual NNNN.md numbering, so "새 문서" starts today's entry whatever day
+    the last one was written. When today's already exists, it continues
+    with the day after the last entry instead (a second entry "for today"
+    still needs a name of its own). Only the *last* filename (plain alphabetical order,
     same as list_documents' own sort - system.md is never date-named so
     never interferes) is checked, not every file in the folder: a folder
     that's mixed NNNN.md and date-named documents, or has gaps, should only
     ever continue from whatever's actually most recent, not the first date
     that happens to match. Falls back to the plain numbered scheme when the
     last file isn't date-named, or (this should only ever matter for a
-    concurrent double-call - the "last" file being date-named already rules
-    out tomorrow's slot being taken any other way) when the computed
-    filename is somehow taken already."""
+    concurrent double-call) when both candidate names are somehow taken
+    already."""
     existing = sorted(p.name for p in conv_dir.glob("*.md") if p.name != SYSTEM_FILENAME)
     if existing:
         match = _DATE_FILENAME_RE.match(existing[-1])
         if match:
             last_date = date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
-            next_filename = f"{last_date + timedelta(days=1):%Y-%m-%d}.md"
-            if not (conv_dir / next_filename).exists():
-                return next_filename
+            for candidate in (today, last_date + timedelta(days=1)):
+                next_filename = f"{candidate:%Y-%m-%d}.md"
+                if not (conv_dir / next_filename).exists():
+                    return next_filename
     return f"{_next_document_index(meta, conv_dir):04d}.md"
 
 
-def create_draft(project_id: str, conv_id: str) -> dict:
+def create_draft(project_id: str, conv_id: str, today: date | None = None) -> dict:
     """Shares start_exchange's own NNNN.md numbering (see
     _next_document_index) rather than a separate random-uuid scheme, so a
     draft's filename never has to change when it's later sent - it's simply
     registered as a turn in place, still under the same number. See
     _next_draft_filename for the one exception, a folder already in
-    "YYYY-MM-DD.md per document" form."""
+    "YYYY-MM-DD.md per document" form - `today` is the date to name the new
+    entry after there (the caller's own calendar day; this server's if not
+    given)."""
     conv_dir = _conversations_dir(project_id) / conv_id
     if not conv_dir.exists():
         raise FileNotFoundError(conv_id)
     meta = _read_meta(project_id, conv_id)
-    filename = _next_draft_filename(meta, conv_dir)
+    filename = _next_draft_filename(meta, conv_dir, today or date.today())
     (conv_dir / filename).write_text("", encoding="utf-8")
     return {"filename": filename, "role": "draft", "turn_id": None, "content": "", "updated_at": _now()}
 

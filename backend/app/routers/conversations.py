@@ -1,5 +1,6 @@
 import asyncio
 import json
+from datetime import date
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -89,9 +90,17 @@ def list_documents(project_id: str, conv_id: str):
 
 
 @router.post("/{conv_id}/documents")
-def create_draft(project_id: str, conv_id: str):
+def create_draft(project_id: str, conv_id: str, today: str | None = None):
+    # `today` is the browser's own calendar day (YYYY-MM-DD) - what a new
+    # entry in a date-named folder is called (see
+    # storage._next_draft_filename). This server runs in UTC, where it can
+    # still be yesterday or already tomorrow for the person writing.
     try:
-        return storage.create_draft(project_id, conv_id)
+        day = date.fromisoformat(today) if today else None
+    except ValueError:
+        day = None
+    try:
+        return storage.create_draft(project_id, conv_id, today=day)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Conversation not found")
 

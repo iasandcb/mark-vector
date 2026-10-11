@@ -172,9 +172,30 @@ def test_two_drafts_created_before_either_is_sent_get_distinct_numbers(isolated_
 
 
 class TestDailyLogDraftNaming:
-    """A folder used as a daily log - every document named "YYYY-MM-DD.md" -
-    has create_draft continue that sequence with tomorrow's date instead of
-    the usual NNNN.md numbering (see storage._next_draft_filename)."""
+    """A folder used as a daily log - its last document named
+    "YYYY-MM-DD.md" - has create_draft name the new one after today instead
+    of the usual NNNN.md numbering (see storage._next_draft_filename)."""
+
+    def test_new_document_is_named_for_today(self, isolated_data_dir, pid):
+        conv = storage.create_conversation(pid)
+        filename = storage.create_draft(pid, conv["id"])["filename"]
+        storage.save_document(pid, conv["id"], filename, "")
+        storage.rename_document(pid, conv["id"], filename, "2026-01-05.md")
+
+        # Days later - not the day after the last entry, today.
+        draft = storage.create_draft(pid, conv["id"], today=date(2026, 1, 20))
+        assert draft["filename"] == "2026-01-20.md"
+
+        # A second one the same day still needs a name: the day after the last.
+        again = storage.create_draft(pid, conv["id"], today=date(2026, 1, 20))
+        assert again["filename"] == "2026-01-21.md"
+
+    def test_today_defaults_to_the_servers_date(self, isolated_data_dir, pid):
+        conv = storage.create_conversation(pid)
+        filename = storage.create_draft(pid, conv["id"])["filename"]
+        storage.save_document(pid, conv["id"], filename, "")
+        storage.rename_document(pid, conv["id"], filename, "2026-01-05.md")
+        assert storage.create_draft(pid, conv["id"])["filename"] == f"{date.today():%Y-%m-%d}.md"
 
     def test_continues_from_the_last_dated_document(self, isolated_data_dir, pid):
         conv = storage.create_conversation(pid)
@@ -186,7 +207,8 @@ class TestDailyLogDraftNaming:
         today_name = f"{today:%Y-%m-%d}.md"
         storage.rename_document(pid, conv["id"], "0001.md", today_name)
 
-        draft = storage.create_draft(pid, conv["id"])
+        # Today's entry exists already, so the next one is tomorrow's.
+        draft = storage.create_draft(pid, conv["id"], today=today)
 
         assert draft["filename"] == f"{today + timedelta(days=1):%Y-%m-%d}.md"
 
@@ -204,7 +226,9 @@ class TestDailyLogDraftNaming:
             storage.save_document(pid, conv["id"], filename, "")
             storage.rename_document(pid, conv["id"], filename, f"{d:%Y-%m-%d}.md")
 
-        draft = storage.create_draft(pid, conv["id"])
+        # `later` is the last file and today's is taken (it is `later`):
+        # the day after the last, not the day after some earlier one.
+        draft = storage.create_draft(pid, conv["id"], today=later)
 
         assert draft["filename"] == f"{later + timedelta(days=1):%Y-%m-%d}.md"
 

@@ -124,7 +124,12 @@ export function listDocuments(projectId, id) {
 }
 
 export function createDraft(projectId, id) {
-  return fetch(`${BASE}/projects/${projectId}/conversations/${id}/documents`, { method: "POST" }).then(asJson);
+  // Today as this browser sees it: a folder of YYYY-MM-DD.md documents
+  // names its next one after it (see storage._next_draft_filename), and the
+  // server's own clock is UTC.
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  return fetch(`${BASE}/projects/${projectId}/conversations/${id}/documents?today=${today}`, { method: "POST" }).then(asJson);
 }
 
 export function saveDocument(projectId, id, filename, content) {
