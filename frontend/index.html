@@ -110,6 +110,12 @@
             <span class="btn-icon" aria-hidden="true">👁</span>
             <span class="btn-label" data-i18n="editor.thread"></span>
           </button>
+          <!-- Shown while split view has a document open: on, messages sent
+               from here carry that document and may write to it - see the
+               "document editing" section in app.js. -->
+          <button id="edit-target-btn" class="secondary-btn" type="button" hidden aria-pressed="false">
+            <span class="btn-icon" aria-hidden="true">✏️</span>
+          </button>
           <button id="send-btn" class="primary-btn" disabled data-i18n-title="editor.send">
             <span class="btn-icon" aria-hidden="true">💬</span>
             <span class="btn-label" data-i18n="editor.send"></span>
@@ -225,6 +231,13 @@
           </button>
           <button id="close-split-btn" class="icon-btn" type="button" data-i18n-title="ui.closeSplit">×</button>
         </div>
+      </div>
+      <!-- What the conversation in the other pane just changed here, with a
+           way back - see the "document editing" section in app.js. -->
+      <div id="doc-edit-strip" class="sync-conflict" hidden>
+        <span id="doc-edit-summary"></span>
+        <button id="doc-edit-undo-btn" class="secondary-btn" type="button" data-i18n="docEdit.undo"></button>
+        <button id="doc-edit-dismiss-btn" class="icon-btn" type="button" data-i18n-title="docEdit.dismiss">×</button>
       </div>
       <textarea id="editor-b" class="editor" data-i18n-placeholder="editor.placeholder" disabled></textarea>
       <div class="scroll-nav">

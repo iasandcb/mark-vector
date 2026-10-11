@@ -201,6 +201,49 @@ def unpublish_document(project_id: str, conv_id: str, filename: str):
     return {"ok": True}
 
 
+# Bounds what one request carries; a document past it keeps its beginning
+# (and says so), since edits are matched against the text the model saw.
+TARGET_DOCUMENT_MAX_CHARS = 200_000
+
+
+def _target_document_prompt(filename: str, content: str) -> str:
+    """The document open beside the conversation, plus the edit-block
+    protocol the frontend understands (app.js's parseEditBlocks). Plain text
+    rather than tool calling, so every provider - Anthropic, OpenAI, the
+    ChatGPT plan, an OpenAI-compatible gateway - works the same way."""
+    truncated = len(content) > TARGET_DOCUMENT_MAX_CHARS
+    shown = content[:TARGET_DOCUMENT_MAX_CHARS]
+    note = "\n(The document continues past this point; only the part shown can be edited.)" if truncated else ""
+    state = "It is empty." if not content.strip() else "Its current text is between the <document> tags below."
+    return (
+        f'The user has a document open beside this conversation: "{filename}". {state}\n\n'
+        "You can write to this document and edit it. When the user asks for that, answer briefly as "
+        "usual and put the changes in edit blocks - the app applies them to the document, so do not "
+        "repeat the new text outside the blocks, and do not ask the user to paste anything. When the "
+        "user only asks a question about the document, answer it without any edit block.\n\n"
+        "An edit block is a code block fenced with FOUR backticks and the language `edit`:\n\n"
+        "````edit\n"
+        "<<<<<<< SEARCH\n"
+        "text to find, copied exactly from the document\n"
+        "=======\n"
+        "text to put in its place\n"
+        ">>>>>>> REPLACE\n"
+        "````\n\n"
+        "- SEARCH must match the document character for character and appear in it only once; "
+        "include a neighboring line if needed to make it unique. Keep it short - a few lines.\n"
+        "- To add text at the end of the document, leave SEARCH empty.\n"
+        "- To insert text somewhere else, SEARCH for the line it goes after and repeat that line in the replacement.\n"
+        "- To delete text, leave the replacement empty.\n"
+        "- Use one block per place changed, in document order.\n"
+        "- To replace the whole document, use one block fenced with four backticks and the language "
+        "`rewrite` holding the complete new text, with no SEARCH/REPLACE markers.\n"
+        "- Write in the document's own language, style and math notation.\n\n"
+        "The text below is the document as it is right now. Trust it over anything earlier in this "
+        "conversation: an edit you made before may have been undone or changed by the user since.\n\n"
+        f"<document>\n{shown}\n</document>{note}"
+    )
+
+
 @router.post("/{conv_id}/messages")
 async def send_message(project_id: str, conv_id: str, req: CreateMessageRequest):
     try:
@@ -292,7 +335,12 @@ async def send_message(project_id: str, conv_id: str, req: CreateMessageRequest)
     global_prompt = storage.get_global_system_prompt().strip()
     project_prompt = storage.get_project_system_prompt(project_id).strip()
     folder_chain = storage.get_system_prompt_chain(project_id, conv_id)
-    system_prompt = "\n\n".join(p for p in (global_prompt, project_prompt, *folder_chain) if p) or None
+    target_prompt = (
+        _target_document_prompt(req.target_document.filename, req.target_document.content)
+        if req.target_document
+        else ""
+    )
+    system_prompt = "\n\n".join(p for p in (global_prompt, project_prompt, *folder_chain, target_prompt) if p) or None
 
     async def event_stream():
         yield json.dumps({"type": "user_turn", "turn": turn}) + "\n"

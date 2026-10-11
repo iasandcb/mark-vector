@@ -23,6 +23,16 @@ class CreateConversationRequest(BaseModel):
     parent_id: str | None = None
 
 
+class TargetDocument(BaseModel):
+    """The document open beside the conversation (split view's other pane)
+    that this message may write to or edit - sent as the editor currently
+    shows it, unsaved changes included. See
+    routers/conversations.py's _target_document_prompt."""
+
+    filename: str
+    content: str
+
+
 class CreateMessageRequest(BaseModel):
     content: str
     provider: str
@@ -49,6 +59,10 @@ class CreateMessageRequest(BaseModel):
     # left at the default True includes it like any other prior turn; only
     # the request that set this False itself goes out context-free.
     include_history: bool = True
+    # Set when the conversation is editing the document beside it: the
+    # model gets that document and may answer with edit blocks, which the
+    # frontend applies to it (see app.js's "document editing" section).
+    target_document: TargetDocument | None = None
     # Which other turns count as "history" when include_history is True -
     # see storage.build_history_for_turn/CONTEXT_SCOPES. "default": only
     # this turn's own content. "sibling": every turn in this same folder

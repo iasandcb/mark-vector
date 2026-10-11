@@ -88,6 +88,39 @@ def test_include_history_defaults_to_true(isolated_data_dir, client, recording_p
     ]
 
 
+def test_target_document_goes_into_the_system_prompt_with_the_edit_protocol(isolated_data_dir, client, recording_provider):
+    pid = storage.create_project("p")["id"]
+    conv_id = storage.create_conversation(pid)["id"]
+
+    resp = client.post(
+        f"/api/projects/{pid}/conversations/{conv_id}/messages",
+        json={
+            "content": "질문 10개를 추가해줘",
+            "provider": "openai",
+            "model": "gpt-test",
+            "target_document": {"filename": "draft.md", "content": "# 질문\n\n1. 첫 질문"},
+        },
+    )
+    assert resp.status_code == 200
+    prompt = recording_provider.received_system_prompt
+    assert '"draft.md"' in prompt
+    assert "<document>\n# 질문\n\n1. 첫 질문\n</document>" in prompt
+    assert "````edit" in prompt and "<<<<<<< SEARCH" in prompt
+    # The request itself is unchanged - the document is context, not a turn.
+    assert recording_provider.received_messages == [{"role": "user", "content": "질문 10개를 추가해줘"}]
+
+
+def test_no_target_document_leaves_the_system_prompt_alone(isolated_data_dir, client, recording_provider):
+    pid = storage.create_project("p")["id"]
+    conv_id = storage.create_conversation(pid)["id"]
+    resp = client.post(
+        f"/api/projects/{pid}/conversations/{conv_id}/messages",
+        json={"content": "안녕", "provider": "openai", "model": "gpt-test"},
+    )
+    assert resp.status_code == 200
+    assert recording_provider.received_system_prompt is None
+
+
 def test_default_scope_excludes_other_turns_in_the_same_folder(isolated_data_dir, client, recording_provider):
     pid = storage.create_project("p")["id"]
     conv_id = storage.create_conversation(pid)["id"]

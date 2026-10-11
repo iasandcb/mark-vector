@@ -301,6 +301,9 @@ export async function sendMessage(projectId, id, content, settings, onEvent) {
       draft_filename: settings.draftFilename || null,
       retry_turn_id: settings.retryTurnId || null,
       language: settings.language,
+      // The document beside the conversation, when the conversation is
+      // editing it - see app.js's "document editing" section.
+      target_document: settings.targetDocument || null,
     }),
   });
   await streamNdjson(res, onEvent);

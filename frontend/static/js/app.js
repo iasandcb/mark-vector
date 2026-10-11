@@ -17,6 +17,7 @@ import { openTranscribeDialog } from "./transcribe.js";
 import { createGamepadRemote } from "./remote.js";
 import { splitSlides, lastSlideStart } from "./slides.js";
 import { startRealtimeTranscription } from "./realtime-stt.js";
+import { parseEditBlocks, applyEditBlock, collapseEditBlocks } from "./doc-edits.js";
 
 // Inline-thread markers. Declared up here, away from the rest of the
 // inline-thread code further down, because `el` below builds the editor,
@@ -86,6 +87,11 @@ const el = {
   previewScrollBottomBtn: document.getElementById("preview-scroll-bottom-btn"),
   editorFilename: document.getElementById("editor-filename"),
   tabStrip: document.getElementById("tab-strip"),
+  editTargetBtn: document.getElementById("edit-target-btn"),
+  docEditStrip: document.getElementById("doc-edit-strip"),
+  docEditSummary: document.getElementById("doc-edit-summary"),
+  docEditUndoBtn: document.getElementById("doc-edit-undo-btn"),
+  docEditDismissBtn: document.getElementById("doc-edit-dismiss-btn"),
   toolStatus: document.getElementById("tool-status"),
   remoteBtn: document.getElementById("remote-btn"),
   syncConflict: document.getElementById("sync-conflict"),
@@ -319,6 +325,19 @@ let active = null; // { projectId, sessionId, filename, role, savedContent }
 // too: pane B never generates anything, so nothing about it needs to lock
 // while pane A is mid-send.
 let activeB = null; // { projectId, sessionId, filename, role, savedContent }
+// Whether a message sent from pane A carries pane B's document and may
+// edit it, and the last send's edits to it - see the "document editing from
+// the conversation" section. Declared up here, next to the pane state the
+// functions reading them (updateEditTargetButton & co.) also read.
+const EDIT_TARGET_KEY = "mark-vector:edit-target";
+let editTargetOn = (() => {
+  try {
+    return localStorage.getItem(EDIT_TARGET_KEY) !== "0";
+  } catch (err) {
+    return true;
+  }
+})();
+let docEdit = null; // { doc, before, reply, seen, applied, failed }
 let streaming = false;
 let globalSystemPromptContent = "";
 let globalCustomSymbolsContent = "";
@@ -1109,11 +1128,16 @@ function updateFilenameLabelB() {
   if (!activeB) {
     el.editorFilenameB.textContent = t("editor.selectDocument");
     el.saveBtnB.classList.remove("dirty");
+    updateEditTargetButton();
+    hideDocEditStrip();
     return;
   }
   const dirty = isDirtyB();
   el.editorFilenameB.textContent = activeB.filename + (dirty ? " •" : "");
   el.saveBtnB.classList.toggle("dirty", dirty);
+  updateEditTargetButton();
+  // The strip is about one document - gone once pane B shows another.
+  if (docEdit && docEdit.doc !== activeB) hideDocEditStrip();
 }
 
 // A document with no math directive of its own inherits one, in order:
@@ -1940,6 +1964,7 @@ function updateSendAvailability() {
   // key", which used to be the other way this warning could show.
   el.providerWarning.hidden = providers.length > 0;
   el.sendBtn.disabled = !active || streaming || NON_SENDABLE_ROLES.has(active.role) || !usable;
+  updateEditTargetButton();
   updateDictationButton();
   // Skip while a send is in flight - sendActive/sendInlineCompletion force
   // reasoningSelect.disabled = true themselves for the duration and restore
@@ -5327,6 +5352,9 @@ function stripInlineThreads(text) {
 // it - which also means a Markdown construct can't span a thread boundary,
 // a fair trade for a block-level divider.
 function renderDocumentWithThreads(text, dialect) {
+  // A reply that edited the document beside it reads as "edited", not as
+  // its raw SEARCH/REPLACE blocks (see doc-edits.js).
+  text = collapseEditBlocks(text, `> ✏️ ${t("docEdit.blockNote")}`);
   const threads = inlineThreads(text);
   if (!threads.length) return renderMarkdown(text, dialect);
   // Each segment is rendered on its own, so only the one holding the
@@ -5720,6 +5748,87 @@ async function sendInlineCompletion() {
 // job (sendInlineCompletion above), never something inferred from the draft's
 // save state or cursor position here - which it used to be, and which made
 // this button silently mean two different things.
+// ---------- document editing from the conversation ----------
+//
+// With split view showing a document, the conversation in pane A can write
+// to it: a message sent with the ✏️ toggle on carries pane B's text (as the
+// editor shows it, unsaved edits included), the model answers with edit
+// blocks (see doc-edits.js and the backend's _target_document_prompt), and
+// each block is applied to pane B as it finishes streaming - as ordinary
+// unsaved edits. Nothing is saved for the user; the strip above pane B says
+// what changed and takes it all back in one click.
+
+function editTargetAvailable() {
+  return splitViewOpen() && !!activeB && !!active && !NON_SENDABLE_ROLES.has(active.role);
+}
+
+function updateEditTargetButton() {
+  const available = editTargetAvailable();
+  el.editTargetBtn.hidden = !available;
+  if (!available) return;
+  el.editTargetBtn.setAttribute("aria-pressed", editTargetOn ? "true" : "false");
+  el.editTargetBtn.title = t(editTargetOn ? "docEdit.targetOn" : "docEdit.targetOff", { name: activeB.filename });
+}
+
+function toggleEditTarget() {
+  editTargetOn = !editTargetOn;
+  try {
+    localStorage.setItem(EDIT_TARGET_KEY, editTargetOn ? "1" : "0");
+  } catch (err) {
+    // localStorage unavailable - the choice just won't persist across reloads
+  }
+  updateEditTargetButton();
+}
+
+function hideDocEditStrip() {
+  docEdit = null;
+  el.docEditStrip.hidden = true;
+}
+
+function showDocEditStrip() {
+  if (!docEdit || (!docEdit.applied && !docEdit.failed)) return;
+  const parts = [];
+  if (docEdit.applied) parts.push(t("docEdit.applied", { count: docEdit.applied }));
+  if (docEdit.failed) parts.push(t("docEdit.failed", { count: docEdit.failed }));
+  el.docEditSummary.textContent = parts.join(" · ");
+  el.docEditUndoBtn.hidden = !docEdit.applied;
+  el.docEditStrip.hidden = false;
+}
+
+// Applies whichever edit blocks have finished arriving since the last call.
+function applyReplyEdits({ final = false } = {}) {
+  const edit = docEdit;
+  // Pane B was pointed at another document mid-reply - the rest isn't for it.
+  if (!edit || activeB !== edit.doc) return;
+  const blocks = parseEditBlocks(edit.reply, { final });
+  let changed = false;
+  for (; edit.seen < blocks.length; edit.seen++) {
+    const result = applyEditBlock(el.editorB.value, blocks[edit.seen]);
+    if (!result) {
+      edit.failed += 1;
+      continue;
+    }
+    el.editorB.replaceRange(result.from, result.to, result.text);
+    // Leaves the newest change selected (and scrolled to), so it can be found.
+    el.editorB.setSelectionRange(result.start, result.end);
+    edit.applied += 1;
+    changed = true;
+  }
+  if (changed) {
+    updateFilenameLabelB();
+    if (previewSource === "b") renderPreview();
+  }
+  if (changed || final) showDocEditStrip();
+}
+
+function undoDocEdit() {
+  if (!docEdit || activeB !== docEdit.doc) return;
+  el.editorB.value = docEdit.before;
+  updateFilenameLabelB();
+  if (previewSource === "b") renderPreview();
+  hideDocEditStrip();
+}
+
 async function sendActive() {
   if (!active || streaming || NON_SENDABLE_ROLES.has(active.role)) return;
   const rawContent = el.editor.value;
@@ -5761,8 +5870,13 @@ async function sendActive() {
     // pair gets attached to whatever's new in this send - see i18n.js and
     // storage.py's EXCHANGE_HEADINGS.
     language: getLanguage(),
+    targetDocument: editTargetOn && editTargetAvailable() ? { filename: activeB.filename, content: el.editorB.value } : null,
   };
   if (!settings.provider || !settings.model) return;
+  hideDocEditStrip();
+  if (settings.targetDocument) {
+    docEdit = { doc: activeB, before: el.editorB.value, reply: "", seen: 0, applied: 0, failed: 0 };
+  }
   const displayUserContent = pending ? pending.question : content;
   const { projectId, sessionId } = active;
 
@@ -5843,10 +5957,15 @@ async function sendActive() {
           streamFollow.editor = streamFollow.preview = true;
         }
         el.editor.append(event.text);
+        if (docEdit) {
+          docEdit.reply += event.text;
+          applyReplyEdits();
+        }
         renderPreview();
         followStream();
       } else if (event.type === "assistant_turn") {
         completed = true;
+        applyReplyEdits({ final: true });
         await refreshSessionDocs(projectId, sessionId);
         active = { projectId, sessionId, filename: event.turn.file, role: "exchange", savedContent: event.turn.content, turnId: event.turn.id };
         saveActiveDocRef();
@@ -6130,6 +6249,9 @@ el.editorB.addEventListener("keydown", (e) => {
 });
 el.viewModeBtn.addEventListener("click", toggleEditorViewMode);
 el.saveBtnB.addEventListener("click", saveDocumentB);
+el.editTargetBtn.addEventListener("click", toggleEditTarget);
+el.docEditUndoBtn.addEventListener("click", undoDocEdit);
+el.docEditDismissBtn.addEventListener("click", hideDocEditStrip);
 el.closeSplitBtn.addEventListener("click", closeSplitView);
 el.splitToggleBtn.addEventListener("click", () => {
   if (splitViewOpen()) closeSplitView();
