@@ -624,6 +624,23 @@ async function closeTab(index, { force = false } = {}) {
   renderTabs();
 }
 
+// Closes every tab but `keep` (the current one unless told otherwise) -
+// one question for all the unsaved ones among them rather than one each.
+async function closeOtherTabs(keep = currentTab) {
+  if (streaming || keep < 0 || keep >= tabs.length || tabs.length < 2) return;
+  if (keep !== currentTab) {
+    await switchToTab(keep);
+    if (currentTab < 0 || !sameDocRef(tabs[currentTab].ref, activeDocRef())) return;
+    keep = currentTab;
+  }
+  const unsaved = tabs.filter((tab, i) => i !== keep && stashDirty(tab.stash)).length;
+  if (unsaved && !confirm(t("tabs.confirmCloseOthers", { count: unsaved }))) return;
+  tabs = [tabs[keep]];
+  currentTab = 0;
+  saveTabs();
+  renderTabs();
+}
+
 // Closes every tab whose document `matches` (deleted, or inside something
 // deleted) - no questions asked, there's nothing left to save to.
 async function dropTabs(matches) {
@@ -682,6 +699,13 @@ function renderTabs() {
       });
       item.append(label, close);
       item.addEventListener("click", () => switchToTab(index));
+      item.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        openRowMenu({ x: e.clientX, y: e.clientY }, [
+          { icon: "×", label: t("tabs.close"), onSelect: () => closeTab(index) },
+          { icon: "⊗", label: t("tabs.closeOthers"), onSelect: () => closeOtherTabs(index) },
+        ]);
+      });
       // Middle click closes, as in a browser.
       item.addEventListener("auxclick", (e) => {
         if (e.button === 1) {
@@ -3967,6 +3991,7 @@ function shortcutGroups() {
         { desc: "shortcuts.jumpDoc", keys: [`${HINT_KEY_SYMBOL}1-9`] },
         { desc: "shortcuts.tabPrevNext", keys: [`${alt}[`, `${alt}]`] },
         { desc: "shortcuts.tabClose", keys: [`${alt}W`] },
+        { desc: "shortcuts.tabCloseOthers", keys: [`${alt}O`] },
       ],
     },
     {
@@ -6510,13 +6535,16 @@ function toggleSplitFocus() {
   // useful to focus there, so pressing this while in pane A just does
   // nothing rather than moving focus into an uneditable, empty pane.
 }
-// Tabs: ⌥W (Alt+W) closes the current one, ⌥[ / ⌥] (Alt+[ / Alt+]) go to
-// the previous / next. ⌘W and ⌃Tab belong to the browser and can't be had.
+// Tabs: ⌥W (Alt+W) closes the current one, ⌥O every other one, ⌥[ / ⌥]
+// (Alt+[ / Alt+]) go to the previous / next. ⌘W and ⌃Tab belong to the browser and can't be had.
 document.addEventListener("keydown", (e) => {
   if (!e.altKey || e.metaKey || e.ctrlKey || e.shiftKey || !el.quickOpenOverlay.hidden || !el.shortcutsOverlay.hidden) return;
   if (e.code === "KeyW" && currentTab >= 0) {
     e.preventDefault();
     closeTab(currentTab);
+  } else if (e.code === "KeyO" && tabs.length > 1) {
+    e.preventDefault();
+    closeOtherTabs();
   } else if ((e.code === "BracketLeft" || e.code === "BracketRight") && tabs.length > 1) {
     e.preventDefault();
     const step = e.code === "BracketLeft" ? -1 : 1;
