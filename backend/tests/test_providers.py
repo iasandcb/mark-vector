@@ -4,7 +4,7 @@ import functools
 import pytest
 
 from app.providers.anthropic_provider import WEB_FETCH_TOOL, AnthropicProvider
-from app.providers.openai_provider import OpenAIProvider
+from app.providers.openai_provider import OpenAIProvider, _is_current_chat_model
 
 
 def async_test(fn):
@@ -357,6 +357,19 @@ async def test_openai_response_failed_raises(monkeypatch):
     with pytest.raises(RuntimeError, match="boom"):
         async for _ in provider.stream([{"role": "user", "content": "hi"}], "gpt-5.6-luna"):
             pass
+
+
+def test_gpt_6_1_sol_survives_the_chat_model_filter_and_is_selectable():
+    """Dated snapshots and non-chat models are dropped; the default model is not."""
+    assert _is_current_chat_model("gpt-6.1-sol") is True
+    assert _is_current_chat_model("gpt-4o-2024-08-06") is False
+
+    provider = OpenAIProvider(api_key="fake")
+    efforts = asyncio.run(provider.reasoning_efforts(["gpt-6.1-sol", "gpt-4o"]))
+    assert "gpt-6.1-sol" in efforts
+    assert "low" in efforts["gpt-6.1-sol"]
+    assert "gpt-4o" not in efforts
+    assert provider.reasoning_default("gpt-6.1-sol") == "medium"
 
 
 @async_test
