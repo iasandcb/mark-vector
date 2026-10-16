@@ -463,17 +463,98 @@ class TestPerTurnSettings:
         assert [t["provider"] for t in conv["turns"]] == ["openai", "anthropic"]
         assert [t["model"] for t in conv["turns"]] == ["gpt-a", "claude-b"]
 
-    def test_session_level_fields_track_most_recently_used(self, isolated_data_dir, pid):
+    def test_folder_meta_is_not_the_documents_choice(self, isolated_data_dir, pid):
+        """The folder's provider/model used to mirror the last send so the
+        editor could inherit it. A send now leaves those fields alone; the
+        choice lives on the turn."""
         meta = storage.create_conversation(pid)
         _start(pid, meta["id"], "Q1", provider="openai", model="gpt-a", reasoning_effort="low")
-        second = storage.get_conversation(pid, meta["id"])
-        assert second["provider"] == "openai" and second["model"] == "gpt-a"
-
         _start(pid, meta["id"], "Q2", provider="anthropic", model="claude-b", reasoning_effort="high")
-        third = storage.get_conversation(pid, meta["id"])
-        assert third["provider"] == "anthropic"
-        assert third["model"] == "claude-b"
-        assert third["reasoning_effort"] == "high"
+        stored = storage.get_conversation(pid, meta["id"])
+        assert stored["provider"] is None
+        assert stored["model"] is None
+        assert stored["reasoning_effort"] is None
+        assert [t["model"] for t in stored["turns"]] == ["gpt-a", "claude-b"]
+
+    def test_list_documents_exposes_each_turns_own_choice(self, isolated_data_dir, pid):
+        meta = storage.create_conversation(pid)
+        first = _start(pid, meta["id"], "Q1", provider="openai", model="gpt-4o", reasoning_effort="low", context_scope="sibling")
+        draft = storage.create_draft(pid, meta["id"])
+        docs = {d["filename"]: d for d in storage.list_documents(pid, meta["id"])}
+        assert docs[first["file"]]["provider"] == "openai"
+        assert docs[first["file"]]["model"] == "gpt-4o"
+        assert docs[first["file"]]["reasoning_effort"] == "low"
+        assert docs[first["file"]]["context_scope"] == "sibling"
+        assert docs[draft["filename"]]["provider"] is None
+        assert docs[draft["filename"]]["model"] is None
+
+    def test_draft_settings_are_that_drafts_choice_only(self, isolated_data_dir, pid):
+        meta = storage.create_conversation(pid)
+        draft = storage.create_draft(pid, meta["id"])
+        other = storage.create_draft(pid, meta["id"])
+        storage.set_draft_settings(
+            pid, meta["id"], draft["filename"],
+            provider="anthropic", model="claude-x", reasoning_effort="high", context_scope="descendants",
+        )
+        docs = {d["filename"]: d for d in storage.list_documents(pid, meta["id"])}
+        assert docs[draft["filename"]]["model"] == "claude-x"
+        assert docs[draft["filename"]]["context_scope"] == "descendants"
+        assert docs[other["filename"]]["provider"] is None
+
+        storage.set_draft_settings(
+            pid, meta["id"], draft["filename"],
+            provider="openai", model="gpt-6.1-sol",
+        )
+        again = {d["filename"]: d for d in storage.list_documents(pid, meta["id"])}
+        assert again[draft["filename"]]["provider"] == "openai"
+        assert again[draft["filename"]]["model"] == "gpt-6.1-sol"
+
+    def test_sending_a_draft_moves_its_choice_onto_the_turn(self, isolated_data_dir, pid):
+        meta = storage.create_conversation(pid)
+        draft = storage.create_draft(pid, meta["id"])
+        storage.set_draft_settings(pid, meta["id"], draft["filename"], provider="openai", model="gpt-4o")
+        turn = _start(pid, meta["id"], "Q", draft_filename=draft["filename"], provider="openai", model="gpt-6.1-sol")
+        doc = next(d for d in storage.list_documents(pid, meta["id"]) if d["filename"] == turn["file"])
+        assert doc["role"] == "exchange"
+        assert doc["model"] == "gpt-6.1-sol"
+        assert "draft_settings" not in storage.get_conversation(pid, meta["id"]) or \
+            draft["filename"] not in storage.get_conversation(pid, meta["id"]).get("draft_settings", {})
+
+    def test_reverting_a_turn_keeps_its_choice_on_the_draft(self, isolated_data_dir, pid):
+        meta = storage.create_conversation(pid)
+        turn = _send_turn(pid, meta["id"], "Q", "A", provider="openai", model="gpt-4o", reasoning_effort="low")
+        storage.revert_turn_to_draft(pid, meta["id"], turn["file"])
+        doc = next(d for d in storage.list_documents(pid, meta["id"]) if d["filename"] == turn["file"])
+        assert doc["role"] == "draft"
+        assert doc["provider"] == "openai"
+        assert doc["model"] == "gpt-4o"
+        assert doc["reasoning_effort"] == "low"
+
+    def test_renaming_and_moving_a_draft_keeps_its_choice(self, isolated_data_dir, pid):
+        meta = storage.create_conversation(pid)
+        other = storage.create_conversation(pid, "다른 폴더")
+        draft = storage.create_draft(pid, meta["id"])
+        storage.set_draft_settings(pid, meta["id"], draft["filename"], provider="openai", model="gpt-4o")
+        renamed = storage.rename_document(pid, meta["id"], draft["filename"], "notes.md")
+        doc = next(d for d in storage.list_documents(pid, meta["id"]) if d["filename"] == renamed["filename"])
+        assert doc["model"] == "gpt-4o"
+
+        storage.move_document(pid, meta["id"], "notes.md", other["id"])
+        moved = next(d for d in storage.list_documents(pid, other["id"]) if d["filename"] == "notes.md")
+        assert moved["role"] == "draft"
+        assert moved["model"] == "gpt-4o"
+        left = storage.list_documents(pid, meta["id"])
+        assert all(d["filename"] != "notes.md" for d in left)
+
+    def test_copying_a_document_does_not_copy_its_choice(self, isolated_data_dir, pid):
+        meta = storage.create_conversation(pid)
+        other = storage.create_conversation(pid, "다른 폴더")
+        turn = _send_turn(pid, meta["id"], "Q", "A", provider="openai", model="gpt-4o")
+        copied = storage.copy_document(pid, meta["id"], turn["file"], other["id"])
+        doc = next(d for d in storage.list_documents(pid, other["id"]) if d["filename"] == copied["filename"])
+        assert doc["role"] == "draft"
+        assert doc["provider"] is None
+        assert doc["model"] is None
 
 
 class TestProjects:

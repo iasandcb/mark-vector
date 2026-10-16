@@ -19,6 +19,7 @@ from ..models import (
     RenameConversationRequest,
     RenameDocumentRequest,
     SaveDocumentRequest,
+    SaveDraftSettingsRequest,
 )
 from ..providers.registry import get_provider
 
@@ -115,6 +116,26 @@ def poll_document(project_id: str, conv_id: str, filename: str, since: str | Non
         raise HTTPException(status_code=400, detail=str(exc))
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Document not found")
+
+
+@router.put("/{conv_id}/documents/{filename}/settings")
+def save_draft_settings(project_id: str, conv_id: str, filename: str, req: SaveDraftSettingsRequest):
+    """The toolbar choice for this draft. Ignored for a document that is
+    already a turn - that choice is whatever the last send recorded."""
+    try:
+        return storage.set_draft_settings(
+            project_id,
+            conv_id,
+            filename,
+            provider=req.provider,
+            model=req.model,
+            reasoning_effort=req.reasoning_effort,
+            context_scope=req.context_scope,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"Document not found: {exc}")
 
 
 @router.put("/{conv_id}/documents/{filename}")

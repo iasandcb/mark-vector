@@ -292,11 +292,11 @@ const ROLE_TITLE_KEYS = {
 function roleTitle(role) {
   return ROLE_TITLE_KEYS[role] ? t(ROLE_TITLE_KEYS[role]) : role;
 }
-// A folder that has never been sent has no saved provider/model. Start it
-// on OpenAI; the model is that provider's default_model, which the registry
-// sets to gpt-6.1-sol when the live list includes it. If OpenAI isn't
-// configured, the first configured provider is used instead. A folder that
-// already has a last-used choice keeps it (see turnDefaults).
+// A document with no saved provider/model of its own starts on OpenAI.
+// The model is that provider's default_model, which the registry sets to
+// gpt-6.1-sol when the live list includes it. If OpenAI isn't configured,
+// the first configured provider is used. A turn, or a draft the user has
+// already chosen for, keeps that document's own choice.
 const DEFAULT_PROVIDER_ID = "openai";
 // "system"/"project-system" = per-session/per-project system.md,
 // "global-system" = the app-wide prompt at the very top, "global-custom-
@@ -532,11 +532,13 @@ function showStashedTab(stash) {
   el.saveBtn.disabled = false;
   updateSendToolbarVisibility();
   updateFormatToolbar();
-  const sessionChanged = !previous || previous.sessionId !== active.sessionId || previous.projectId !== active.projectId;
-  if (sessionChanged && active.sessionId && !NON_SENDABLE_ROLES.has(active.role)) {
-    const project = projects.get(active.projectId);
-    const session = project && project.sessions && project.sessions.get(active.sessionId);
-    if (session) applyTurnDefaults(session);
+  const documentChanged =
+    !previous ||
+    previous.sessionId !== active.sessionId ||
+    previous.projectId !== active.projectId ||
+    previous.filename !== active.filename;
+  if (documentChanged && active.sessionId && !NON_SENDABLE_ROLES.has(active.role)) {
+    applyDocumentSettings(cachedDocument(active.projectId, active.sessionId, active.filename));
   }
   updateSendAvailability();
   updateFilenameLabel();
@@ -1929,60 +1931,103 @@ function toggleEditorToolbar() {
   el.toolbarToggleBtn.classList.toggle("dirty", open);
 }
 
-// provider/model/reasoning_effort used to be fixed once for a whole
-// session; now they're chosen per turn (see storage.py's start_exchange),
-// and this is what a newly-opened turn's controls default to: whatever was
-// actually used most recently *in this session* (updated on the backend
-// after every send), falling back to a first-time default only if this
-// session has never sent anything yet. convert_math isn't part of this
-// anymore - it's driven live by the format selector (see currentDocumentFormat/
-// updateFormatToolbar), which reflect the open document's own content/
-// inherited directive rather than a remembered session preference.
-function turnDefaults(session) {
-  // context_scope is independent of provider - remembered (or defaulted)
-  // the same way regardless of which branch below runs.
-  const contextScope = session.meta.context_scope || "default";
-  if (session.meta.provider) {
-    return {
-      provider: session.meta.provider,
-      model: session.meta.model,
-      reasoningEffort: session.meta.reasoning_effort || "off",
-      contextScope,
-    };
-  }
+// provider/model/reasoning_effort/context_scope belong to the open document.
+// A turn stores them when it is sent. A draft stores them only after the
+// user changes the toolbar (see persistDraftChoice). Anything else - a new
+// document, a draft nobody has chosen for - uses the app default below,
+// never the folder's last send. convert_math isn't part of this: the format
+// selector follows the open document's directive.
+
+// Set while applyDocumentSettings is writing the selects, so those
+// assignments are not saved back as an explicit draft choice.
+let applyingDocumentSettings = false;
+
+function cachedDocument(projectId, sessionId, filename) {
+  const project = projects.get(projectId);
+  const session = project && project.sessions && project.sessions.get(sessionId);
+  return session && session.documents && session.documents.find((d) => d.filename === filename);
+}
+
+function appDefaultSettings() {
   const fallback = providers.find((p) => p.id === DEFAULT_PROVIDER_ID) || providers[0];
   return {
     provider: fallback ? fallback.id : "",
     model: fallback ? fallback.default_model : "",
     reasoningEffort: "off",
-    contextScope,
+    contextScope: "default",
   };
 }
 
-function applyTurnDefaults(session) {
-  const defaults = turnDefaults(session);
-  if (defaults.provider) el.providerSelect.value = defaults.provider;
-  populateModelOptions();
-  // Only override the provider's own default_model (already selected by
-  // populateModelOptions above) if the last-used model is still actually
-  // offered - a provider's live model list can change over time (a model
-  // gets deprecated/renamed), and setting .value to something with no
-  // matching <option> just silently leaves the dropdown on no selection at
-  // all, which would then block sending entirely.
-  const stillOffered = [...el.modelSelect.options].some((o) => o.value === defaults.model);
-  if (defaults.model && stillOffered) el.modelSelect.value = defaults.model;
-  el.contextScopeSelect.value = defaults.contextScope;
-  // Before the remembered reasoning level, not after: this rebuilds the
-  // reasoning options for the model settled on just above (see
-  // updateReasoningAvailability), and a level only exists as an <option>
-  // once that's run for the right model - assigning it any earlier would
-  // just leave the selector on "".
-  updateSendAvailability();
-  el.reasoningSelect.value = defaults.reasoningEffort;
-  // The remembered level isn't one this model takes (or it's gone from the
-  // provider's list entirely) - fall back rather than leave the selector
-  // blank, same reasoning as the `stillOffered` guard above.
-  if (!el.reasoningSelect.value) el.reasoningSelect.value = "off";
+function settingsForDocument(doc) {
+  if (doc && doc.provider) {
+    return {
+      provider: doc.provider,
+      model: doc.model || "",
+      reasoningEffort: doc.reasoning_effort || "off",
+      contextScope: doc.context_scope || "default",
+    };
+  }
+  return appDefaultSettings();
+}
+
+function applyDocumentSettings(doc) {
+  const defaults = settingsForDocument(doc);
+  applyingDocumentSettings = true;
+  try {
+    if (defaults.provider) el.providerSelect.value = defaults.provider;
+    populateModelOptions();
+    // Only override the provider's own default_model (already selected by
+    // populateModelOptions above) if this document's model is still
+    // offered - a provider's live model list can change over time (a model
+    // gets deprecated/renamed), and setting .value to something with no
+    // matching <option> just silently leaves the dropdown on no selection
+    // at all, which would then block sending entirely.
+    const stillOffered = [...el.modelSelect.options].some((o) => o.value === defaults.model);
+    if (defaults.model && stillOffered) el.modelSelect.value = defaults.model;
+    el.contextScopeSelect.value = defaults.contextScope;
+    // Before the remembered reasoning level, not after: this rebuilds the
+    // reasoning options for the model settled on just above (see
+    // updateReasoningAvailability), and a level only exists as an <option>
+    // once that's run for the right model - assigning it any earlier would
+    // just leave the selector on "".
+    updateSendAvailability();
+    el.reasoningSelect.value = defaults.reasoningEffort;
+    // The remembered level isn't one this model takes (or it's gone from the
+    // provider's list entirely) - fall back rather than leave the selector
+    // blank, same reasoning as the `stillOffered` guard above.
+    if (!el.reasoningSelect.value) el.reasoningSelect.value = "off";
+  } finally {
+    applyingDocumentSettings = false;
+  }
+}
+
+// A draft the user has actually picked a provider/model for. Not called
+// when the selects are filled in programmatically, and not for a turn:
+// a turn's choice is whatever the last send recorded.
+function persistDraftChoice() {
+  if (applyingDocumentSettings || streaming || !active || active.role !== "draft") return;
+  const provider = el.providerSelect.value;
+  const model = el.modelSelect.value;
+  if (!provider || !model) return;
+  const choice = {
+    provider,
+    model,
+    reasoningEffort: el.reasoningSelect.value || "off",
+    contextScope: el.contextScopeSelect.value || "default",
+  };
+  const doc = cachedDocument(active.projectId, active.sessionId, active.filename);
+  if (doc) {
+    doc.provider = choice.provider;
+    doc.model = choice.model;
+    doc.reasoning_effort = choice.reasoningEffort;
+    doc.context_scope = choice.contextScope;
+  }
+  const projectId = active.projectId;
+  const sessionId = active.sessionId;
+  const filename = active.filename;
+  api.saveDraftSettings(projectId, sessionId, filename, choice).catch((err) => {
+    console.error("Failed to save draft settings", err);
+  });
 }
 
 function updateSendAvailability() {
@@ -4361,11 +4406,11 @@ async function selectDocument(projectId, sessionId, filename, { focus = true } =
   const doc = session.documents.find((d) => d.filename === filename);
   if (!doc) return;
 
-  // Only reset the provider/model/reasoning controls when arriving from a different
-  // session (or from none) - switching between documents *within* the same
-  // session shouldn't discard a deliberate in-session override back to
-  // that session's last-used settings.
-  const sessionChanged = !active || active.sessionId !== sessionId || active.projectId !== projectId;
+  // Each document has its own toolbar choice. Switching files, including
+  // two documents in the same folder, applies that file's saved choice, or
+  // the app default when it has none. Re-selecting the file already open
+  // leaves an in-progress dropdown edit alone.
+  const documentChanged = !active || active.sessionId !== sessionId || active.projectId !== projectId || active.filename !== filename;
   active = { projectId, sessionId, filename, role: doc.role, savedContent: doc.content, turnId: doc.turn_id, publishToken: doc.publish_token, publishSlides: !!doc.publish_slides, version: doc.version };
   hideSyncConflict();
   saveActiveDocRef();
@@ -4376,7 +4421,7 @@ async function selectDocument(projectId, sessionId, filename, { focus = true } =
   el.saveBtn.disabled = false;
   updateSendToolbarVisibility();
   updateFormatToolbar();
-  if (sessionChanged && !NON_SENDABLE_ROLES.has(doc.role)) applyTurnDefaults(session);
+  if (documentChanged && !NON_SENDABLE_ROLES.has(doc.role)) applyDocumentSettings(doc);
   updateSendAvailability();
   updateFilenameLabel();
   renderPreview();
@@ -6080,10 +6125,11 @@ async function loadProviders() {
   }
   populateModelOptions();
   // The list can arrive after a document is already open (init doesn't
-  // wait for it), in which case selectDocument's applyTurnDefaults ran
+  // wait for it), in which case selectDocument's applyDocumentSettings ran
   // against empty selects - redo it now that there's something to select.
-  const session = active && projects.get(active.projectId)?.sessions?.get(active.sessionId);
-  if (session && !NON_SENDABLE_ROLES.has(active.role) && !streaming) applyTurnDefaults(session);
+  if (active && !NON_SENDABLE_ROLES.has(active.role) && !streaming) {
+    applyDocumentSettings(cachedDocument(active.projectId, active.sessionId, active.filename));
+  }
 }
 
 async function createProject() {
@@ -6147,8 +6193,16 @@ el.mobileTabs.addEventListener("click", (e) => {
   const btn = e.target.closest(".mobile-tab");
   if (btn) setMobileView(btn.dataset.view);
 });
-el.providerSelect.addEventListener("change", populateModelOptions);
-el.modelSelect.addEventListener("change", updateSendAvailability);
+el.providerSelect.addEventListener("change", () => {
+  populateModelOptions();
+  persistDraftChoice();
+});
+el.modelSelect.addEventListener("change", () => {
+  updateSendAvailability();
+  persistDraftChoice();
+});
+el.reasoningSelect.addEventListener("change", persistDraftChoice);
+el.contextScopeSelect.addEventListener("change", persistDraftChoice);
 el.saveBtn.addEventListener("click", saveActive);
 el.publishBtn.addEventListener("click", togglePublish);
 el.toolbarToggleBtn.addEventListener("click", toggleEditorToolbar);
@@ -6611,8 +6665,8 @@ async function loadAuthInfo() {
   // Not awaited: the tree and the open document don't need the model list,
   // and /api/providers can be the slow call on a cold start (a provider with
   // no cached list waits on its live /models - see registry._cached_models).
-  // loadProviders() applies the open session's remembered settings itself
-  // once the list arrives.
+  // loadProviders() applies the open document's saved choice (or the app
+  // default) once the list arrives.
   loadProviders().catch((err) => console.error("Failed to load providers", err));
   // Starts hidden in the HTML (see index.html) to avoid a flash of a
   // section that's just going to fail with a 404 the moment it's expanded -

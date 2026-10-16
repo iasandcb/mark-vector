@@ -118,6 +118,17 @@ class SaveDocumentRequest(BaseModel):
     content: str
 
 
+class SaveDraftSettingsRequest(BaseModel):
+    """An explicit provider/model choice for a draft that has not been sent.
+    See storage.set_draft_settings. A turn's choice is recorded when the
+    message is sent, not through this request."""
+
+    provider: str
+    model: str
+    reasoning_effort: str | None = None
+    context_scope: Literal["default", "sibling", "descendants"] = "default"
+
+
 class ConvertToAsciiMathRequest(BaseModel):
     content: str
     # See CreateMessageRequest.hybrid_math - same "dollar-only" conversion
