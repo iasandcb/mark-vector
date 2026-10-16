@@ -292,7 +292,12 @@ const ROLE_TITLE_KEYS = {
 function roleTitle(role) {
   return ROLE_TITLE_KEYS[role] ? t(ROLE_TITLE_KEYS[role]) : role;
 }
-const DEFAULT_PROVIDER_ID = "chatgpt";
+// A folder that has never been sent has no saved provider/model. Start it
+// on OpenAI; the model is that provider's default_model, which the registry
+// sets to gpt-6.1-sol when the live list includes it. If OpenAI isn't
+// configured, the first configured provider is used instead. A folder that
+// already has a last-used choice keeps it (see turnDefaults).
+const DEFAULT_PROVIDER_ID = "openai";
 // "system"/"project-system" = per-session/per-project system.md,
 // "global-system" = the app-wide prompt at the very top, "global-custom-
 // symbols" = the app-wide custom-symbols.csv right below it, "global-

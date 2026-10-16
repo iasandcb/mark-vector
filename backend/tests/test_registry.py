@@ -70,6 +70,39 @@ async def test_list_providers_includes_reasoning_models(monkeypatch):
 
 
 @async_test
+async def test_openai_default_model_is_gpt_6_1_sol_when_listed(monkeypatch):
+    """A fresh picker uses the registry's preferred model, not list order."""
+    monkeypatch.setattr(settings, "anthropic_api_key", None)
+    monkeypatch.setattr(settings, "openai_api_key", "fake")
+    monkeypatch.setattr(settings, "custom_providers", [])
+    registry._instances["openai"] = _FakeProvider(
+        models=["gpt-4o", "gpt-5.6-luna", "gpt-6.1-sol"],
+        reasoning_models=["gpt-6.1-sol"],
+    )
+
+    result = await registry.list_providers()
+
+    assert result[0]["id"] == "openai"
+    assert "gpt-6.1-sol" in result[0]["models"]
+    assert result[0]["default_model"] == "gpt-6.1-sol"
+
+
+@async_test
+async def test_openai_default_model_falls_back_when_preferred_is_absent(monkeypatch):
+    monkeypatch.setattr(settings, "anthropic_api_key", None)
+    monkeypatch.setattr(settings, "openai_api_key", "fake")
+    monkeypatch.setattr(settings, "custom_providers", [])
+    registry._instances["openai"] = _FakeProvider(
+        models=["gpt-4o", "gpt-5.6-luna"],
+        reasoning_models=[],
+    )
+
+    result = await registry.list_providers()
+
+    assert result[0]["default_model"] == "gpt-4o"
+
+
+@async_test
 async def test_list_providers_omits_unconfigured_providers(monkeypatch):
     monkeypatch.setattr(settings, "anthropic_api_key", None)
     monkeypatch.setattr(settings, "openai_api_key", None)
