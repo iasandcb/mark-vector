@@ -392,12 +392,12 @@ def list_conversations(project_id: str) -> list[dict]:
 
 
 def create_conversation(project_id: str, title: str = "Untitled", parent_id: str | None = None) -> dict:
-    """Provider/model/reasoning_effort/convert_math are chosen per turn now
-    (see start_exchange), not fixed for the session - so a brand new
-    conversation doesn't have them yet. The fields stay on this top-level
-    meta dict anyway: after the first turn they hold whatever was used
-    *most recently*, which is what the frontend pre-fills its per-turn
-    controls from for this session next time (see app.js's turnDefaults()).
+    """Provider/model/reasoning_effort/convert_math are chosen per document,
+    not for the folder. The top-level fields stay on meta so older files
+    still load, but a send does not update them and the editor does not
+    read them: a new document uses the app default, and a document that
+    already has its own saved choice (a turn, or a draft the user picked
+    for) uses that. See list_documents / set_draft_settings.
 
     `parent_id`, when given, nests this folder under another one in the
     same project (see get_system_prompt_chain) - purely a logical pointer,
@@ -721,14 +721,9 @@ def start_exchange(
     }
     meta["turns"].append(turn)
     meta["updated_at"] = now
-    # Also the session-level "last used" - see create_conversation's
-    # docstring for why these stay on meta at all: they're what the
-    # frontend pre-fills its per-turn controls from for this session.
-    meta["provider"] = provider
-    meta["model"] = model
-    meta["reasoning_effort"] = reasoning_effort
-    meta["convert_math"] = convert_math
-    meta["context_scope"] = context_scope
+    # The file is a turn now, so any choice saved while it was still a
+    # draft lives on the turn above. Drop the draft copy.
+    _pop_draft_choice(meta, filename)
 
     if meta["title"] == "Untitled" and user_content.strip():
         first_line = user_content.strip().splitlines()[0]
@@ -809,12 +804,6 @@ def retry_exchange(
     turn["context_scope"] = context_scope
 
     meta["updated_at"] = _now()
-    meta["provider"] = provider
-    meta["model"] = model
-    meta["reasoning_effort"] = reasoning_effort
-    meta["convert_math"] = convert_math
-    meta["context_scope"] = context_scope
-
     _write_meta(project_id, conv_id, meta)
     _touch_project(project_id)
     return {**turn, "content": content, "question": user_content}
@@ -871,6 +860,84 @@ def complete_exchange(
     return {**turn, "content": content}
 
 
+def _choice_from(record: dict | None) -> dict | None:
+    """A document's own saved provider/model, or None when it has none.
+
+    `provider` is the signal that a choice was actually stored. A missing
+    record (a new draft, a turn from before these fields existed) means
+    "no choice", which the editor fills with the app default rather than
+    the folder's last send."""
+    if not record or not record.get("provider"):
+        return None
+    return {
+        "provider": record.get("provider"),
+        "model": record.get("model"),
+        "reasoning_effort": record.get("reasoning_effort"),
+        "context_scope": record.get("context_scope") or "default",
+    }
+
+
+def _draft_choices(meta: dict) -> dict:
+    choices = meta.get("draft_settings")
+    return choices if isinstance(choices, dict) else {}
+
+
+def _pop_draft_choice(meta: dict, filename: str) -> dict | None:
+    choices = meta.get("draft_settings")
+    if not isinstance(choices, dict):
+        return None
+    return choices.pop(filename, None)
+
+
+def _put_draft_choice(meta: dict, filename: str, choice: dict) -> None:
+    meta.setdefault("draft_settings", {})[filename] = choice
+
+
+def _document_choice(meta: dict, filename: str, turn: dict | None) -> dict | None:
+    if turn:
+        return _choice_from(turn)
+    return _choice_from(_draft_choices(meta).get(filename))
+
+
+def set_draft_settings(
+    project_id: str,
+    conv_id: str,
+    filename: str,
+    *,
+    provider: str,
+    model: str,
+    reasoning_effort: str | None = None,
+    context_scope: str = "default",
+) -> dict:
+    """Remember an explicit toolbar choice on a draft that has not been
+    sent. A turn keeps its choice on the turn record (written when it is
+    sent); this is only for a draft the user has actually picked a
+    provider/model for, so reopening it does not fall back to the app
+    default. A new draft has no entry here until that happens."""
+    _validate_filename(filename)
+    if filename == SYSTEM_FILENAME:
+        raise ValueError(f"{filename!r} is not a draft")
+    if not provider or not model:
+        raise ValueError("provider and model are required")
+    meta = _read_meta(project_id, conv_id)
+    conv_dir = _conversations_dir(project_id) / conv_id
+    path = conv_dir / filename
+    if not path.exists():
+        raise FileNotFoundError(filename)
+    if any(t["file"] == filename for t in meta["turns"]):
+        raise ValueError(f"{filename!r} is not a draft")
+    choice = {
+        "provider": provider,
+        "model": model,
+        "reasoning_effort": reasoning_effort,
+        "context_scope": context_scope or "default",
+    }
+    _put_draft_choice(meta, filename, choice)
+    meta["updated_at"] = _now()
+    _write_meta(project_id, conv_id, meta)
+    return choice
+
+
 def list_documents(project_id: str, conv_id: str) -> list[dict]:
     meta = _read_meta(project_id, conv_id)
     conv_dir = _conversations_dir(project_id) / conv_id
@@ -890,6 +957,7 @@ def list_documents(project_id: str, conv_id: str) -> list[dict]:
         else:
             role, turn_id = "draft", None
         stat = path.stat()
+        choice = _document_choice(meta, path.name, turn)
         documents.append(
             {
                 "filename": path.name,
@@ -900,6 +968,13 @@ def list_documents(project_id: str, conv_id: str) -> list[dict]:
                 "version": _file_version(path),
                 "publish_token": published_by_file.get(path.name),
                 "publish_slides": path.name in slides_files,
+                # None on a document that has never had its own choice saved
+                # (a new draft). The editor then uses the app default, not
+                # whatever this folder last sent with.
+                "provider": choice["provider"] if choice else None,
+                "model": choice["model"] if choice else None,
+                "reasoning_effort": choice["reasoning_effort"] if choice else None,
+                "context_scope": choice["context_scope"] if choice else None,
             }
         )
     # pin the system prompt to the top regardless of filename sort order
@@ -918,9 +993,16 @@ def revert_turn_to_draft(project_id: str, conv_id: str, filename: str) -> dict:
     any other non-turn filename would.)"""
     _validate_filename(filename)
     meta = _read_meta(project_id, conv_id)
-    if not any(t["file"] == filename for t in meta["turns"]):
+    turn = next((t for t in meta["turns"] if t["file"] == filename), None)
+    if turn is None:
         raise ValueError(f"{filename!r} is not a turn")
     meta["turns"] = [t for t in meta["turns"] if t["file"] != filename]
+    # The file is a draft again. Keep the choice that was saved on the
+    # turn, so reopening it still shows that choice rather than the app
+    # default.
+    choice = _choice_from(turn)
+    if choice:
+        _put_draft_choice(meta, filename, choice)
     meta["updated_at"] = _now()
     _write_meta(project_id, conv_id, meta)
     _touch_project(project_id)
@@ -1030,8 +1112,12 @@ def rename_document(project_id: str, conv_id: str, old_filename: str, new_filena
 
     meta = _read_meta(project_id, conv_id)
     turn = next((t for t in meta["turns"] if t["file"] == old_filename), None)
+    choice = _pop_draft_choice(meta, old_filename)
     if turn:
         turn["file"] = new_filename
+    if choice:
+        _put_draft_choice(meta, new_filename, choice)
+    if turn or choice:
         _write_meta(project_id, conv_id, meta)
 
     _repoint_publish(project_id, conv_id, old_filename, new_filename)
@@ -1075,13 +1161,22 @@ def move_document(project_id: str, conv_id: str, filename: str, target_conv_id: 
 
     src_meta = _read_meta(project_id, conv_id)
     turn = next((t for t in src_meta["turns"] if t["file"] == filename), None)
-    if turn:
-        src_meta["turns"] = [t for t in src_meta["turns"] if t["file"] != filename]
+    # A draft's explicit choice moves with the file. A turn carries its
+    # choice on the turn record, which is relocated below. A copy (see
+    # copy_document) deliberately does not take the choice: the new file
+    # is a new draft and starts on the app default.
+    choice = _pop_draft_choice(src_meta, filename)
+    if turn or choice:
+        if turn:
+            src_meta["turns"] = [t for t in src_meta["turns"] if t["file"] != filename]
         src_meta["updated_at"] = _now()
         _write_meta(project_id, conv_id, src_meta)
 
         dst_meta = _read_meta(project_id, target_conv_id)
-        dst_meta["turns"].append(turn)
+        if turn:
+            dst_meta["turns"].append(turn)
+        if choice and not turn:
+            _put_draft_choice(dst_meta, filename, choice)
         dst_meta["updated_at"] = _now()
         _write_meta(project_id, target_conv_id, dst_meta)
 
@@ -1162,13 +1257,15 @@ def delete_document(project_id: str, conv_id: str, filename: str) -> None:
 
     meta = _read_meta(project_id, conv_id)
     turn = next((t for t in meta["turns"] if t["file"] == filename), None)
-    if turn:
+    choice = _pop_draft_choice(meta, filename)
+    if turn or choice:
         # Meta first, then the file: if the file removal below somehow
         # fails, the result is a harmless orphaned file no longer
         # referenced by meta.json, rather than a meta.json entry pointing
         # at a file that no longer exists (which would break
         # get_conversation/build_history for the whole session).
-        meta["turns"].remove(turn)
+        if turn:
+            meta["turns"].remove(turn)
         meta["updated_at"] = _now()
         _write_meta(project_id, conv_id, meta)
     path.unlink()
