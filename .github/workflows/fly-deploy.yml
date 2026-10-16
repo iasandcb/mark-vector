@@ -1,0 +1,24 @@
+# App name, region, port, and the /data volume come from fly.toml.
+# The image is built on Fly's remote builders (--remote-only), so this
+# runner does not need Docker. FLY_API_TOKEN is a repository secret.
+name: Fly Deploy
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy app
+    runs-on: ubuntu-latest
+    concurrency: fly-deploy
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
