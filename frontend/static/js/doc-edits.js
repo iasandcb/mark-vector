@@ -74,9 +74,11 @@ function escapeRegExp(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-// Where `search` is in `content`: exactly, or - models often drop trailing
-// spaces or re-indent - line by line ignoring leading/trailing whitespace.
-function locate(content, search) {
+// Where `search` is in `content`, as [start, end]: exactly, or - models
+// often drop trailing spaces or re-indent - line by line ignoring
+// leading/trailing whitespace. Also how analysis.js finds the text an
+// evaluation's issue quotes.
+export function findText(content, search) {
   const exact = content.indexOf(search);
   if (exact !== -1) return [exact, exact + search.length];
   const lines = search.split("\n").map((line) => line.trim());
@@ -108,7 +110,7 @@ export function applyEditBlock(content, block) {
     const text = `${lead}${block.replace}\n`;
     return { content: body + text, from: body.length, to: content.length, text, start, end: start + block.replace.length };
   }
-  const found = locate(content, block.search);
+  const found = findText(content, block.search);
   if (!found) return null;
   const [from, to] = found;
   return {

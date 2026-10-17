@@ -60,6 +60,10 @@ export function createEditor(textarea, { onFoldToggle, foldRanges }) {
       textarea.value = textarea.value.slice(0, from) + text + textarea.value.slice(to);
       textarea.setSelectionRange(start, end);
     };
+    textarea.revealRange = (start, end) => {
+      textarea.focus();
+      textarea.setSelectionRange(start, end);
+    };
     textarea.append = (text) => {
       textarea.value += text;
     };
@@ -258,6 +262,16 @@ export function createEditor(textarea, { onFoldToggle, foldRanges }) {
     },
     setSelectionRange(start, end) {
       dispatchSelection(start, end);
+    },
+    // Selects the range and scrolls it to the middle of the view - for
+    // jumping to a place named from elsewhere (an evaluation's issue).
+    revealRange(start, end) {
+      const max = view.state.doc.length;
+      view.dispatch({
+        selection: { anchor: Math.min(start, max), head: Math.min(end, max) },
+        effects: EditorView.scrollIntoView(Math.min(start, max), { y: "center" }),
+      });
+      view.focus();
     },
     // An edit somewhere else in the document that leaves the caret where it
     // was (CodeMirror maps the selection through the change) and doesn't

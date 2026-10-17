@@ -1,0 +1,294 @@
+// The preview pane's Evaluate and Formalize tabs: an LLM's reading of the
+// document the preview is showing - how mathematically sound it is (and
+// where it goes wrong), or its argument as Lean 4. See
+// backend/app/analysis.py for the prompts and routers/analysis.py for the
+// endpoint. A run is started by hand and its result saved beside the
+// document, so it comes back when the document is opened again; it's
+// marked stale once the text has changed since.
+//
+// app.js owns the pane and the documents; this owns what the two tabs show.
+// `deps`:
+//   body, toolbar elements (see index.html's #analysis-view)
+//   getTarget() -> { projectId, sessionId, filename, content, dialect } | null
+//                  (null: nothing open, or a document that can't be analyzed)
+//   getSettings() -> { provider, model, reasoningEffort }
+//   reveal(start, end) - select that range in the editor showing the target
+//   renderMarkdown(text, dialect)
+
+import * as api from "./api.js";
+import { t, getLanguage } from "./i18n.js";
+import { findText } from "./doc-edits.js";
+
+const LEAN_WEB = "https://live.lean-lang.org/#code=";
+
+export function createAnalysisPanel(deps) {
+  const { body, runBtn, status, copyBtn, leanLink } = deps;
+  let kind = null; // "evaluate" | "formalize" while one of the tabs is shown
+  // `${projectId}/${sessionId}/${filename}` -> { evaluate, formalize }:
+  // undefined = not fetched yet, null = none saved, else the saved record.
+  const results = new Map();
+  // `${key}:${kind}` -> { text, startedAt } for a run still streaming in.
+  const running = new Map();
+  let timer = null;
+  let hashJob = 0;
+  let currentHash = null;
+
+  const keyOf = (target) => `${target.projectId}/${target.sessionId}/${target.filename}`;
+
+  async function sha256(text) {
+    if (!crypto.subtle) return null; // not a secure context - staleness just isn't shown
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+    return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  }
+
+  async function load(target) {
+    const key = keyOf(target);
+    const entry = results.get(key) || {};
+    if (entry[kind] !== undefined) return;
+    const loadingKind = kind;
+    entry[loadingKind] = null;
+    results.set(key, entry);
+    try {
+      entry[loadingKind] = await api.getAnalysis(target.projectId, target.sessionId, target.filename, loadingKind);
+    } catch (err) {
+      entry[loadingKind] = undefined; // try again next time it's shown
+      return;
+    }
+    render();
+  }
+
+  async function run() {
+    const target = deps.getTarget();
+    if (!target || !kind) return;
+    const settings = deps.getSettings();
+    if (!settings.provider || !settings.model) {
+      status.textContent = t("analysis.noModel");
+      return;
+    }
+    const runKind = kind;
+    const key = keyOf(target);
+    const job = { text: "", startedAt: Date.now(), error: null, dialect: target.dialect };
+    running.set(`${key}:${runKind}`, job);
+    render();
+    try {
+      const request = { ...settings, language: getLanguage() };
+      await api.runAnalysis(target.projectId, target.sessionId, target.filename, runKind, target.content, request, (event) => {
+        if (event.type === "delta") {
+          job.text += event.text;
+          if (kind === runKind) renderRunning(job);
+        } else if (event.type === "done") {
+          const entry = results.get(key) || {};
+          entry[runKind] = event.result;
+          results.set(key, entry);
+        } else if (event.type === "error") {
+          job.error = event.message;
+        }
+      });
+    } catch (err) {
+      job.error = err.message;
+    }
+    running.delete(`${key}:${runKind}`);
+    if (job.error) {
+      // Kept on screen until the next render that isn't this one.
+      const entry = results.get(key) || {};
+      entry[`${runKind}Error`] = job.error;
+      results.set(key, entry);
+    }
+    render();
+  }
+
+  function renderRunning(job) {
+    const seconds = Math.round((Date.now() - job.startedAt) / 1000);
+    status.textContent = `${t("analysis.running", { seconds })}${job.text ? ` · ${t("analysis.received", { count: job.text.length })}` : ""}`;
+    if (kind === "formalize" && job.text) {
+      body.innerHTML = deps.renderMarkdown(job.text, job.dialect);
+    } else if (!body.querySelector(".analysis-spinner")) {
+      body.innerHTML = `<div class="analysis-spinner" aria-hidden="true"></div>`;
+    }
+  }
+
+  function setToolbar({ runLabel, runDisabled, code }) {
+    runBtn.textContent = runLabel;
+    runBtn.disabled = runDisabled;
+    copyBtn.hidden = !code;
+    leanLink.hidden = !code;
+    if (code) leanLink.href = LEAN_WEB + encodeURIComponent(code);
+  }
+
+  function metaLine(record) {
+    const when = record.created_at ? new Date(record.created_at).toLocaleString(getLanguage()) : "";
+    return [when, record.model].filter(Boolean).join(" · ");
+  }
+
+  function render() {
+    clearInterval(timer);
+    timer = null;
+    if (!kind) return;
+    const target = deps.getTarget();
+    if (!target) {
+      setToolbar({ runLabel: t(kind === "evaluate" ? "analysis.runEvaluate" : "analysis.runFormalize"), runDisabled: true });
+      status.textContent = "";
+      body.innerHTML = `<p class="analysis-empty">${escapeHtml(t("analysis.noDocument"))}</p>`;
+      return;
+    }
+    const key = keyOf(target);
+    const entry = results.get(key) || {};
+    const record = entry[kind];
+    const job = running.get(`${key}:${kind}`);
+    const runLabel = t(record ? "analysis.rerun" : kind === "evaluate" ? "analysis.runEvaluate" : "analysis.runFormalize");
+    setToolbar({ runLabel, runDisabled: !!job, code: !job && kind === "formalize" && record && record.code });
+
+    if (job) {
+      renderRunning(job);
+      timer = setInterval(() => renderRunning(job), 1000);
+      return;
+    }
+    if (record === undefined) load(target);
+
+    const error = entry[`${kind}Error`];
+    if (error) delete entry[`${kind}Error`];
+    status.textContent = error ? t("analysis.failed", { message: error }) : record ? metaLine(record) : "";
+    if (record && currentHash && record.content_sha256 && record.content_sha256 !== currentHash) {
+      status.insertAdjacentHTML("beforeend", ` <span class="analysis-stale">${escapeHtml(t("analysis.stale"))}</span>`);
+    }
+
+    if (!record) {
+      body.innerHTML = `<p class="analysis-empty">${escapeHtml(t(kind === "evaluate" ? "analysis.emptyEvaluate" : "analysis.emptyFormalize"))}</p>`;
+      return;
+    }
+    body.innerHTML = "";
+    if (kind === "evaluate") renderEvaluation(record, target);
+    else renderFormalization(record, target);
+  }
+
+  function renderEvaluation(record, target) {
+    const md = (text) => deps.renderMarkdown(text, target.dialect);
+    if (record.raw !== undefined) {
+      body.insertAdjacentHTML("beforeend", `<p class="analysis-note">${escapeHtml(t("analysis.unparsed"))}</p>${md(record.raw)}`);
+      return;
+    }
+    const head = document.createElement("div");
+    head.className = `analysis-verdict verdict-${record.verdict || "unknown"}`;
+    const label = record.verdict ? t(`analysis.verdict.${record.verdict}`) : "";
+    head.innerHTML = `
+      <div class="analysis-verdict-line">
+        ${label ? `<span class="analysis-verdict-badge">${escapeHtml(label)}</span>` : ""}
+        ${record.score != null ? `<span class="analysis-score">${record.score}<small>/100</small></span>` : ""}
+      </div>
+      <div class="analysis-summary">${md(record.summary || "")}</div>`;
+    body.appendChild(head);
+
+    if (!record.issues.length) {
+      if (record.verdict !== "no_math") {
+        body.insertAdjacentHTML("beforeend", `<p class="analysis-empty">${escapeHtml(t("analysis.noIssues"))}</p>`);
+      }
+      return;
+    }
+    const list = document.createElement("ol");
+    list.className = "analysis-issues";
+    for (const issue of record.issues) {
+      const item = document.createElement("li");
+      item.className = `analysis-issue severity-${issue.severity}`;
+      const found = issue.quote ? findText(target.content, issue.quote) : null;
+      item.innerHTML = `
+        <div class="analysis-issue-head">
+          <span class="analysis-severity">${escapeHtml(t(`analysis.severity.${issue.severity}`))}</span>
+          ${issue.quote ? `<code class="analysis-quote">${escapeHtml(issue.quote)}</code>` : ""}
+        </div>
+        <div class="analysis-problem">${md(issue.problem)}</div>
+        ${issue.correction ? `<div class="analysis-correction"><strong>${escapeHtml(t("analysis.correction"))}</strong> ${md(issue.correction)}</div>` : ""}`;
+      if (found) {
+        item.classList.add("locatable");
+        item.title = t("analysis.showInEditor");
+        item.addEventListener("click", (e) => {
+          if (e.target.closest("a")) return;
+          // Looked up again: the text may have moved since this was drawn.
+          const now = deps.getTarget();
+          const at = now ? findText(now.content, issue.quote) : null;
+          if (at) deps.reveal(at[0], at[1]);
+        });
+      } else if (issue.quote) {
+        item.querySelector(".analysis-issue-head").insertAdjacentHTML(
+          "beforeend",
+          `<span class="analysis-missing">${escapeHtml(t("analysis.quoteNotFound"))}</span>`
+        );
+      }
+      list.appendChild(item);
+    }
+    body.appendChild(list);
+  }
+
+  function renderFormalization(record, target) {
+    if (record.code) {
+      const pre = document.createElement("pre");
+      pre.className = "analysis-lean";
+      const code = document.createElement("code");
+      code.className = "language-lean";
+      code.textContent = record.code;
+      pre.appendChild(code);
+      body.appendChild(pre);
+    } else {
+      body.insertAdjacentHTML("beforeend", `<p class="analysis-note">${escapeHtml(t("analysis.noCode"))}</p>`);
+    }
+    if (record.notes) {
+      const notes = document.createElement("div");
+      notes.className = "analysis-notes";
+      notes.innerHTML = deps.renderMarkdown(record.notes, target.dialect);
+      body.appendChild(notes);
+    }
+  }
+
+  // The text changed, or the preview now follows another document: the
+  // stale mark is worked out again once typing pauses.
+  let debounce = null;
+  function contentChanged() {
+    if (!kind) return;
+    clearTimeout(debounce);
+    debounce = setTimeout(refreshHash, 400);
+  }
+
+  async function refreshHash() {
+    const target = deps.getTarget();
+    const job = ++hashJob;
+    const hash = target ? await sha256(target.content) : null;
+    if (job !== hashJob) return;
+    currentHash = hash;
+    render();
+  }
+
+  runBtn.addEventListener("click", run);
+  copyBtn.addEventListener("click", async () => {
+    const target = deps.getTarget();
+    const record = target && (results.get(keyOf(target)) || {}).formalize;
+    if (!record || !record.code) return;
+    try {
+      await navigator.clipboard.writeText(record.code);
+      copyBtn.textContent = "✓";
+      setTimeout(() => (copyBtn.textContent = "⧉"), 1200);
+    } catch (err) {
+      // clipboard blocked - the code is on screen to select by hand
+    }
+  });
+
+  return {
+    // null hides the analysis (the Preview tab is showing).
+    show(nextKind) {
+      kind = nextKind;
+      if (!kind) {
+        clearInterval(timer);
+        return;
+      }
+      render();
+      refreshHash();
+    },
+    contentChanged,
+    // A document went away or was renamed - its cached results with it.
+    forget(projectId, sessionId, filename) {
+      results.delete(`${projectId}/${sessionId}/${filename}`);
+    },
+  };
+}
+
+function escapeHtml(text) {
+  return String(text).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+}

@@ -250,18 +250,24 @@
 
     <section id="preview-pane" class="preview-pane">
       <div class="pane-header">
-        <span class="pane-filename" data-i18n="preview.title"></span>
+        <!-- Preview, or one of two LLM readings of the same document - see
+             analysis.js. The actions after it belong to Preview only. -->
+        <div id="preview-tabs" class="preview-tabs" role="tablist">
+          <button type="button" class="preview-tab active" role="tab" data-view="preview" data-i18n="preview.title"></button>
+          <button type="button" class="preview-tab" role="tab" data-view="evaluate" data-i18n="analysis.evaluate" data-i18n-title="analysis.evaluateTitle"></button>
+          <button type="button" class="preview-tab" role="tab" data-view="formalize" data-i18n="analysis.formalize" data-i18n-title="analysis.formalizeTitle"></button>
+        </div>
         <div class="preview-actions">
-          <label class="checkbox-row sync-scroll-row">
+          <label class="checkbox-row sync-scroll-row preview-only">
             <input type="checkbox" id="sync-scroll-checkbox">
             <span data-i18n="preview.syncScroll"></span>
           </label>
-          <label class="checkbox-row glasses-row">
+          <label class="checkbox-row glasses-row preview-only">
             <input type="checkbox" id="glasses-checkbox">
             <span data-i18n="preview.glasses"></span>
           </label>
-          <button id="download-md-btn" class="icon-btn" disabled data-i18n-title="preview.downloadMdTitle">⤓ MD</button>
-          <button id="export-pdf-btn" class="icon-btn" disabled data-i18n-title="preview.exportPdfTitle">⤓ PDF</button>
+          <button id="download-md-btn" class="icon-btn preview-only" disabled data-i18n-title="preview.downloadMdTitle">⤓ MD</button>
+          <button id="export-pdf-btn" class="icon-btn preview-only" disabled data-i18n-title="preview.exportPdfTitle">⤓ PDF</button>
           <button id="preview-collapse-btn" class="icon-btn pane-collapse-btn" data-i18n-title="ui.collapsePanel">»</button>
         </div>
       </div>
@@ -272,6 +278,15 @@
         <button id="glasses-copy-btn" class="icon-btn" type="button" data-i18n-title="preview.glassesCopyTitle">⧉</button>
       </div>
       <div id="preview" class="preview markdown-body"></div>
+      <div id="analysis-view" class="analysis-view" hidden>
+        <div class="analysis-toolbar">
+          <button id="analysis-run-btn" class="primary-btn" type="button"></button>
+          <span id="analysis-status" class="analysis-status"></span>
+          <button id="analysis-copy-btn" class="icon-btn" type="button" hidden data-i18n-title="analysis.copy">⧉</button>
+          <a id="analysis-lean-link" class="secondary-btn analysis-lean-link" target="_blank" rel="noopener" hidden data-i18n="analysis.openLean"></a>
+        </div>
+        <div id="analysis-body" class="analysis-body markdown-body"></div>
+      </div>
       <div class="scroll-nav">
         <button id="preview-scroll-top-btn" class="icon-btn scroll-nav-btn" type="button" data-i18n-title="ui.scrollToTop">↑</button>
         <button id="preview-scroll-bottom-btn" class="icon-btn scroll-nav-btn" type="button" data-i18n-title="ui.scrollToBottom">↓</button>

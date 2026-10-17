@@ -1109,6 +1109,7 @@ def rename_document(project_id: str, conv_id: str, old_filename: str, new_filena
         raise ValueError(f"A document named {new_filename!r} already exists")
 
     old_path.rename(new_path)
+    _move_analyses(conv_dir, old_filename, conv_dir, new_filename)
 
     meta = _read_meta(project_id, conv_id)
     turn = next((t for t in meta["turns"] if t["file"] == old_filename), None)
@@ -1158,6 +1159,7 @@ def move_document(project_id: str, conv_id: str, filename: str, target_conv_id: 
         raise ValueError(f"A document named {filename!r} already exists in the target folder")
 
     src_path.rename(dst_path)
+    _move_analyses(src_dir, filename, dst_dir, filename)
 
     src_meta = _read_meta(project_id, conv_id)
     turn = next((t for t in src_meta["turns"] if t["file"] == filename), None)
@@ -1269,7 +1271,65 @@ def delete_document(project_id: str, conv_id: str, filename: str) -> None:
         meta["updated_at"] = _now()
         _write_meta(project_id, conv_id, meta)
     path.unlink()
+    _move_analyses(path.parent, filename, None, None)
     unpublish_document(project_id, conv_id, filename)
+
+
+# ---------- analyses (the preview pane's Evaluate / Formalize tabs) ----------
+#
+# <conv_dir>/.analysis/<filename>.<kind>.json - the last result of each kind
+# for one document, kept beside it so reopening the document shows it again.
+# A dot-directory, so list_documents' "*.md" glob never sees it; it follows
+# its document through rename/move/delete (_move_analyses). Each result
+# records the sha256 of the text it was made from, which is how the client
+# tells a result that's gone stale.
+
+ANALYSIS_DIRNAME = ".analysis"
+ANALYSIS_KINDS = ("evaluate", "formalize")
+
+
+def _analysis_path(conv_dir: Path, filename: str, kind: str) -> Path:
+    if kind not in ANALYSIS_KINDS:
+        raise ValueError(f"Unknown analysis kind: {kind!r}")
+    return conv_dir / ANALYSIS_DIRNAME / f"{filename}.{kind}.json"
+
+
+def _move_analyses(src_dir: Path, filename: str, dst_dir: Path | None, new_filename: str | None) -> None:
+    """Carries a document's analyses along with it - or, with no `dst_dir`,
+    deletes them."""
+    for kind in ANALYSIS_KINDS:
+        src = _analysis_path(src_dir, filename, kind)
+        if not src.exists():
+            continue
+        if dst_dir is None:
+            src.unlink()
+            continue
+        dst = _analysis_path(dst_dir, new_filename, kind)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        src.rename(dst)
+
+
+def get_analysis(project_id: str, conv_id: str, filename: str, kind: str) -> dict | None:
+    _validate_filename(filename)
+    conv_dir = _conversations_dir(project_id) / conv_id
+    if not (conv_dir / filename).exists():
+        raise FileNotFoundError(filename)
+    path = _analysis_path(conv_dir, filename, kind)
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def save_analysis(project_id: str, conv_id: str, filename: str, kind: str, result: dict) -> dict:
+    _validate_filename(filename)
+    conv_dir = _conversations_dir(project_id) / conv_id
+    if not (conv_dir / filename).exists():
+        raise FileNotFoundError(filename)
+    path = _analysis_path(conv_dir, filename, kind)
+    path.parent.mkdir(exist_ok=True)
+    record = {**result, "kind": kind, "created_at": _now()}
+    path.write_text(json.dumps(record, indent=2, ensure_ascii=False), encoding="utf-8")
+    return record
 
 
 # ---------- publishing (public read-only share links) ----------

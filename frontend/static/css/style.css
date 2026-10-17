@@ -2020,3 +2020,239 @@ kbd.shortcut-key {
     bottom: 72px;
   }
 }
+
+/* ---------- preview pane tabs: Preview / Evaluate / Formalize ---------- */
+
+/* The tabs keep their width; when the pane is too narrow for them and the
+   Preview-only actions both, the actions wrap onto a line of their own. */
+.preview-pane > .pane-header {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
+.preview-tabs {
+  display: flex;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+.preview-pane > .pane-header > .preview-actions {
+  margin-left: auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  min-width: 0;
+  flex-shrink: 1;
+}
+
+.preview-tab {
+  border: none;
+  background: none;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.preview-tab:hover {
+  background: var(--code-bg);
+}
+
+.preview-tab.active {
+  color: var(--text);
+  background: var(--active-bg);
+  font-weight: 600;
+}
+
+.preview-pane[data-view="evaluate"] .preview-only,
+.preview-pane[data-view="formalize"] .preview-only,
+.preview-pane[data-view="evaluate"] #preview,
+.preview-pane[data-view="formalize"] #preview,
+.preview-pane[data-view="evaluate"] .scroll-nav,
+.preview-pane[data-view="formalize"] .scroll-nav,
+.preview-pane[data-view="evaluate"] #glasses-toolbar,
+.preview-pane[data-view="formalize"] #glasses-toolbar {
+  display: none !important;
+}
+
+.analysis-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.analysis-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 24px;
+  border-bottom: 1px solid var(--border);
+}
+
+.analysis-status {
+  font-size: 12px;
+  color: var(--muted);
+  flex: 1;
+  min-width: 0;
+}
+
+.analysis-stale {
+  color: #b45309;
+  font-weight: 600;
+}
+
+.analysis-lean-link {
+  text-decoration: none;
+  font-size: 12.5px;
+}
+
+.analysis-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 24px;
+}
+
+.analysis-empty,
+.analysis-note {
+  color: var(--muted);
+}
+
+.analysis-spinner {
+  width: 22px;
+  height: 22px;
+  margin: 24px auto;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: analysis-spin 0.9s linear infinite;
+}
+
+@keyframes analysis-spin {
+  to { transform: rotate(360deg); }
+}
+
+.analysis-verdict {
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: var(--code-bg);
+  border-left: 4px solid var(--muted);
+  margin-bottom: 16px;
+}
+
+.analysis-verdict.verdict-sound { border-left-color: #15803d; }
+.analysis-verdict.verdict-minor_issues { border-left-color: #ca8a04; }
+.analysis-verdict.verdict-flawed { border-left-color: #b91c1c; }
+
+.analysis-verdict-line {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.analysis-verdict-badge {
+  font-weight: 700;
+}
+
+.verdict-sound .analysis-verdict-badge { color: #15803d; }
+.verdict-minor_issues .analysis-verdict-badge { color: #a16207; }
+.verdict-flawed .analysis-verdict-badge { color: #b91c1c; }
+
+.analysis-score {
+  margin-left: auto;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.analysis-score small {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.analysis-summary > :last-child {
+  margin-bottom: 0;
+}
+
+.analysis-body .analysis-issues {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.analysis-issue {
+  border: 1px solid var(--border);
+  border-left: 4px solid #ca8a04;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.analysis-issue.severity-error { border-left-color: #b91c1c; }
+.analysis-issue.severity-suggestion { border-left-color: #2563eb; }
+
+.analysis-issue.locatable {
+  cursor: pointer;
+}
+
+.analysis-issue.locatable:hover {
+  background: var(--active-bg);
+}
+
+.analysis-issue-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.analysis-severity {
+  font-size: 11.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: #a16207;
+}
+
+.severity-error .analysis-severity { color: #b91c1c; }
+.severity-suggestion .analysis-severity { color: #2563eb; }
+
+.analysis-quote {
+  font-size: 12.5px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.analysis-missing {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.analysis-problem > :first-child,
+.analysis-correction > :first-child {
+  margin-top: 0;
+}
+
+.analysis-problem > :last-child,
+.analysis-correction > :last-child {
+  margin-bottom: 0;
+}
+
+.analysis-correction {
+  margin-top: 6px;
+}
+
+.analysis-correction > strong {
+  display: block;
+  font-size: 12px;
+}
+
+.analysis-lean {
+  font-size: 12.5px;
+  overflow-x: auto;
+}

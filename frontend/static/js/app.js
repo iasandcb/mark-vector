@@ -18,6 +18,7 @@ import { createGamepadRemote } from "./remote.js";
 import { splitSlides, lastSlideStart } from "./slides.js";
 import { startRealtimeTranscription } from "./realtime-stt.js";
 import { parseEditBlocks, applyEditBlock, collapseEditBlocks } from "./doc-edits.js";
+import { createAnalysisPanel } from "./analysis.js";
 
 // Inline-thread markers. Declared up here, away from the rest of the
 // inline-thread code further down, because `el` below builds the editor,
@@ -39,6 +40,13 @@ const el = {
   layout: document.getElementById("layout"),
   treePane: document.getElementById("tree-pane"),
   previewPane: document.getElementById("preview-pane"),
+  previewTabs: document.getElementById("preview-tabs"),
+  analysisView: document.getElementById("analysis-view"),
+  analysisRunBtn: document.getElementById("analysis-run-btn"),
+  analysisStatus: document.getElementById("analysis-status"),
+  analysisCopyBtn: document.getElementById("analysis-copy-btn"),
+  analysisLeanLink: document.getElementById("analysis-lean-link"),
+  analysisBody: document.getElementById("analysis-body"),
   treeResizer: document.getElementById("tree-resizer"),
   previewResizer: document.getElementById("preview-resizer"),
   treeCollapseBtn: document.getElementById("tree-collapse-btn"),
@@ -1734,6 +1742,65 @@ function setPreviewSource(source) {
   else renderPreviewB();
 }
 
+// ---------- preview pane tabs (Preview / Evaluate / Formalize) ----------
+// Evaluate and Formalize read the same document the preview shows (see
+// previewSource) - see analysis.js. Every content change already passes
+// through renderPreview/renderPreviewB, which tell the panel so it can mark
+// a saved result stale.
+
+function analysisTarget() {
+  const useB = previewSource === "b" && !!activeB;
+  const doc = useB ? activeB : active;
+  if (!doc || !doc.filename || NON_SENDABLE_ROLES.has(doc.role)) return null;
+  return {
+    projectId: doc.projectId,
+    sessionId: doc.sessionId,
+    filename: doc.filename,
+    content: (useB ? el.editorB : el.editor).value,
+    dialect: sessionMathDialect(doc.projectId, doc.sessionId),
+    pane: useB ? "b" : "a",
+  };
+}
+
+const analysisPanel = createAnalysisPanel({
+  body: el.analysisBody,
+  runBtn: el.analysisRunBtn,
+  status: el.analysisStatus,
+  copyBtn: el.analysisCopyBtn,
+  leanLink: el.analysisLeanLink,
+  getTarget: analysisTarget,
+  getSettings: () => ({
+    provider: el.providerSelect.value,
+    model: el.modelSelect.value,
+    reasoningEffort: el.reasoningSelect.value,
+  }),
+  reveal(start, end) {
+    const target = analysisTarget();
+    if (!target) return;
+    setMobileView("editor");
+    if (target.pane === "a" && editorViewMode === "rendered") toggleEditorViewMode();
+    (target.pane === "b" ? el.editorB : el.editor).revealRange(start, end);
+  },
+  renderMarkdown,
+});
+
+function setPreviewView(view) {
+  el.previewPane.dataset.view = view;
+  for (const tab of el.previewTabs.querySelectorAll(".preview-tab")) {
+    const on = tab.dataset.view === view;
+    tab.classList.toggle("active", on);
+    tab.setAttribute("aria-selected", on ? "true" : "false");
+  }
+  el.analysisView.hidden = view === "preview";
+  analysisPanel.show(view === "preview" ? null : view);
+  if (view === "preview") updateScrollNavVisibility();
+}
+
+el.previewTabs.addEventListener("click", (e) => {
+  const tab = e.target.closest(".preview-tab");
+  if (tab) setPreviewView(tab.dataset.view);
+});
+
 function paintSharedPreview(text, dialect) {
   // Threads are scratch conversation: collapsed ones are left out, expanded
   // ones are rendered in their own box (see renderDocumentWithThreads). The
@@ -1764,6 +1831,7 @@ function renderPreview() {
   if (el.glassesCheckbox.checked) glassesSocket.send(false);
   if (el.livePublicCheckbox.checked) livePublicSocket.send(false);
   scheduleAutosave();
+  analysisPanel.contentChanged();
 }
 
 // Pane B's counterpart - deliberately thin: no thread-fold sync (pane B's
@@ -1777,6 +1845,7 @@ function renderPreviewB() {
     syncPreviewScrollFromSource("b");
   }
   updateScrollNavVisibility();
+  analysisPanel.contentChanged();
 }
 
 // ---------- editor view mode (source / rendered) ----------
@@ -4311,6 +4380,7 @@ async function onRowDragEnd(e) {
 async function moveDocumentToFolder(projectId, sourceSessionId, filename, targetSessionId) {
   try {
     await api.moveDocument(projectId, sourceSessionId, filename, targetSessionId);
+    analysisPanel.forget(projectId, sourceSessionId, filename);
   } catch (err) {
     alert(t("action.error", { message: err.message }));
     return;
@@ -4858,6 +4928,7 @@ async function removeDocument(projectId, sessionId, filename, role) {
       : t("confirm.deleteTurn", { filename });
   if (!confirm(message)) return;
   await api.deleteDocument(projectId, sessionId, filename);
+  analysisPanel.forget(projectId, sessionId, filename);
   await refreshSessionDocs(projectId, sessionId);
   await dropTabs((ref) => ref.role === "document" && ref.projectId === projectId && ref.sessionId === sessionId && ref.filename === filename);
   // Deleted out from under the split-view pane too - closeSplitView's own
@@ -4913,6 +4984,7 @@ async function renameDocument(projectId, sessionId, filename) {
 
   try {
     const updated = await api.renameDocument(projectId, sessionId, filename, newFilename);
+    analysisPanel.forget(projectId, sessionId, filename);
     await refreshSessionDocs(projectId, sessionId);
     if (
       active &&

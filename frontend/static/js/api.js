@@ -355,6 +355,34 @@ export async function inlineComplete(projectId, id, content, history, context, s
   await streamNdjson(res, onEvent);
 }
 
+// ---------- analyses (the preview pane's Evaluate / Formalize tabs) ----------
+// See routers/analysis.py. `kind` is "evaluate" or "formalize"; GET gives the
+// saved result or null, POST streams NDJSON ("delta"... then "done" with the
+// saved record, or "error") for `content`, the editor's text as it stands.
+
+function analysisUrl(projectId, id, filename, kind) {
+  return `${BASE}/projects/${projectId}/conversations/${id}/documents/${encodeURIComponent(filename)}/analysis/${kind}`;
+}
+
+export function getAnalysis(projectId, id, filename, kind) {
+  return fetch(analysisUrl(projectId, id, filename, kind)).then(asJson);
+}
+
+export async function runAnalysis(projectId, id, filename, kind, content, settings, onEvent) {
+  const res = await fetch(analysisUrl(projectId, id, filename, kind), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      content,
+      provider: settings.provider,
+      model: settings.model,
+      reasoning_effort: settings.reasoningEffort,
+      language: settings.language,
+    }),
+  });
+  await streamNdjson(res, onEvent);
+}
+
 // ---------- speaker-diarized transcription ----------
 // See routers/transcribe.py. XHR rather than fetch() only because fetch has
 // no upload-progress event, and a long recording is a big upload. The

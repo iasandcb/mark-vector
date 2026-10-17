@@ -90,6 +90,18 @@ class InlineMessage(BaseModel):
     content: str
 
 
+class AnalysisRequest(BaseModel):
+    """The preview pane's Evaluate/Formalize run (routers/analysis.py).
+    `content` is the editor's text as it stands, which may be ahead of what
+    is saved; `language` is the UI's, the fallback language for the reply."""
+
+    content: str
+    provider: str
+    model: str
+    reasoning_effort: str | None = None
+    language: str = "en"
+
+
 class InlineCompleteRequest(BaseModel):
     """An unrecorded LLM completion for app.js's inline-thread mode (see
     routers/conversations.py's inline_complete). Unlike CreateMessageRequest
