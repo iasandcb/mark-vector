@@ -48,7 +48,7 @@ async def run_analysis(project_id: str, conv_id: str, filename: str, kind: str, 
     # Deliberately not the folder's system-prompt chain: that sets up a
     # conversation partner, and a review should read the same whoever's
     # folder the document sits in.
-    system_prompt = analysis.system_prompt(kind, req.language)
+    system_prompt = analysis.system_prompt(kind, req.language, req.math_dialect)
     messages = [{"role": "user", "content": analysis.user_message(kind, filename, req.content)}]
 
     async def event_stream():

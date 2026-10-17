@@ -71,7 +71,7 @@ export function createAnalysisPanel(deps) {
     running.set(`${key}:${runKind}`, job);
     render();
     try {
-      const request = { ...settings, language: getLanguage() };
+      const request = { ...settings, language: getLanguage(), mathDialect: target.dialect };
       await api.runAnalysis(target.projectId, target.sessionId, target.filename, runKind, target.content, request, (event) => {
         if (event.type === "delta") {
           job.text += event.text;

@@ -378,6 +378,7 @@ export async function runAnalysis(projectId, id, filename, kind, content, settin
       model: settings.model,
       reasoning_effort: settings.reasoningEffort,
       language: settings.language,
+      math_dialect: settings.mathDialect,
     }),
   });
   await streamNdjson(res, onEvent);

@@ -100,6 +100,10 @@ class AnalysisRequest(BaseModel):
     model: str
     reasoning_effort: str | None = None
     language: str = "en"
+    # How the client renders this document's math ("latex", "asciimath" or
+    # "hybrid" - its directive, else the folder's): the reply's own math is
+    # asked for in the same notation, so it renders the same way.
+    math_dialect: str = "latex"
 
 
 class InlineCompleteRequest(BaseModel):

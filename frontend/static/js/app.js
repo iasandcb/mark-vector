@@ -1757,7 +1757,9 @@ function analysisTarget() {
     sessionId: doc.sessionId,
     filename: doc.filename,
     content: (useB ? el.editorB : el.editor).value,
-    dialect: sessionMathDialect(doc.projectId, doc.sessionId),
+    // The document's own directive first, as its preview reads it - the
+    // reply's math is written in the same notation (see analysis.py).
+    dialect: detectMathDirective((useB ? el.editorB : el.editor).value) || sessionMathDialect(doc.projectId, doc.sessionId),
     pane: useB ? "b" : "a",
   };
 }
@@ -1799,6 +1801,21 @@ function setPreviewView(view) {
 el.previewTabs.addEventListener("click", (e) => {
   const tab = e.target.closest(".preview-tab");
   if (tab) setPreviewView(tab.dataset.view);
+});
+
+// ⌥1 / ⌥2 / ⌥3 (Alt+Shift+1/2/3 off a Mac, where Alt+digit is the document
+// jump - see hintModifierHeld): Preview / Evaluate / Formalize, bringing the
+// pane out if it's collapsed (or, on a phone, switching to it). Matched on
+// e.code - Option turns the digits into ¡ ™ £.
+const PREVIEW_VIEW_KEYS = { Digit1: "preview", Digit2: "evaluate", Digit3: "formalize" };
+document.addEventListener("keydown", (e) => {
+  const view = PREVIEW_VIEW_KEYS[e.code];
+  if (!view || !e.altKey || e.metaKey || e.ctrlKey || e.shiftKey !== !IS_MAC) return;
+  if (!el.quickOpenOverlay.hidden || !el.shortcutsOverlay.hidden) return;
+  e.preventDefault();
+  if (el.layout.classList.contains("preview-collapsed")) setPreviewCollapsed(false);
+  setMobileView("preview");
+  setPreviewView(view);
 });
 
 function paintSharedPreview(text, dialect) {
@@ -4107,6 +4124,7 @@ function shortcutGroups() {
       rows: [
         { desc: "shortcuts.toggleTree", keys: [`${mod}B`] },
         { desc: "shortcuts.togglePreview", keys: [`${alt}${mod}B`] },
+        { desc: "shortcuts.previewViews", keys: [IS_MAC ? `${alt}1 / 2 / 3` : `${alt}⇧1 / 2 / 3`] },
         { desc: "shortcuts.jumpDoc", keys: [`${HINT_KEY_SYMBOL}1-9`] },
         { desc: "shortcuts.tabPrevNext", keys: [`${alt}[`, `${alt}]`] },
         { desc: "shortcuts.tabClose", keys: [`${alt}W`] },

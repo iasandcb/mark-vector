@@ -64,7 +64,7 @@ Reply with ONE JSON object and nothing else - no code fence, no text before or a
   ]
 }
 
-Use "no_math" (with score 100 and no issues) when the document has no mathematical content to judge. List issues in document order. In the explanations, write math between single dollar signs using the same notation (LaTeX or AsciiMath) the document uses. """
+Use "no_math" (with score 100 and no issues) when the document has no mathematical content to judge. List issues in document order. """
 
 
 FORMALIZE_SYSTEM = """You formalize mathematics in Lean 4. You will be given a Markdown document - notes, a solution, a proof, a lesson - and you translate its mathematical content and the logical development of its argument into Lean 4 using Mathlib.
@@ -77,12 +77,29 @@ Write ONE complete Lean file in a single code block fenced with ```lean:
 - If a statement in the document is false, formalize the corrected statement, and say in a comment what was changed.
 - Use current Mathlib names; don't invent lemmas. Prefer a statement you can state correctly over a proof you can't finish.
 
-After the code block, add a short Markdown section that lists what was formalized, which assumptions you made explicit, and which steps are left as `sorry` and why. Write math there between single dollar signs using the same notation (LaTeX or AsciiMath) the document uses. """
+After the code block, add a short Markdown section that lists what was formalized, which assumptions you made explicit, and which steps are left as `sorry` and why. """
 
 
-def system_prompt(kind: str, language: str) -> str:
+def _math_line(kind: str, dialect: str) -> str:
+    """How to write math in the reply's prose - in the notation the client
+    renders this document with (`dialect`), or it shows up as raw text. A
+    hybrid document's $...$ is AsciiMath, so it gets AsciiMath too."""
+    where = "the summary, problems and corrections" if kind == "evaluate" else "the notes after the code"
+    if dialect in ("asciimath", "hybrid"):
+        return (
+            f"In {where}, write every formula as AsciiMath between single dollar signs - for example "
+            "$x^2 - 5x + 6 = (x-2)(x-3)$, $(a+b)/(c)$, $sqrt(x)$, $int_0^1 f(x) dx$, $lim_(x->0) f(x)$ - "
+            "never LaTeX commands such as \\frac, \\sqrt or \\int. "
+        )
+    return (
+        f"In {where}, write every formula as LaTeX between single dollar signs - for example "
+        "$\\frac{a+b}{c}$, $\\sqrt{x}$, $\\int_0^1 f(x)\\,dx$. "
+    )
+
+
+def system_prompt(kind: str, language: str, dialect: str = "latex") -> str:
     base = EVALUATE_SYSTEM if kind == "evaluate" else FORMALIZE_SYSTEM
-    return base + _language_line(language)
+    return base + _math_line(kind, dialect) + _language_line(language)
 
 
 def user_message(kind: str, filename: str, content: str) -> str:

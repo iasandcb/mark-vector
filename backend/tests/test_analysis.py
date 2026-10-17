@@ -132,6 +132,7 @@ class TestRouter:
         assert done["result"]["content_sha256"] == analysis.content_hash("1 + 1 = 3")
         assert "1 + 1 = 3" in provider.messages[0]["content"]
         assert "Korean" in provider.system_prompt
+        assert "as LaTeX" in provider.system_prompt
         assert client.get(url).json()["verdict"] == "flawed"
 
     def test_formalize(self, isolated_data_dir, monkeypatch):
@@ -140,7 +141,9 @@ class TestRouter:
         monkeypatch.setattr(analysis_router, "get_provider", lambda provider_id: provider)
         client = TestClient(app)
         url = f"/api/projects/{pid}/conversations/{conv_id}/documents/{filename}/analysis/formalize"
-        done = _events(client.post(url, json={"content": "x", "provider": "openai", "model": "m"}))[-1]
+        body = {"content": "x", "provider": "openai", "model": "m", "math_dialect": "asciimath"}
+        done = _events(client.post(url, json=body))[-1]
+        assert "as AsciiMath" in provider.system_prompt
         assert done["result"]["code"] == "import Mathlib"
         assert done["result"]["notes"] == "notes"
 
