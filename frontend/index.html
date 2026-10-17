@@ -280,6 +280,11 @@
       <div id="preview" class="preview markdown-body"></div>
       <div id="analysis-view" class="analysis-view" hidden>
         <div class="analysis-toolbar">
+          <select id="analysis-lens-select" class="analysis-lens" hidden data-i18n-title="analysis.lensTitle">
+            <option value="math" data-i18n="analysis.lens.math"></option>
+            <option value="logic" data-i18n="analysis.lens.logic"></option>
+            <option value="writing" data-i18n="analysis.lens.writing"></option>
+          </select>
           <button id="analysis-run-btn" class="primary-btn" type="button"></button>
           <span id="analysis-status" class="analysis-status"></span>
           <button id="analysis-copy-btn" class="icon-btn" type="button" hidden data-i18n-title="analysis.copy">⧉</button>

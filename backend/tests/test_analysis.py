@@ -153,3 +153,23 @@ class TestRouter:
         base = f"/api/projects/{pid}/conversations/{conv_id}/documents"
         assert client.get(f"{base}/{filename}/analysis/nope").status_code == 404
         assert client.get(f"{base}/missing.md/analysis/evaluate").status_code == 404
+
+    def test_evaluate_lenses_are_saved_apart(self, isolated_data_dir, monkeypatch):
+        pid, conv_id, filename = _draft()
+        provider = FakeProvider(json.dumps({"verdict": "no_claims", "score": 100, "summary": "", "issues": []}))
+        monkeypatch.setattr(analysis_router, "get_provider", lambda provider_id: provider)
+        client = TestClient(app)
+        base = f"/api/projects/{pid}/conversations/{conv_id}/documents/{filename}/analysis"
+        body = {"content": "x", "provider": "openai", "model": "m"}
+        done = _events(client.post(f"{base}/evaluate-logic", json=body))[-1]
+        assert done["result"]["verdict"] == "no_claims"
+        assert "fact-checker" in provider.system_prompt
+        assert '"no_claims"' in provider.system_prompt
+        assert client.get(f"{base}/evaluate").json() is None
+        assert client.get(f"{base}/evaluate-logic").json()["kind"] == "evaluate-logic"
+
+        _events(client.post(f"{base}/evaluate-writing", json=body))
+        assert "editor" in provider.system_prompt
+        assert "no_math" not in provider.system_prompt and "no_claims" not in provider.system_prompt
+        storage.rename_document(pid, conv_id, filename, "moved.md")
+        assert client.get(f"{base.replace(filename, 'moved.md')}/evaluate-writing").json() is not None

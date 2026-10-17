@@ -46,6 +46,7 @@ const el = {
   analysisStatus: document.getElementById("analysis-status"),
   analysisCopyBtn: document.getElementById("analysis-copy-btn"),
   analysisLeanLink: document.getElementById("analysis-lean-link"),
+  analysisLensSelect: document.getElementById("analysis-lens-select"),
   analysisBody: document.getElementById("analysis-body"),
   treeResizer: document.getElementById("tree-resizer"),
   previewResizer: document.getElementById("preview-resizer"),
@@ -1770,6 +1771,7 @@ const analysisPanel = createAnalysisPanel({
   status: el.analysisStatus,
   copyBtn: el.analysisCopyBtn,
   leanLink: el.analysisLeanLink,
+  lensSelect: el.analysisLensSelect,
   getTarget: analysisTarget,
   getSettings: () => ({
     provider: el.providerSelect.value,

@@ -1285,7 +1285,7 @@ def delete_document(project_id: str, conv_id: str, filename: str) -> None:
 # tells a result that's gone stale.
 
 ANALYSIS_DIRNAME = ".analysis"
-ANALYSIS_KINDS = ("evaluate", "formalize")
+ANALYSIS_KINDS = ("evaluate", "evaluate-logic", "evaluate-writing", "formalize")
 
 
 def _analysis_path(conv_dir: Path, filename: str, kind: str) -> Path:

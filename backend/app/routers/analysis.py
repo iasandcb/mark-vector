@@ -29,7 +29,7 @@ def get_analysis(project_id: str, conv_id: str, filename: str, kind: str):
 
 @router.post("/{conv_id}/documents/{filename}/analysis/{kind}")
 async def run_analysis(project_id: str, conv_id: str, filename: str, kind: str, req: AnalysisRequest):
-    """Evaluates or formalizes `req.content` - the editor's text, saved or
+    """Evaluates (under one of the lenses) or formalizes `req.content` - the editor's text, saved or
     not - and saves the result beside the document. NDJSON like
     send_message's stream: "delta" events while the reply comes in, then
     {"type": "done", "result": ...} with the saved record (or "error")."""
@@ -64,7 +64,7 @@ async def run_analysis(project_id: str, conv_id: str, filename: str, kind: str, 
             yield json.dumps({"type": "error", "message": str(exc)}) + "\n"
             return
         text = "".join(chunks)
-        parsed = analysis.parse_evaluation(text) if kind == "evaluate" else analysis.parse_formalization(text)
+        parsed = analysis.parse_evaluation(text) if kind in analysis.EVALUATE_KINDS else analysis.parse_formalization(text)
         result = {
             **parsed,
             "content_sha256": analysis.content_hash(req.content),

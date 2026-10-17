@@ -1,6 +1,7 @@
 // The preview pane's Evaluate and Formalize tabs: an LLM's reading of the
-// document the preview is showing - how mathematically sound it is (and
-// where it goes wrong), or its argument as Lean 4. See
+// document the preview is showing - how sound it is (and where it goes
+// wrong) under one of three lenses (its mathematics, its facts and
+// reasoning, its writing), or its mathematical argument as Lean 4. See
 // backend/app/analysis.py for the prompts and routers/analysis.py for the
 // endpoint. A run is started by hand and its result saved beside the
 // document, so it comes back when the document is opened again; it's
@@ -8,7 +9,7 @@
 //
 // app.js owns the pane and the documents; this owns what the two tabs show.
 // `deps`:
-//   body, toolbar elements (see index.html's #analysis-view)
+//   body, toolbar elements (see index.html's #analysis-view), lensSelect
 //   getTarget() -> { projectId, sessionId, filename, content, dialect } | null
 //                  (null: nothing open, or a document that can't be analyzed)
 //   getSettings() -> { provider, model, reasoningEffort }
@@ -21,10 +22,28 @@ import { findText } from "./doc-edits.js";
 
 const LEAN_WEB = "https://live.lean-lang.org/#code=";
 
+// Evaluate's lenses -> the analysis kind each is run and saved as.
+const LENS_KINDS = { math: "evaluate", logic: "evaluate-logic", writing: "evaluate-writing" };
+const LENS_KEY = "markvector.evaluateLens";
+
+function loadLens() {
+  try {
+    const lens = localStorage.getItem(LENS_KEY);
+    if (lens in LENS_KINDS) return lens;
+  } catch (err) {
+    // storage blocked - the default lens
+  }
+  return "math";
+}
+
 export function createAnalysisPanel(deps) {
-  const { body, runBtn, status, copyBtn, leanLink } = deps;
-  let kind = null; // "evaluate" | "formalize" while one of the tabs is shown
-  // `${projectId}/${sessionId}/${filename}` -> { evaluate, formalize }:
+  const { body, runBtn, status, copyBtn, leanLink, lensSelect } = deps;
+  let view = null; // "evaluate" | "formalize" while one of the tabs is shown
+  let lens = loadLens();
+  lensSelect.value = lens;
+  // What's run, saved and shown: the tab, and for Evaluate its lens.
+  const kindOf = () => (view === "evaluate" ? LENS_KINDS[lens] : view);
+  // `${projectId}/${sessionId}/${filename}` -> { [kind]: record }:
   // undefined = not fetched yet, null = none saved, else the saved record.
   const results = new Map();
   // `${key}:${kind}` -> { text, startedAt } for a run still streaming in.
@@ -44,8 +63,8 @@ export function createAnalysisPanel(deps) {
   async function load(target) {
     const key = keyOf(target);
     const entry = results.get(key) || {};
-    if (entry[kind] !== undefined) return;
-    const loadingKind = kind;
+    const loadingKind = kindOf();
+    if (entry[loadingKind] !== undefined) return;
     entry[loadingKind] = null;
     results.set(key, entry);
     try {
@@ -59,13 +78,13 @@ export function createAnalysisPanel(deps) {
 
   async function run() {
     const target = deps.getTarget();
-    if (!target || !kind) return;
+    if (!target || !view) return;
     const settings = deps.getSettings();
     if (!settings.provider || !settings.model) {
       status.textContent = t("analysis.noModel");
       return;
     }
-    const runKind = kind;
+    const runKind = kindOf();
     const key = keyOf(target);
     const job = { text: "", startedAt: Date.now(), error: null, dialect: target.dialect };
     running.set(`${key}:${runKind}`, job);
@@ -75,7 +94,7 @@ export function createAnalysisPanel(deps) {
       await api.runAnalysis(target.projectId, target.sessionId, target.filename, runKind, target.content, request, (event) => {
         if (event.type === "delta") {
           job.text += event.text;
-          if (kind === runKind) renderRunning(job);
+          if (kindOf() === runKind) renderRunning(job);
         } else if (event.type === "done") {
           const entry = results.get(key) || {};
           entry[runKind] = event.result;
@@ -100,7 +119,7 @@ export function createAnalysisPanel(deps) {
   function renderRunning(job) {
     const seconds = Math.round((Date.now() - job.startedAt) / 1000);
     status.textContent = `${t("analysis.running", { seconds })}${job.text ? ` · ${t("analysis.received", { count: job.text.length })}` : ""}`;
-    if (kind === "formalize" && job.text) {
+    if (view === "formalize" && job.text) {
       body.innerHTML = deps.renderMarkdown(job.text, job.dialect);
     } else if (!body.querySelector(".analysis-spinner")) {
       body.innerHTML = `<div class="analysis-spinner" aria-hidden="true"></div>`;
@@ -123,10 +142,12 @@ export function createAnalysisPanel(deps) {
   function render() {
     clearInterval(timer);
     timer = null;
-    if (!kind) return;
+    if (!view) return;
+    lensSelect.hidden = view !== "evaluate";
+    const kind = kindOf();
     const target = deps.getTarget();
     if (!target) {
-      setToolbar({ runLabel: t(kind === "evaluate" ? "analysis.runEvaluate" : "analysis.runFormalize"), runDisabled: true });
+      setToolbar({ runLabel: t(view === "evaluate" ? "analysis.runEvaluate" : "analysis.runFormalize"), runDisabled: true });
       status.textContent = "";
       body.innerHTML = `<p class="analysis-empty">${escapeHtml(t("analysis.noDocument"))}</p>`;
       return;
@@ -135,8 +156,8 @@ export function createAnalysisPanel(deps) {
     const entry = results.get(key) || {};
     const record = entry[kind];
     const job = running.get(`${key}:${kind}`);
-    const runLabel = t(record ? "analysis.rerun" : kind === "evaluate" ? "analysis.runEvaluate" : "analysis.runFormalize");
-    setToolbar({ runLabel, runDisabled: !!job, code: !job && kind === "formalize" && record && record.code });
+    const runLabel = t(record ? "analysis.rerun" : view === "evaluate" ? "analysis.runEvaluate" : "analysis.runFormalize");
+    setToolbar({ runLabel, runDisabled: !!job, code: !job && view === "formalize" && record && record.code });
 
     if (job) {
       renderRunning(job);
@@ -153,11 +174,12 @@ export function createAnalysisPanel(deps) {
     }
 
     if (!record) {
-      body.innerHTML = `<p class="analysis-empty">${escapeHtml(t(kind === "evaluate" ? "analysis.emptyEvaluate" : "analysis.emptyFormalize"))}</p>`;
+      const empty = view === "evaluate" ? `analysis.empty.${lens}` : "analysis.emptyFormalize";
+      body.innerHTML = `<p class="analysis-empty">${escapeHtml(t(empty))}</p>`;
       return;
     }
     body.innerHTML = "";
-    if (kind === "evaluate") renderEvaluation(record, target);
+    if (view === "evaluate") renderEvaluation(record, target);
     else renderFormalization(record, target);
   }
 
@@ -169,7 +191,10 @@ export function createAnalysisPanel(deps) {
     }
     const head = document.createElement("div");
     head.className = `analysis-verdict verdict-${record.verdict || "unknown"}`;
-    const label = record.verdict ? t(`analysis.verdict.${record.verdict}`) : "";
+    // The writing lens has its own words for the same three verdicts.
+    const label = record.verdict
+      ? t(lens === "writing" ? `analysis.verdictWriting.${record.verdict}` : `analysis.verdict.${record.verdict}`)
+      : "";
     head.innerHTML = `
       <div class="analysis-verdict-line">
         ${label ? `<span class="analysis-verdict-badge">${escapeHtml(label)}</span>` : ""}
@@ -179,7 +204,7 @@ export function createAnalysisPanel(deps) {
     body.appendChild(head);
 
     if (!record.issues.length) {
-      if (record.verdict !== "no_math") {
+      if (record.verdict !== "no_math" && record.verdict !== "no_claims") {
         body.insertAdjacentHTML("beforeend", `<p class="analysis-empty">${escapeHtml(t("analysis.noIssues"))}</p>`);
       }
       return;
@@ -192,7 +217,7 @@ export function createAnalysisPanel(deps) {
       const found = issue.quote ? findText(target.content, issue.quote) : null;
       item.innerHTML = `
         <div class="analysis-issue-head">
-          <span class="analysis-severity">${escapeHtml(t(`analysis.severity.${issue.severity}`))}</span>
+          <span class="analysis-severity">${escapeHtml(t(lens === "writing" && issue.severity === "warning" ? "analysis.severityWriting.warning" : `analysis.severity.${issue.severity}`))}</span>
           ${issue.quote ? `<code class="analysis-quote">${escapeHtml(issue.quote)}</code>` : ""}
         </div>
         <div class="analysis-problem">${md(issue.problem)}</div>
@@ -242,7 +267,7 @@ export function createAnalysisPanel(deps) {
   // stale mark is worked out again once typing pauses.
   let debounce = null;
   function contentChanged() {
-    if (!kind) return;
+    if (!view) return;
     clearTimeout(debounce);
     debounce = setTimeout(refreshHash, 400);
   }
@@ -257,6 +282,15 @@ export function createAnalysisPanel(deps) {
   }
 
   runBtn.addEventListener("click", run);
+  lensSelect.addEventListener("change", () => {
+    lens = lensSelect.value in LENS_KINDS ? lensSelect.value : "math";
+    try {
+      localStorage.setItem(LENS_KEY, lens);
+    } catch (err) {
+      // storage blocked - kept for this page only
+    }
+    render();
+  });
   copyBtn.addEventListener("click", async () => {
     const target = deps.getTarget();
     const record = target && (results.get(keyOf(target)) || {}).formalize;
@@ -272,9 +306,9 @@ export function createAnalysisPanel(deps) {
 
   return {
     // null hides the analysis (the Preview tab is showing).
-    show(nextKind) {
-      kind = nextKind;
-      if (!kind) {
+    show(nextView) {
+      view = nextView;
+      if (!view) {
         clearInterval(timer);
         return;
       }
