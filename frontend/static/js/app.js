@@ -2718,6 +2718,12 @@ async function checkForNewVersion() {
 checkForNewVersion();
 setInterval(checkForNewVersion, VERSION_CHECK_MS);
 window.addEventListener("focus", checkForNewVersion);
+// iOS Safari often fires no "focus" when a tab comes back from another app
+// (and pauses the interval while hidden) - coming back into view is the
+// moment that matters there.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") checkForNewVersion();
+});
 el.updateReloadBtn.addEventListener("click", () => location.reload());
 
 // ---------- presenter remote (gamepad -> live slides) ----------
