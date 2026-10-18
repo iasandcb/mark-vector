@@ -31,7 +31,7 @@ const LENS_KINDS = { math: "evaluate", logic: "evaluate-logic", writing: "evalua
 // Live mode: when a changed passage is sent. Dictation rarely pauses, so a
 // long enough run of new text goes without waiting for one.
 const LIVE_TICK_MS = 1000;
-const LIVE_BURST_CHARS = 400; // sent as soon as this much is new
+const LIVE_BURST_CHARS = 200; // sent as soon as this much is new
 const LIVE_PAUSE_MS = 2000; // or after a pause this long...
 const LIVE_PAUSE_CHARS = 150; // ...with at least this much new
 const LIVE_IDLE_MS = 15000; // or after a long pause, with any real change
