@@ -79,7 +79,9 @@ export async function openRecordingsDialog({ projectId, sessionId, filename, onC
           <a class="icon-btn" href="${m4a}" download title="${escapeHtml(t("recordings.download"))}">⤓</a>
           <button class="icon-btn" type="button" data-delete title="${escapeHtml(t("recordings.delete"))}">×</button>
         </div>
-        <audio controls preload="metadata" src="${src}"></audio>`;
+        <audio controls preload="none" src="${src}"></audio>`;
+      // preload="none": nothing is fetched (or converted) until its own
+      // play button is pressed.
       // A recording made in another browser may not play here (iOS won't
       // play WebM from MediaRecorder) - then the server's AAC copy.
       const audio = item.querySelector("audio");
