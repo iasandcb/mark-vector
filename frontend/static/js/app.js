@@ -2431,7 +2431,9 @@ function updateRecordButton(progress) {
   // Behind: pieces waiting on a failed upload (they're retried).
   const behind = !!progress.error && progress.pending > 0;
   btn.classList.toggle("behind", behind);
-  btn.textContent = `⏺ ${formatClock(progress.elapsedMs)}`;
+  // Just the time - the red button already says it's recording, and the
+  // header row has no room to spare on a phone.
+  btn.textContent = formatClock(progress.elapsedMs);
   btn.title = behind ? t("editor.recordingBehind", { kb: Math.round(progress.pending / 1024), message: progress.error }) : t("editor.recordingOn");
 }
 

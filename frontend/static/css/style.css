@@ -862,11 +862,11 @@ body.row-dragging {
     padding-right: 8px;
   }
   .editor-actions {
-    gap: 4px;
+    gap: 3px;
   }
   .editor-actions .secondary-btn,
   .editor-actions .primary-btn {
-    padding: 6px;
+    padding: 6px 5px;
   }
   .editor-actions .dictation-lang {
     padding: 0 2px;
@@ -879,6 +879,11 @@ body.row-dragging {
 }
 
 .dictation-lang {
+  /* No dropdown arrow - "KO" and "🌐" read as tappable already, and the
+     arrows cost the header row room it doesn't have on a phone. */
+  -webkit-appearance: none;
+  appearance: none;
+  text-align: center;
   border: 1px solid var(--border);
   border-left: none;
   border-radius: 0 6px 6px 0;
@@ -896,6 +901,8 @@ body.row-dragging {
   border-color: #b91c1c;
   color: #ffffff;
   font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  letter-spacing: -0.02em;
 }
 .dictation-record.recording.behind { background: #a16207; border-color: #a16207; }
 
