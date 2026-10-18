@@ -619,13 +619,13 @@ async function switchToTab(index, { keepCurrent = true } = {}) {
   renderTabs();
 }
 
-async function closeTab(index, { force = false } = {}) {
+async function closeTab(index, { force = false, keepDraft = false } = {}) {
   if (streaming || index < 0 || index >= tabs.length) return;
   const tab = tabs[index];
   if (!force && tabDirty(index) && !confirm(t("tabs.confirmClose", { name: tab.title || "" }))) return;
   const wasCurrent = index === currentTab;
   // Closing means discarding: don't offer the edits back next time it opens.
-  if (wasCurrent && isDirty()) clearAutosave();
+  if (wasCurrent && isDirty() && !keepDraft) clearAutosave();
   tabs.splice(index, 1);
   if (!wasCurrent) {
     if (index < currentTab) currentTab -= 1;
@@ -639,6 +639,35 @@ async function closeTab(index, { force = false } = {}) {
   }
   saveTabs();
   renderTabs();
+}
+
+// The tab's document moves to the split-view pane (opening it), unsaved
+// edits and all, and the tab closes. Only a plain document can go - pane B
+// takes nothing else (see selectDocumentB).
+function canMoveTabToSplit(index) {
+  const ref = index === currentTab ? activeDocRef() : tabs[index] && tabs[index].ref;
+  return !!ref && ref.role === "document";
+}
+
+async function moveTabToSplit(index) {
+  if (streaming || index < 0 || index >= tabs.length || !canMoveTabToSplit(index)) return;
+  const isCurrent = index === currentTab;
+  const ref = isCurrent ? activeDocRef() : tabs[index].ref;
+  const stash = tabs[index].stash;
+  const unsaved = isCurrent ? (isDirty() ? el.editor.value : null) : stashDirty(stash) ? stash.content : null;
+  await selectDocumentB(ref.projectId, ref.sessionId, ref.filename);
+  // Declined (pane B's own unsaved changes) or the document is gone.
+  if (!activeB || activeB.projectId !== ref.projectId || activeB.sessionId !== ref.sessionId || activeB.filename !== ref.filename) return;
+  if (unsaved !== null) {
+    el.editorB.value = unsaved;
+    updateFilenameLabelB();
+    renderPreviewB();
+  }
+  // Its edits live on in pane B - and in the draft kept for them.
+  await closeTab(tabs.findIndex((tab) => sameDocRef(tab.ref, ref)), { force: true, keepDraft: true });
+  // Pane A's next tab took focus on the way - the moved document is the
+  // one being looked at, so it gets it back (and the preview with it).
+  el.editorB.focus();
 }
 
 // Closes every tab but `keep` (the current one unless told otherwise) -
@@ -721,6 +750,7 @@ function renderTabs() {
         openRowMenu({ x: e.clientX, y: e.clientY }, [
           { icon: "×", label: t("tabs.close"), onSelect: () => closeTab(index) },
           { icon: "⊗", label: t("tabs.closeOthers"), onSelect: () => closeOtherTabs(index) },
+          ...(canMoveTabToSplit(index) ? [{ icon: "◫", label: t("tabs.moveToSplit"), onSelect: () => moveTabToSplit(index) }] : []),
         ]);
       });
       // Middle click closes, as in a browser.
