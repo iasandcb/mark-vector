@@ -1356,6 +1356,11 @@ function syncPreviewScrollFromSource(which) {
 const LIVE_SEND_INTERVAL_MS = 200;
 const LIVE_RETRY_MIN_MS = 1000;
 const LIVE_RETRY_MAX_MS = 10000;
+// A socket can go dead without ever closing - iOS drops the connection of
+// a page sent to the background, and the page finds out only when it
+// tries to read. Every so often the server is asked for a "pong"; one that
+// hasn't come by the next ask means start over.
+const LIVE_HEARTBEAT_MS = 10000;
 
 function currentLiveState() {
   return active
@@ -1400,6 +1405,8 @@ function createLiveSocket(onConnectedChange, { belongsHere = () => true, onComma
   let retryDelay = LIVE_RETRY_MIN_MS;
   let retryTimer = null;
   let wantConnected = false;
+  let heartbeat = null;
+  let awaitingPong = false;
 
   // Throttled, not debounced: an LLM reply streams in as a steady run of
   // "delta" events (see sendActive below), each calling renderPreview() ->
@@ -1414,7 +1421,24 @@ function createLiveSocket(onConnectedChange, { belongsHere = () => true, onComma
   function sendNow() {
     if (!socket || socket.readyState !== WebSocket.OPEN || !belongsHere(channel)) return;
     lastSentAt = Date.now();
-    socket.send(JSON.stringify(state()));
+    let message;
+    try {
+      message = state();
+    } catch (err) {
+      console.error("live state failed", err);
+      return;
+    }
+    socket.send(JSON.stringify(message));
+  }
+
+  function beat() {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    if (awaitingPong) {
+      connect(channel); // dead - a fresh socket sends the state on open
+      return;
+    }
+    awaitingPong = true;
+    socket.send(JSON.stringify({ type: "ping" }));
   }
 
   function send(immediate) {
@@ -1441,6 +1465,8 @@ function createLiveSocket(onConnectedChange, { belongsHere = () => true, onComma
     channel = newChannel;
     wantConnected = true;
     clearTimeout(retryTimer);
+    clearInterval(heartbeat);
+    awaitingPong = false;
     if (socket) {
       socket.close();
       socket = null;
@@ -1452,11 +1478,13 @@ function createLiveSocket(onConnectedChange, { belongsHere = () => true, onComma
       if (socket !== ws) return;
       onConnectedChange(true);
       retryDelay = LIVE_RETRY_MIN_MS;
+      heartbeat = setInterval(beat, LIVE_HEARTBEAT_MS);
       send(true);
     });
     ws.addEventListener("close", () => {
       if (socket !== ws) return;
       socket = null;
+      clearInterval(heartbeat);
       onConnectedChange(false);
       // Only auto-reconnect while this connection is still wanted - a
       // deliberate disconnect() clears wantConnected first (which normally
@@ -1476,7 +1504,8 @@ function createLiveSocket(onConnectedChange, { belongsHere = () => true, onComma
       } catch (err) {
         return;
       }
-      if (message && message.type === "command") onCommand(message);
+      if (message && message.type === "pong") awaitingPong = false;
+      else if (message && message.type === "command") onCommand(message);
     });
     ws.addEventListener("error", () => ws.close());
   }
@@ -1484,6 +1513,7 @@ function createLiveSocket(onConnectedChange, { belongsHere = () => true, onComma
   function disconnect() {
     wantConnected = false;
     clearTimeout(retryTimer);
+    clearInterval(heartbeat);
     clearTimeout(sendTimer);
     if (socket) {
       const ws = socket;
@@ -1492,6 +1522,16 @@ function createLiveSocket(onConnectedChange, { belongsHere = () => true, onComma
     }
     onConnectedChange(false);
   }
+
+  // Back on screen after a spell in the background: check right away
+  // rather than at the next beat.
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden || !socket || socket.readyState !== WebSocket.OPEN) return;
+    awaitingPong = false;
+    beat();
+    clearInterval(heartbeat);
+    heartbeat = setInterval(beat, LIVE_HEARTBEAT_MS);
+  });
 
   return {
     connect,

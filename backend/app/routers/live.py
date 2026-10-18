@@ -89,6 +89,11 @@ async def live_channel(websocket: WebSocket, channel: str):
             if _is_command(message):
                 await _broadcast(entry["sockets"], message, exclude=websocket)
                 continue
+            if isinstance(message, dict) and message.get("type") == "ping":
+                # The editor checking its socket is still alive (see
+                # app.js's LIVE_HEARTBEAT_MS) - answered to it alone.
+                await websocket.send_json({"type": "pong"})
+                continue
             if not isinstance(message, dict) or message.get("type") != "update":
                 continue
             entry["state"] = message

@@ -96,3 +96,11 @@ def test_version_endpoint_is_public(client, monkeypatch):
     resp = client.get("/api/public/version")
     assert resp.status_code == 200
     assert len(resp.json()["version"]) == 16
+
+
+def test_ping_is_answered_to_the_sender_alone(client, without_passcode):
+    with client.websocket_connect("/ws/live/pingtest") as editor, client.websocket_connect("/ws/live/pingtest") as screen:
+        editor.send_json({"type": "ping"})
+        assert editor.receive_json() == {"type": "pong"}
+        editor.send_json({"type": "update", "filename": "p.md", "content": "x"})
+        assert screen.receive_json()["type"] == "update"  # the ping never reached it
