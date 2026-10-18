@@ -114,7 +114,7 @@ export async function startRealtimeTranscription({ language, audioContext, onEve
       if (idleMs && now - lastHeard > idleMs) onIdle();
     }, TICK_MS);
 
-    return { stop, commit };
+    return { stop, commit, stream };
   } catch (err) {
     stop();
     throw err;

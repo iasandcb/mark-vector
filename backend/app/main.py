@@ -16,6 +16,7 @@ from .routers import (
     projects,
     providers,
     public,
+    recordings,
     spoken_math,
     stt,
     system_prompt,
@@ -47,6 +48,7 @@ app.include_router(public.router)
 app.include_router(live.router)
 app.include_router(transcribe.router)
 app.include_router(stt.router)
+app.include_router(recordings.router)
 
 
 class NoCacheStaticFiles(StaticFiles):

@@ -465,3 +465,39 @@ export function transcribeAudio(projectId, id, file, { title, language, audioLan
     xhr.send(form);
   });
 }
+
+// ---------- recordings (audio taken while dictating - see recording.js) ----------
+
+export function recordingsUrl(projectId, id, filename, recordingId = "") {
+  const base = `${BASE}/projects/${projectId}/conversations/${id}/documents/${encodeURIComponent(filename)}/recordings`;
+  return recordingId ? `${base}/${encodeURIComponent(recordingId)}` : base;
+}
+
+export function listRecordings(projectId, id, filename) {
+  return fetch(recordingsUrl(projectId, id, filename)).then(asJson);
+}
+
+// `started` is local time without a zone ("2026-10-18T19:30:12").
+export function createRecording(projectId, id, filename, ext, started) {
+  return fetch(recordingsUrl(projectId, id, filename), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ext, started }),
+  }).then(asJson);
+}
+
+// Resolves to the size after; a 409 (the server holds a different amount)
+// resolves to { mismatch: size } instead of throwing, so the caller can
+// pick up from there.
+export async function appendRecording(projectId, id, filename, recordingId, offset, blob) {
+  const res = await fetch(`${recordingsUrl(projectId, id, filename, recordingId)}?offset=${offset}`, { method: "PUT", body: blob });
+  if (res.status === 409) {
+    const body = await res.json().catch(() => ({}));
+    return { mismatch: body.detail && body.detail.size };
+  }
+  return asJson(res);
+}
+
+export function deleteRecording(projectId, id, filename, recordingId) {
+  return fetch(recordingsUrl(projectId, id, filename, recordingId), { method: "DELETE" }).then(asJson);
+}

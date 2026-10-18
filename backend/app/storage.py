@@ -975,6 +975,7 @@ def list_documents(project_id: str, conv_id: str) -> list[dict]:
                 "model": choice["model"] if choice else None,
                 "reasoning_effort": choice["reasoning_effort"] if choice else None,
                 "context_scope": choice["context_scope"] if choice else None,
+                "recordings": _recording_count(conv_dir, path.name),
             }
         )
     # pin the system prompt to the top regardless of filename sort order
@@ -1110,6 +1111,7 @@ def rename_document(project_id: str, conv_id: str, old_filename: str, new_filena
 
     old_path.rename(new_path)
     _move_analyses(conv_dir, old_filename, conv_dir, new_filename)
+    _move_recordings(conv_dir, old_filename, conv_dir, new_filename)
 
     meta = _read_meta(project_id, conv_id)
     turn = next((t for t in meta["turns"] if t["file"] == old_filename), None)
@@ -1160,6 +1162,7 @@ def move_document(project_id: str, conv_id: str, filename: str, target_conv_id: 
 
     src_path.rename(dst_path)
     _move_analyses(src_dir, filename, dst_dir, filename)
+    _move_recordings(src_dir, filename, dst_dir, filename)
 
     src_meta = _read_meta(project_id, conv_id)
     turn = next((t for t in src_meta["turns"] if t["file"] == filename), None)
@@ -1272,6 +1275,7 @@ def delete_document(project_id: str, conv_id: str, filename: str) -> None:
         _write_meta(project_id, conv_id, meta)
     path.unlink()
     _move_analyses(path.parent, filename, None, None)
+    _move_recordings(path.parent, filename, None, None)
     unpublish_document(project_id, conv_id, filename)
 
 
@@ -1338,6 +1342,124 @@ def delete_analysis(project_id: str, conv_id: str, filename: str, kind: str) -> 
     if not (conv_dir / filename).exists():
         raise FileNotFoundError(filename)
     _analysis_path(conv_dir, filename, kind).unlink(missing_ok=True)
+
+
+# ---------- recordings (audio taken while dictating into a document) ----------
+#
+# <conv_dir>/.recordings/<filename>/<id> - each one written a few seconds
+# at a time as it's recorded (append_recording), so a tab that dies
+# mid-lecture leaves everything up to its last upload. The id carries the
+# start time and the container: "20261018-193012-ab12.webm" (or .m4a - iOS
+# records MP4). Follows its document like the analyses do.
+
+RECORDINGS_DIRNAME = ".recordings"
+RECORDING_EXTS = {"webm": "audio/webm", "m4a": "audio/mp4", "ogg": "audio/ogg"}
+RECORDING_MAX_BYTES = 1024 * 1024 * 1024
+_RECORDING_ID_RE = re.compile(r"^\d{8}-\d{6}-[0-9a-f]{4}\.(webm|m4a|ogg)$")
+
+
+def _recordings_dir(conv_dir: Path, filename: str) -> Path:
+    return conv_dir / RECORDINGS_DIRNAME / filename
+
+
+def _recording_count(conv_dir: Path, filename: str) -> int:
+    folder = _recordings_dir(conv_dir, filename)
+    return sum(1 for p in folder.iterdir() if _RECORDING_ID_RE.match(p.name)) if folder.is_dir() else 0
+
+
+def _move_recordings(src_dir: Path, filename: str, dst_dir: Path | None, new_filename: str | None) -> None:
+    src = _recordings_dir(src_dir, filename)
+    if not src.is_dir():
+        return
+    if dst_dir is None:
+        shutil.rmtree(src, ignore_errors=True)
+        return
+    dst = _recordings_dir(dst_dir, new_filename)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    src.rename(dst)
+
+
+def _recording_path(project_id: str, conv_id: str, filename: str, recording_id: str) -> Path:
+    _validate_filename(filename)
+    if not _RECORDING_ID_RE.match(recording_id):
+        raise ValueError(f"Invalid recording id: {recording_id}")
+    conv_dir = _conversations_dir(project_id) / conv_id
+    if not (conv_dir / filename).exists():
+        raise FileNotFoundError(filename)
+    return _recordings_dir(conv_dir, filename) / recording_id
+
+
+def _recording_info(path: Path) -> dict:
+    stat = path.stat()
+    return {
+        "id": path.name,
+        "mime": RECORDING_EXTS[path.suffix[1:]],
+        "size": stat.st_size,
+        "updated_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+    }
+
+
+def list_recordings(project_id: str, conv_id: str, filename: str) -> list[dict]:
+    _validate_filename(filename)
+    conv_dir = _conversations_dir(project_id) / conv_id
+    if not (conv_dir / filename).exists():
+        raise FileNotFoundError(filename)
+    folder = _recordings_dir(conv_dir, filename)
+    if not folder.is_dir():
+        return []
+    return [_recording_info(p) for p in sorted(folder.iterdir()) if _RECORDING_ID_RE.match(p.name)]
+
+
+def create_recording(project_id: str, conv_id: str, filename: str, ext: str, started: datetime) -> dict:
+    """`started` is the recorder's own local time, so the id reads as the
+    speaker's clock."""
+    if ext not in RECORDING_EXTS:
+        raise ValueError(f"Unsupported recording type: {ext}")
+    recording_id = f"{started.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}.{ext}"
+    path = _recording_path(project_id, conv_id, filename, recording_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.touch(exist_ok=False)
+    return _recording_info(path)
+
+
+def append_recording(project_id: str, conv_id: str, filename: str, recording_id: str, offset: int, data: bytes) -> int:
+    """Writes `data` at `offset`, which must be where the file ends now - a
+    retried upload whose bytes are already there is accepted as-is. Returns
+    the size after; raises RecordingOffsetError (carrying the actual size)
+    when `offset` is anywhere else, so the client can pick up from there."""
+    path = _recording_path(project_id, conv_id, filename, recording_id)
+    if not path.exists():
+        raise FileNotFoundError(recording_id)
+    size = path.stat().st_size
+    if offset + len(data) <= size:
+        return size
+    if offset != size:
+        raise RecordingOffsetError(size)
+    if size + len(data) > RECORDING_MAX_BYTES:
+        raise ValueError("Recording is too large")
+    with path.open("ab") as out:
+        out.write(data)
+    return size + len(data)
+
+
+class RecordingOffsetError(Exception):
+    def __init__(self, size: int):
+        super().__init__(f"Recording is {size} bytes")
+        self.size = size
+
+
+def recording_file(project_id: str, conv_id: str, filename: str, recording_id: str) -> tuple[Path, str]:
+    path = _recording_path(project_id, conv_id, filename, recording_id)
+    if not path.exists():
+        raise FileNotFoundError(recording_id)
+    return path, RECORDING_EXTS[path.suffix[1:]]
+
+
+def delete_recording(project_id: str, conv_id: str, filename: str, recording_id: str) -> None:
+    path = _recording_path(project_id, conv_id, filename, recording_id)
+    if not path.exists():
+        raise FileNotFoundError(recording_id)
+    path.unlink()
 
 
 # ---------- publishing (public read-only share links) ----------

@@ -890,6 +890,15 @@ body.row-dragging {
   cursor: pointer;
 }
 
+.dictation-record[aria-pressed="true"] { color: #dc2626; }
+.dictation-record.recording {
+  background: #b91c1c;
+  border-color: #b91c1c;
+  color: #ffffff;
+  font-variant-numeric: tabular-nums;
+}
+.dictation-record.recording.behind { background: #a16207; border-color: #a16207; }
+
 #dictation-btn.listening {
   background: #b91c1c;
   border-color: #b91c1c;
@@ -1805,6 +1814,44 @@ kbd.shortcut-key {
 }
 
 /* ---------- transcription dialog (see static/js/transcribe.js) ---------- */
+
+.recordings-panel {
+  max-height: min(75vh, 620px);
+}
+
+.recordings-body {
+  overflow-y: auto;
+  padding: 4px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.recordings-empty {
+  color: var(--muted);
+  margin: 8px 0;
+}
+
+.recordings-empty.error { color: #b91c1c; }
+
+.recordings-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.recordings-size {
+  color: var(--muted);
+  margin-right: auto;
+}
+
+.recordings-meta a.icon-btn { text-decoration: none; }
+
+.recordings-item audio {
+  width: 100%;
+}
 
 .transcribe-panel {
   max-height: none;

@@ -14,9 +14,11 @@ import {
 import { t, getLanguage, applyStaticTranslations, createLanguageSelect, exchangeHeadingRole } from "./i18n.js";
 import { createEditor } from "./editor.js";
 import { openTranscribeDialog } from "./transcribe.js";
+import { openRecordingsDialog } from "./recordings-dialog.js";
 import { createGamepadRemote } from "./remote.js";
 import { splitSlides, lastSlideStart } from "./slides.js";
 import { startRealtimeTranscription } from "./realtime-stt.js";
+import { recordingSupported, startRecording } from "./recording.js";
 import { parseEditBlocks, applyEditBlock, collapseEditBlocks } from "./doc-edits.js";
 import { createAnalysisPanel } from "./analysis.js";
 import { punctuateSpeech } from "./punctuation.js";
@@ -137,6 +139,7 @@ const el = {
   dictationLabel: document.getElementById("dictation-label"),
   dictationLang: document.getElementById("dictation-lang"),
   dictationEngine: document.getElementById("dictation-engine"),
+  dictationRecordBtn: document.getElementById("dictation-record-btn"),
   threadToggleBtn: document.getElementById("thread-toggle-btn"),
   sendBtn: document.getElementById("send-btn"),
   viewModeBtn: document.getElementById("view-mode-btn"),
@@ -2344,6 +2347,7 @@ const DICTATION_LANG_KEY = "mark-vector:dictation-lang";
 const DICTATION_NETWORK_RETRIES = 5;
 const DICTATION_LANG_BY_UI = { ko: "ko-KR", en: "en-US", ja: "ja-JP" };
 const DICTATION_ENGINE_KEY = "mark-vector:dictation-engine";
+const DICTATION_RECORD_KEY = "mark-vector:dictation-record";
 
 // null while idle. `target` is the `active` object dictation started on -
 // switching documents (a new `active`) stops it rather than typing into
@@ -2387,6 +2391,98 @@ function saveDictationLang() {
   }
 }
 
+// ---------- recording while dictating (see recording.js) ----------
+// The ⏺ toggle beside the dictation controls (remembered per browser):
+// while it's on, dictating also records the microphone into the document's
+// folder on the server. The realtime engine's own microphone stream is
+// recorded; the built-in engine listens on its own, so a second stream is
+// opened for the recorder. While dictating, the screen is kept on (a
+// locked phone stops the page, its microphone and with it the recording).
+let recordWithDictation = false;
+
+function restoreDictationRecord() {
+  try {
+    recordWithDictation = localStorage.getItem(DICTATION_RECORD_KEY) === "1";
+  } catch (err) {
+    recordWithDictation = false;
+  }
+}
+
+function formatClock(ms) {
+  const s = Math.floor(ms / 1000);
+  const mm = String(Math.floor(s / 60) % 60).padStart(2, "0");
+  const ss = String(s % 60).padStart(2, "0");
+  return s >= 3600 ? `${Math.floor(s / 3600)}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+
+function updateRecordButton(progress) {
+  const btn = el.dictationRecordBtn;
+  btn.hidden = !recordingSupported();
+  btn.setAttribute("aria-pressed", recordWithDictation ? "true" : "false");
+  const recording = !!(dictation && dictation.recording);
+  btn.classList.toggle("recording", recording);
+  if (!recording) {
+    btn.textContent = "⏺";
+    btn.classList.remove("behind");
+    btn.title = t("editor.dictationRecordTitle");
+    return;
+  }
+  if (!progress) return;
+  // Behind: pieces waiting on a failed upload (they're retried).
+  const behind = !!progress.error && progress.pending > 0;
+  btn.classList.toggle("behind", behind);
+  btn.textContent = `⏺ ${formatClock(progress.elapsedMs)}`;
+  btn.title = behind ? t("editor.recordingBehind", { kb: Math.round(progress.pending / 1024), message: progress.error }) : t("editor.recordingOn");
+}
+
+// `ownsStream`: the stream was opened just for this, and goes with it.
+async function startDictationRecording(session, stream, ownsStream) {
+  const doc = { projectId: session.target.projectId, sessionId: session.target.sessionId, filename: session.target.filename };
+  try {
+    const handle = await startRecording(stream, doc, (progress) => dictation === session && updateRecordButton(progress));
+    if (dictation !== session) {
+      handle.stop().finally(() => ownsStream && stream.getTracks().forEach((track) => track.stop()));
+      return;
+    }
+    session.recording = { handle, stream, ownsStream, doc };
+    updateRecordButton({ elapsedMs: 0, pending: 0, error: null });
+  } catch (err) {
+    if (ownsStream) stream.getTracks().forEach((track) => track.stop());
+    showRemoteStatus(t("editor.recordingFailed", { message: err.message }));
+  }
+}
+
+function stopDictationRecording(session) {
+  const recording = session.recording;
+  if (!recording) return;
+  session.recording = null;
+  recording.handle.stop().then(async () => {
+    if (recording.ownsStream) recording.stream.getTracks().forEach((track) => track.stop());
+    showRemoteStatus(t("editor.recordingSaved"));
+    const { projectId, sessionId } = recording.doc;
+    await refreshSessionDocs(projectId, sessionId).catch(() => {});
+    renderTree();
+  });
+}
+
+let wakeLock = null;
+async function keepScreenOn(on) {
+  if (!on) {
+    const lock = wakeLock;
+    wakeLock = null;
+    if (lock) lock.release().catch(() => {});
+    return;
+  }
+  if (wakeLock || !navigator.wakeLock) return;
+  try {
+    wakeLock = await navigator.wakeLock.request("screen");
+    wakeLock.addEventListener("release", () => (wakeLock = null));
+    if (!dictation) keepScreenOn(false);
+  } catch (err) {
+    // not allowed right now (page hidden, low battery) - tried again on return
+  }
+}
+
 function dictationUsable() {
   return !!active && !streaming && !el.editor.disabled;
 }
@@ -2402,6 +2498,7 @@ function updateDictationButton() {
   el.dictationBtn.classList.toggle("listening", listening);
   el.dictationBtn.setAttribute("aria-pressed", listening ? "true" : "false");
   el.dictationLabel.textContent = t(listening ? "editor.dictationStop" : "editor.dictation");
+  updateRecordButton();
 }
 
 // A space between the new text and whatever precedes it, unless it starts
@@ -2531,6 +2628,20 @@ function startDictation() {
   api.getSpokenMath().then(({ content }) => setSpokenMathVocabulary(parseSpokenMathCsv(content))).catch(() => {});
   if (useRealtimeDictation()) startRealtimeDictation();
   else startWebSpeechDictation();
+  if (!dictation) return;
+  keepScreenOn(true);
+  // The built-in engine doesn't share its microphone - the recorder gets
+  // its own stream. (The realtime engine's comes once it's connected.)
+  const session = dictation;
+  if (recordWithDictation && recordingSupported() && session.engine === "webspeech") {
+    navigator.mediaDevices
+      .getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
+      .then((stream) => {
+        if (dictation !== session) stream.getTracks().forEach((track) => track.stop());
+        else startDictationRecording(session, stream, true);
+      })
+      .catch((err) => showRemoteStatus(t("editor.recordingFailed", { message: err.message })));
+  }
 }
 
 function startWebSpeechDictation() {
@@ -2687,7 +2798,9 @@ function startRealtimeDictation() {
       }
       session.stop = handle.stop;
       session.commit = handle.commit;
+      session.stream = handle.stream;
       showRemoteStatus(t("editor.dictationListening"));
+      if (recordWithDictation && recordingSupported()) startDictationRecording(session, handle.stream, false);
     })
     .catch((err) => {
       if (dictation === session) {
@@ -2704,6 +2817,9 @@ function stopDictation() {
   const session = dictation;
   if (!session) return;
   dictation = null;
+  // The recorder first: the realtime engine's stop() ends the stream it records.
+  stopDictationRecording(session);
+  keepScreenOn(false);
   // Whatever interim text is on screen simply stays as typed.
   try {
     session.stop();
@@ -2745,7 +2861,31 @@ function rebaseDictation(edit) {
 // app, a locked phone) stops it.
 document.addEventListener("visibilitychange", () => {
   if (document.hidden && dictation && dictation.engine === "realtime") stopDictation();
+  // The browser drops a wake lock whenever the page is hidden.
+  if (!document.hidden && dictation) keepScreenOn(true);
 });
+el.dictationRecordBtn.addEventListener("click", () => {
+  recordWithDictation = !recordWithDictation;
+  // Turned off mid-recording: the recording ends here, dictation goes on.
+  if (!recordWithDictation && dictation && dictation.recording) stopDictationRecording(dictation);
+  try {
+    localStorage.setItem(DICTATION_RECORD_KEY, recordWithDictation ? "1" : "0");
+  } catch (err) {
+    // localStorage unavailable - the choice just won't persist across reloads
+  }
+  updateRecordButton();
+  // Turned on mid-dictation: start recording right away.
+  const session = dictation;
+  if (recordWithDictation && session && !session.recording) {
+    if (session.engine === "realtime" && session.stream) startDictationRecording(session, session.stream, false);
+    else if (session.engine === "webspeech")
+      navigator.mediaDevices
+        .getUserMedia({ audio: true })
+        .then((stream) => (dictation === session ? startDictationRecording(session, stream, true) : stream.getTracks().forEach((tr) => tr.stop())))
+        .catch((err) => showRemoteStatus(t("editor.recordingFailed", { message: err.message })));
+  }
+});
+restoreDictationRecord();
 loadRealtimeSttConfig();
 
 function toggleDictation() {
@@ -3415,6 +3555,9 @@ function buildDocumentRow(projectId, sessionId, doc) {
         ? [{ icon: "↩", label: t("doc.revertToDraft"), onSelect: () => revertDocumentToDraft(projectId, sessionId, doc.filename) }]
         : []),
       { icon: "⧉", label: t("doc.copyLink"), onSelect: () => copyDocumentLink(feedbackEl, sessionId, doc.filename, firstH1Heading(doc.content)) },
+      ...(doc.recordings
+        ? [{ icon: "⏺", label: t("doc.recordings", { count: doc.recordings }), onSelect: () => showRecordings(projectId, sessionId, doc.filename) }]
+        : []),
       "-",
       { icon: "↗", label: t("doc.openInNewTab"), onSelect: () => window.open(documentUrl(projectId, sessionId, doc.filename), "_blank", "noopener") },
       // Same as ⌘/Ctrl-clicking the row (see the click handler below),
@@ -4967,6 +5110,18 @@ function transcribeIntoSession(projectId, sessionId) {
       await refreshSessionDocs(projectId, sessionId);
       renderTree();
       await openInTab(docRef(projectId, sessionId, doc.filename));
+    },
+  });
+}
+
+function showRecordings(projectId, sessionId, filename) {
+  openRecordingsDialog({
+    projectId,
+    sessionId,
+    filename,
+    onChange: async () => {
+      await refreshSessionDocs(projectId, sessionId).catch(() => {});
+      renderTree();
     },
   });
 }
