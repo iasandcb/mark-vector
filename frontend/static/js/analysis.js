@@ -1,7 +1,9 @@
 // The preview pane's Evaluate and Formalize tabs: an LLM's reading of the
 // document the preview is showing - how sound it is (and where it goes
 // wrong) under one of three lenses (its mathematics, its facts and
-// reasoning, its writing), or its mathematical argument as Lean 4. See
+// reasoning, its writing), or its mathematical argument as Lean 4. A fourth
+// lens, "live", checks a lecture as it's being written down - see the
+// live-mode section below. See
 // backend/app/analysis.py for the prompts and routers/analysis.py for the
 // endpoint. A run is started by hand and its result saved beside the
 // document, so it comes back when the document is opened again; it's
@@ -10,6 +12,7 @@
 // app.js owns the pane and the documents; this owns what the two tabs show.
 // `deps`:
 //   body, toolbar elements (see index.html's #analysis-view), lensSelect
+//   alert(on) - mark the Evaluate tab: live mode found something unseen
 //   getTarget() -> { projectId, sessionId, filename, content, dialect } | null
 //                  (null: nothing open, or a document that can't be analyzed)
 //   getSettings() -> { provider, model, reasoningEffort }
@@ -23,7 +26,36 @@ import { findText } from "./doc-edits.js";
 const LEAN_WEB = "https://live.lean-lang.org/#code=";
 
 // Evaluate's lenses -> the analysis kind each is run and saved as.
-const LENS_KINDS = { math: "evaluate", logic: "evaluate-logic", writing: "evaluate-writing" };
+const LENS_KINDS = { math: "evaluate", logic: "evaluate-logic", writing: "evaluate-writing", live: "evaluate-live" };
+
+// Live mode: when a changed passage is sent. Dictation rarely pauses, so a
+// long enough run of new text goes without waiting for one.
+const LIVE_TICK_MS = 1000;
+const LIVE_BURST_CHARS = 800; // sent as soon as this much is new
+const LIVE_PAUSE_MS = 3000; // or after a pause this long...
+const LIVE_PAUSE_CHARS = 150; // ...with at least this much new
+const LIVE_IDLE_MS = 15000; // or after a long pause, with any real change
+const LIVE_IDLE_CHARS = 20;
+const LIVE_RETRY_MS = 10000;
+const LIVE_LOOKBACK_CHARS = 400; // how far a passage reaches back to its line's start
+
+// What changed between the text last checked and the text now, as a range
+// of `now` widened to whole lines (an addition at the end of a line brings
+// the line's start along, so the model reads whole sentences). null when
+// nothing was added - a pure deletion has nothing new to check.
+export function changedRegion(old, now) {
+  const max = Math.min(old.length, now.length);
+  let p = 0;
+  while (p < max && old[p] === now[p]) p++;
+  let s = 0;
+  while (s < max - p && old[old.length - 1 - s] === now[now.length - 1 - s]) s++;
+  const end = now.length - s;
+  if (end <= p) return null;
+  const start = Math.max(p > 0 ? now.lastIndexOf("\n", p - 1) + 1 : 0, p - LIVE_LOOKBACK_CHARS);
+  let stop = now.indexOf("\n", end);
+  if (stop === -1) stop = now.length;
+  return { start, end: stop, size: end - p };
+}
 const LENS_KEY = "markvector.evaluateLens";
 
 function loadLens() {
@@ -37,7 +69,7 @@ function loadLens() {
 }
 
 export function createAnalysisPanel(deps) {
-  const { body, runBtn, status, copyBtn, leanLink, lensSelect } = deps;
+  const { body, runBtn, status, copyBtn, leanLink, lensSelect, clearBtn } = deps;
   let view = null; // "evaluate" | "formalize" while one of the tabs is shown
   let lens = loadLens();
   lensSelect.value = lens;
@@ -77,6 +109,7 @@ export function createAnalysisPanel(deps) {
   }
 
   async function run() {
+    if (kindOf() === "evaluate-live") return toggleLive();
     const target = deps.getTarget();
     if (!target || !view) return;
     const settings = deps.getSettings();
@@ -145,6 +178,8 @@ export function createAnalysisPanel(deps) {
     if (!view) return;
     lensSelect.hidden = view !== "evaluate";
     const kind = kindOf();
+    clearBtn.hidden = true;
+    if (kind === "evaluate-live") return renderLive();
     const target = deps.getTarget();
     if (!target) {
       setToolbar({ runLabel: t(view === "evaluate" ? "analysis.runEvaluate" : "analysis.runFormalize"), runDisabled: true });
@@ -209,9 +244,16 @@ export function createAnalysisPanel(deps) {
       }
       return;
     }
+    body.appendChild(issueList(record.issues, target));
+  }
+
+  // The issues as a list whose items, when their quote is still in the
+  // text, select it in the editor on a click.
+  function issueList(issues, target, { withTime = false } = {}) {
+    const md = (text) => deps.renderMarkdown(text, target.dialect);
     const list = document.createElement("ol");
     list.className = "analysis-issues";
-    for (const issue of record.issues) {
+    for (const issue of issues) {
       const item = document.createElement("li");
       item.className = `analysis-issue severity-${issue.severity}`;
       const found = issue.quote ? findText(target.content, issue.quote) : null;
@@ -219,6 +261,7 @@ export function createAnalysisPanel(deps) {
         <div class="analysis-issue-head">
           <span class="analysis-severity">${escapeHtml(t(lens === "writing" && issue.severity === "warning" ? "analysis.severityWriting.warning" : `analysis.severity.${issue.severity}`))}</span>
           ${issue.quote ? `<code class="analysis-quote">${escapeHtml(issue.quote)}</code>` : ""}
+          ${withTime && issue.at ? `<span class="analysis-time">${escapeHtml(new Date(issue.at).toLocaleTimeString(getLanguage()))}</span>` : ""}
         </div>
         <div class="analysis-problem">${md(issue.problem)}</div>
         ${issue.correction ? `<div class="analysis-correction"><strong>${escapeHtml(t("analysis.correction"))}</strong> ${md(issue.correction)}</div>` : ""}`;
@@ -240,7 +283,7 @@ export function createAnalysisPanel(deps) {
       }
       list.appendChild(item);
     }
-    body.appendChild(list);
+    return list;
   }
 
   function renderFormalization(record, target) {
@@ -263,10 +306,150 @@ export function createAnalysisPanel(deps) {
     }
   }
 
+  // ---------- live mode ----------
+  // While it's on, every second: if the document it was started on is the
+  // one being shown and enough has changed since the last check (see the
+  // LIVE_ constants), the changed passage goes off to be checked - one at a
+  // time, whatever came in meanwhile waits for the next. Issues pile up in
+  // the saved "evaluate-live" record, newest shown first. Text already in
+  // the document when it starts isn't checked: the other lenses are for
+  // that.
+  let live = null; // { key, baseline, lastChange, inFlight, retryAt, error, lastCheckAt }
+  let liveTimer = null;
+
+  function toggleLive() {
+    if (live) return stopLive();
+    const target = deps.getTarget();
+    if (!target) return;
+    const settings = deps.getSettings();
+    if (!settings.provider || !settings.model) {
+      status.textContent = t("analysis.noModel");
+      return;
+    }
+    live = { key: keyOf(target), baseline: target.content, lastChange: Date.now(), inFlight: false, retryAt: 0, error: null, lastCheckAt: null };
+    liveTimer = setInterval(liveTick, LIVE_TICK_MS);
+    render();
+  }
+
+  function stopLive() {
+    clearInterval(liveTimer);
+    liveTimer = null;
+    live = null;
+    render();
+  }
+
+  async function liveTick() {
+    if (!live || live.inFlight) return;
+    const target = deps.getTarget();
+    const showing = isLiveShown();
+    if (!target || keyOf(target) !== live.key) {
+      if (showing) liveStatus();
+      return;
+    }
+    const now = Date.now();
+    const region = now >= live.retryAt ? changedRegion(live.baseline, target.content) : null;
+    const quiet = now - live.lastChange;
+    const due =
+      region &&
+      (region.size >= LIVE_BURST_CHARS ||
+        (quiet >= LIVE_PAUSE_MS && region.size >= LIVE_PAUSE_CHARS) ||
+        (quiet >= LIVE_IDLE_MS && region.size >= LIVE_IDLE_CHARS));
+    if (!due) {
+      if (showing) liveStatus();
+      return;
+    }
+    const session = live;
+    session.inFlight = true;
+    if (showing) liveStatus();
+    const sent = target.content;
+    const settings = { ...deps.getSettings(), language: getLanguage(), mathDialect: target.dialect };
+    try {
+      const { record, added } = await api.liveCheck(target.projectId, target.sessionId, target.filename, sent, region.start, region.end, settings);
+      session.baseline = sent;
+      session.error = null;
+      session.lastCheckAt = Date.now();
+      const entry = results.get(session.key) || {};
+      entry["evaluate-live"] = record;
+      results.set(session.key, entry);
+      if (added.length && !isLiveShown()) deps.alert(true);
+    } catch (err) {
+      session.error = err.message;
+      session.retryAt = Date.now() + LIVE_RETRY_MS;
+    }
+    session.inFlight = false;
+    if (live === session && isLiveShown()) render();
+  }
+
+  const isLiveShown = () => view === "evaluate" && lens === "live" && !document.hidden;
+
+  function liveStatus() {
+    if (!live) return;
+    const target = deps.getTarget();
+    const parts = [];
+    if (!target || keyOf(target) !== live.key) parts.push(t("analysis.live.otherDoc"));
+    else if (live.inFlight) parts.push(t("analysis.live.checking"));
+    else parts.push(t("analysis.live.listening"));
+    const record = (results.get(live.key) || {})["evaluate-live"];
+    if (record) parts.push(t("analysis.live.checks", { count: record.checks || 0 }));
+    if (live.lastCheckAt) parts.push(t("analysis.live.ago", { seconds: Math.round((Date.now() - live.lastCheckAt) / 1000) }));
+    status.textContent = parts.join(" · ");
+    if (live.error) status.insertAdjacentHTML("beforeend", ` <span class="analysis-stale">${escapeHtml(t("analysis.failed", { message: live.error }))}</span>`);
+  }
+
+  function renderLive() {
+    deps.alert(false);
+    const target = deps.getTarget();
+    const key = target && keyOf(target);
+    const on = !!live && live.key === key;
+    runBtn.textContent = t(live ? "analysis.live.stop" : "analysis.live.start");
+    // Stopping works from any document; starting needs one open.
+    runBtn.disabled = !live && !target;
+    runBtn.classList.toggle("live-on", !!live);
+    copyBtn.hidden = true;
+    leanLink.hidden = true;
+    if (!target) {
+      status.textContent = "";
+      if (live) liveStatus();
+      body.innerHTML = `<p class="analysis-empty">${escapeHtml(t("analysis.noDocument"))}</p>`;
+      return;
+    }
+    const entry = results.get(key) || {};
+    const record = entry["evaluate-live"];
+    if (record === undefined) load(target);
+    clearBtn.hidden = !record || on;
+    if (live) liveStatus();
+    else status.textContent = record ? metaLine(record) : "";
+    if (!record || (!record.issues.length && !on)) {
+      body.innerHTML = `<p class="analysis-empty">${escapeHtml(t("analysis.empty.live"))}</p>`;
+      return;
+    }
+    body.innerHTML = "";
+    if (!record.issues.length) {
+      body.insertAdjacentHTML("beforeend", `<p class="analysis-empty">${escapeHtml(t("analysis.live.none"))}</p>`);
+      return;
+    }
+    body.appendChild(issueList([...record.issues].reverse(), target, { withTime: true }));
+  }
+
+  clearBtn.addEventListener("click", async () => {
+    const target = deps.getTarget();
+    if (!target || (live && live.key === keyOf(target))) return;
+    if (!confirm(t("analysis.live.clearConfirm"))) return;
+    try {
+      await api.deleteAnalysis(target.projectId, target.sessionId, target.filename, "evaluate-live");
+      (results.get(keyOf(target)) || {})["evaluate-live"] = null;
+    } catch (err) {
+      status.textContent = t("analysis.failed", { message: err.message });
+      return;
+    }
+    render();
+  });
+
   // The text changed, or the preview now follows another document: the
   // stale mark is worked out again once typing pauses.
   let debounce = null;
   function contentChanged() {
+    if (live) live.lastChange = Date.now();
     if (!view) return;
     clearTimeout(debounce);
     debounce = setTimeout(refreshHash, 400);
@@ -318,7 +501,9 @@ export function createAnalysisPanel(deps) {
     contentChanged,
     // A document went away or was renamed - its cached results with it.
     forget(projectId, sessionId, filename) {
-      results.delete(`${projectId}/${sessionId}/${filename}`);
+      const key = `${projectId}/${sessionId}/${filename}`;
+      results.delete(key);
+      if (live && live.key === key) stopLive();
     },
   };
 }

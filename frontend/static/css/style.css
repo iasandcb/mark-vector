@@ -2104,6 +2104,29 @@ kbd.shortcut-key {
 
 .analysis-lens[hidden] { display: none; }
 
+.analysis-time {
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: auto;
+}
+
+#analysis-run-btn.live-on {
+  background: #b91c1c;
+  border-color: #b91c1c;
+}
+
+/* Live mode found something while the Evaluate tab wasn't showing it. */
+.preview-tab.has-alert::after {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 5px;
+  border-radius: 50%;
+  background: #dc2626;
+  vertical-align: 2px;
+}
+
 .analysis-status {
   font-size: 12px;
   color: var(--muted);

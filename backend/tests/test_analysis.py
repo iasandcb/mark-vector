@@ -173,3 +173,40 @@ class TestRouter:
         assert "no_math" not in provider.system_prompt and "no_claims" not in provider.system_prompt
         storage.rename_document(pid, conv_id, filename, "moved.md")
         assert client.get(f"{base.replace(filename, 'moved.md')}/evaluate-writing").json() is not None
+
+
+class TestLive:
+    def test_merge_skips_repeated_quotes(self):
+        issue = {"severity": "error", "quote": "1543년", "problem": "p", "correction": ""}
+        first = analysis.merge_live(None, [issue], "t1")
+        assert first["checks"] == 1 and len(first["added"]) == 1
+        second = analysis.merge_live(first, [issue, {**issue, "quote": "other"}], "t2")
+        assert [i["quote"] for i in second["issues"]] == ["1543년", "other"]
+        assert [i["quote"] for i in second["added"]] == ["other"]
+
+    def test_passage_and_context(self):
+        content = "A" * 5000 + "NEW PART"
+        msg = analysis.live_user_message("f.md", content, 5000, len(content))
+        assert "<passage>\nNEW PART\n</passage>" in msg
+        assert msg.count("A") <= analysis.LIVE_CONTEXT_CHARS + 5
+
+    def test_live_endpoint_accumulates_and_clears(self, isolated_data_dir, monkeypatch):
+        pid, conv_id, filename = _draft()
+        reply = json.dumps({"issues": [{"severity": "error", "quote": "1 + 1 = 3", "problem": "2", "correction": ""}]})
+        provider = FakeProvider(reply)
+        monkeypatch.setattr(analysis_router, "get_provider", lambda provider_id: provider)
+        client = TestClient(app)
+        url = f"/api/projects/{pid}/conversations/{conv_id}/documents/{filename}/analysis/evaluate-live"
+        body = {"content": "intro\n1 + 1 = 3", "start": 6, "end": 15, "provider": "openai", "model": "m"}
+        first = client.post(url, json=body).json()
+        assert len(first["added"]) == 1 and first["record"]["checks"] == 1
+        assert "<passage>\n1 + 1 = 3\n</passage>" in provider.messages[0]["content"]
+        assert "lecture" in provider.system_prompt
+        second = client.post(url, json=body).json()
+        assert second["added"] == [] and second["record"]["checks"] == 2
+        assert client.get(url).json()["checks"] == 2
+        assert client.delete(url).status_code == 200
+        assert client.get(url).json() is None
+
+        provider.text = "not json"
+        assert client.post(url, json=body).json()["added"] == []

@@ -5,6 +5,10 @@
   each one in the editor. Three lenses, each its own kind and saved result:
   "evaluate" (the mathematics), "evaluate-logic" (facts and reasoning, any
   subject) and "evaluate-writing" (clarity, structure, grammar).
+- evaluate-live: the same check, a passage at a time while a lecture is
+  being written down (dictated, typed, or a script being edited) - only
+  what changed since the last check is sent, with the text before it as
+  context, and the issues found pile up in one saved record.
 - formalize: the document's mathematical argument as Lean 4 (with Mathlib),
   which the client offers to open in the Lean 4 web editor to check.
 
@@ -97,6 +101,68 @@ Reply with ONE JSON object and nothing else - no code fence, no text before or a
 }}
 
 {empty_line}List issues in document order. """
+
+
+LIVE_CONTEXT_CHARS = 3_000
+LIVE_PASSAGE_MAX_CHARS = 8_000
+LIVE_MAX_ISSUES = 300
+
+LIVE_SYSTEM = """You check a lecture for mistakes while it is being given. The lecture is being written down as it goes - dictated by speech recognition, typed live, or a prepared script being edited - and you are shown one new passage at a time, with the text before it for context.
+
+Report only real problems in the NEW passage: a factual claim you are confident is false, a wrong computation or formula, a mathematical statement that is false or a step that does not follow, a contradiction with the context. Check every computation yourself. Report a doubtful claim you can't confirm only if it matters, as a warning that says you couldn't confirm it.
+
+Stay quiet otherwise. The text may be a speech transcript: ignore filler words, repetition, recognition slips that don't change the meaning, loose grammar, and a sentence cut off at the end of the passage (the speaker is mid-sentence - it will come again, complete, in the next passage). Do not report style, wording or formatting, and do not repeat problems in the context. Most passages have no problems; then return no issues.
+
+Math may be written in LaTeX or in AsciiMath (a `<!-- math: asciimath -->` line marks AsciiMath), or spoken out in words.
+
+Reply with ONE JSON object and nothing else - no code fence, no text before or after it:
+
+{
+  "issues": [
+    {
+      "severity": "error" | "warning",
+      "quote": "<the exact text the issue is about, copied character for character from the NEW passage - a short span, at most one line>",
+      "problem": "<what is wrong and why, in a sentence or two>",
+      "correction": "<what it should be; empty if there's nothing to add>"
+    }
+  ]
+}
+
+"""
+
+
+def live_system_prompt(language: str, dialect: str = "latex") -> str:
+    return LIVE_SYSTEM + _math_line("evaluate", dialect) + _language_line(language)
+
+
+def live_user_message(filename: str, content: str, start: int, end: int) -> str:
+    start = max(0, min(start, len(content)))
+    end = max(start, min(end, len(content), start + LIVE_PASSAGE_MAX_CHARS))
+    context = content[max(0, start - LIVE_CONTEXT_CHARS) : start]
+    return (
+        f'Lecture "{filename}". The text so far, for context:\n<context>\n{context}\n</context>\n\n'
+        f"Check this new passage:\n<passage>\n{content[start:end]}\n</passage>"
+    )
+
+
+def parse_live(text: str) -> list[dict]:
+    """The model's reply as a list of issues; anything unreadable is none."""
+    return parse_evaluation(text)["issues"] if _parse_json_object(text) is not None else []
+
+
+def merge_live(record: dict | None, issues: list[dict], at: str) -> dict:
+    """Adds a step's issues to the saved live record - skipping ones already
+    there for the same quote, which a passage re-sent with its sentence
+    finished would otherwise report twice."""
+    kept = list((record or {}).get("issues") or [])
+    seen = {issue["quote"] for issue in kept if issue.get("quote")}
+    added = []
+    for issue in issues:
+        if issue["quote"] and issue["quote"] in seen:
+            continue
+        seen.add(issue["quote"])
+        added.append({**issue, "at": at})
+    return {"issues": (kept + added)[-LIVE_MAX_ISSUES:], "checks": (record or {}).get("checks", 0) + 1, "added": added}
 
 
 FORMALIZE_SYSTEM = """You formalize mathematics in Lean 4. You will be given a Markdown document - notes, a solution, a proof, a lesson - and you translate its mathematical content and the logical development of its argument into Lean 4 using Mathlib.

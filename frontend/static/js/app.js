@@ -47,6 +47,7 @@ const el = {
   analysisCopyBtn: document.getElementById("analysis-copy-btn"),
   analysisLeanLink: document.getElementById("analysis-lean-link"),
   analysisLensSelect: document.getElementById("analysis-lens-select"),
+  analysisClearBtn: document.getElementById("analysis-clear-btn"),
   analysisBody: document.getElementById("analysis-body"),
   treeResizer: document.getElementById("tree-resizer"),
   previewResizer: document.getElementById("preview-resizer"),
@@ -1772,6 +1773,10 @@ const analysisPanel = createAnalysisPanel({
   copyBtn: el.analysisCopyBtn,
   leanLink: el.analysisLeanLink,
   lensSelect: el.analysisLensSelect,
+  clearBtn: el.analysisClearBtn,
+  alert(on) {
+    el.previewTabs.querySelector('[data-view="evaluate"]').classList.toggle("has-alert", on);
+  },
   getTarget: analysisTarget,
   getSettings: () => ({
     provider: el.providerSelect.value,

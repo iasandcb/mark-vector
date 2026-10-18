@@ -1285,7 +1285,7 @@ def delete_document(project_id: str, conv_id: str, filename: str) -> None:
 # tells a result that's gone stale.
 
 ANALYSIS_DIRNAME = ".analysis"
-ANALYSIS_KINDS = ("evaluate", "evaluate-logic", "evaluate-writing", "formalize")
+ANALYSIS_KINDS = ("evaluate", "evaluate-logic", "evaluate-writing", "evaluate-live", "formalize")
 
 
 def _analysis_path(conv_dir: Path, filename: str, kind: str) -> Path:
@@ -1330,6 +1330,14 @@ def save_analysis(project_id: str, conv_id: str, filename: str, kind: str, resul
     record = {**result, "kind": kind, "created_at": _now()}
     path.write_text(json.dumps(record, indent=2, ensure_ascii=False), encoding="utf-8")
     return record
+
+
+def delete_analysis(project_id: str, conv_id: str, filename: str, kind: str) -> None:
+    _validate_filename(filename)
+    conv_dir = _conversations_dir(project_id) / conv_id
+    if not (conv_dir / filename).exists():
+        raise FileNotFoundError(filename)
+    _analysis_path(conv_dir, filename, kind).unlink(missing_ok=True)
 
 
 # ---------- publishing (public read-only share links) ----------

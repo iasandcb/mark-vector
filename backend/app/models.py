@@ -90,6 +90,21 @@ class InlineMessage(BaseModel):
     content: str
 
 
+class LiveCheckRequest(BaseModel):
+    """One step of Evaluate's live mode (routers/analysis.py): the passage
+    `content[start:end]` - what changed since the last step - is checked,
+    with the text before it as context."""
+
+    content: str
+    start: int
+    end: int
+    provider: str
+    model: str
+    reasoning_effort: str | None = None
+    language: str = "en"
+    math_dialect: str = "latex"
+
+
 class AnalysisRequest(BaseModel):
     """The preview pane's Evaluate/Formalize run (routers/analysis.py).
     `content` is the editor's text as it stands, which may be ahead of what

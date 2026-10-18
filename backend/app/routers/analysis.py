@@ -1,10 +1,11 @@
 import json
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
 from .. import analysis, storage
-from ..models import AnalysisRequest
+from ..models import AnalysisRequest, LiveCheckRequest
 from ..providers.registry import get_provider
 
 router = APIRouter(prefix="/api/projects/{project_id}/conversations", tags=["analysis"])
@@ -27,6 +28,62 @@ def get_analysis(project_id: str, conv_id: str, filename: str, kind: str):
         raise HTTPException(status_code=404, detail="Document not found")
 
 
+@router.delete("/{conv_id}/documents/{filename}/analysis/{kind}")
+def delete_analysis(project_id: str, conv_id: str, filename: str, kind: str):
+    _check_kind(kind)
+    try:
+        storage.delete_analysis(project_id, conv_id, filename, kind)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return {"ok": True}
+
+
+@router.post("/{conv_id}/documents/{filename}/analysis/evaluate-live")
+async def live_check(project_id: str, conv_id: str, filename: str, req: LiveCheckRequest):
+    """One step of Evaluate's live mode: checks `content[start:end]` and adds
+    what it finds to the saved "evaluate-live" record. Plain JSON, not a
+    stream - the reply is a short list, usually empty. Returns the record
+    and, as `added`, this step's new issues."""
+    try:
+        existing = storage.get_analysis(project_id, conv_id, filename, "evaluate-live")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Document not found")
+    try:
+        provider = get_provider(req.provider)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    system_prompt = analysis.live_system_prompt(req.language, req.math_dialect)
+    messages = [{"role": "user", "content": analysis.live_user_message(filename, req.content, req.start, req.end)}]
+    chunks: list[str] = []
+    try:
+        async for event in provider.stream(messages, req.model, req.reasoning_effort, system_prompt):
+            if event["type"] == "text":
+                chunks.append(event["text"])
+    except Exception as exc:  # surface provider/network errors to the client
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    at = datetime.now(timezone.utc).isoformat()
+    merged = analysis.merge_live(existing, analysis.parse_live("".join(chunks)), at)
+    added = merged.pop("added")
+    result = {
+        **merged,
+        "content_sha256": analysis.content_hash(req.content),
+        "provider": req.provider,
+        "model": req.model,
+        "reasoning_effort": req.reasoning_effort,
+    }
+    try:
+        record = storage.save_analysis(project_id, conv_id, filename, "evaluate-live", result)
+    except FileNotFoundError:
+        record = {**result, "kind": "evaluate-live", "created_at": None}
+    return {"record": record, "added": added}
+
+
 @router.post("/{conv_id}/documents/{filename}/analysis/{kind}")
 async def run_analysis(project_id: str, conv_id: str, filename: str, kind: str, req: AnalysisRequest):
     """Evaluates (under one of the lenses) or formalizes `req.content` - the editor's text, saved or
@@ -34,6 +91,8 @@ async def run_analysis(project_id: str, conv_id: str, filename: str, kind: str, 
     send_message's stream: "delta" events while the reply comes in, then
     {"type": "done", "result": ...} with the saved record (or "error")."""
     _check_kind(kind)
+    if kind == "evaluate-live":
+        raise HTTPException(status_code=400, detail="Live checks go through their own request")
     try:
         storage.get_analysis(project_id, conv_id, filename, kind)
     except ValueError as exc:

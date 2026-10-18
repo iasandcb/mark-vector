@@ -384,6 +384,29 @@ export async function runAnalysis(projectId, id, filename, kind, content, settin
   await streamNdjson(res, onEvent);
 }
 
+export function deleteAnalysis(projectId, id, filename, kind) {
+  return fetch(analysisUrl(projectId, id, filename, kind), { method: "DELETE" }).then(asJson);
+}
+
+// One step of Evaluate's live mode: checks content.slice(start, end).
+// Resolves to { record, added }.
+export function liveCheck(projectId, id, filename, content, start, end, settings) {
+  return fetch(analysisUrl(projectId, id, filename, "evaluate-live"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      content,
+      start,
+      end,
+      provider: settings.provider,
+      model: settings.model,
+      reasoning_effort: settings.reasoningEffort,
+      language: settings.language,
+      math_dialect: settings.mathDialect,
+    }),
+  }).then(asJson);
+}
+
 // ---------- speaker-diarized transcription ----------
 // See routers/transcribe.py. XHR rather than fetch() only because fetch has
 // no upload-progress event, and a long recording is a big upload. The
