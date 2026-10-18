@@ -30,6 +30,13 @@ export const RECORDING_AUDIO = { echoCancellation: false, noiseSuppression: fals
 const RETRY_MIN_MS = 1000;
 const RETRY_MAX_MS = 15000;
 
+// Apple's browsers (every iOS browser is one) record WebM now too, but
+// Safari won't play it back - MP4 there.
+function mimeTypes() {
+  const apple = /Apple/.test(navigator.vendor || "");
+  return apple ? [...MIME_TYPES].sort(([a], [b]) => (b === "audio/mp4") - (a === "audio/mp4")) : MIME_TYPES;
+}
+
 export function recordingSupported() {
   return !!window.MediaRecorder && MIME_TYPES.some(([mime]) => MediaRecorder.isTypeSupported(mime));
 }
@@ -44,7 +51,7 @@ function localStamp(date) {
 // server. Resolves to { stop() } - stop() ends the recording and resolves
 // once everything recorded is uploaded (or given up on).
 export async function startRecording(stream, doc, onChange = () => {}) {
-  const [mimeType, ext, bitsPerSecond] = MIME_TYPES.find(([mime]) => MediaRecorder.isTypeSupported(mime));
+  const [mimeType, ext, bitsPerSecond] = mimeTypes().find(([mime]) => MediaRecorder.isTypeSupported(mime));
   const startedAt = new Date();
   const { id } = await api.createRecording(doc.projectId, doc.sessionId, doc.filename, ext, localStamp(startedAt));
   const recorder = new MediaRecorder(stream, { mimeType, audioBitsPerSecond: bitsPerSecond });

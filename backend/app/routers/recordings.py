@@ -1,3 +1,5 @@
+import asyncio
+import shutil
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Request
@@ -61,15 +63,49 @@ async def append_recording(project_id: str, conv_id: str, filename: str, recordi
     return {"size": size}
 
 
+_convert_locks: dict[str, asyncio.Lock] = {}
+
+
+async def _playable(src, dst) -> None:
+    """Makes `dst` an AAC copy of `src` unless an up-to-date one is there.
+    The player asks several times over (ranges), so one conversion at a time
+    per recording."""
+    lock = _convert_locks.setdefault(str(dst), asyncio.Lock())
+    async with lock:
+        if dst.exists() and dst.stat().st_mtime >= src.stat().st_mtime:
+            return
+        if shutil.which("ffmpeg") is None:
+            raise HTTPException(status_code=501, detail="ffmpeg is not installed on the server")
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dst.with_name(dst.name + ".part")
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-y", "-loglevel", "error", "-i", str(src), "-vn", "-c:a", "aac", "-b:a", "96k",
+            "-movflags", "+faststart", "-f", "mp4", str(tmp),
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+        )
+        _, err = await proc.communicate()
+        if proc.returncode != 0:
+            tmp.unlink(missing_ok=True)
+            raise HTTPException(status_code=500, detail=f"Conversion failed: {err.decode(errors='replace')[-300:]}")
+        tmp.replace(dst)
+
+
 @router.get("/{recording_id}")
-def get_recording(project_id: str, conv_id: str, filename: str, recording_id: str):
+async def get_recording(project_id: str, conv_id: str, filename: str, recording_id: str, format: str | None = None):
+    """The recording as recorded - or, with `format=m4a`, as AAC for a
+    player that can't take the original."""
+    stem = f"{filename.removesuffix('.md')}-{recording_id}"
     try:
+        if format == "m4a" and not recording_id.endswith(".m4a"):
+            src, dst = storage.playable_recording_paths(project_id, conv_id, filename, recording_id)
+            await _playable(src, dst)
+            return FileResponse(dst, media_type="audio/mp4", filename=stem.rsplit(".", 1)[0] + ".m4a")
         path, mime = storage.recording_file(project_id, conv_id, filename, recording_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except FileNotFoundError as exc:
         raise _not_found(exc)
-    return FileResponse(path, media_type=mime, filename=f"{filename.removesuffix('.md')}-{recording_id}")
+    return FileResponse(path, media_type=mime, filename=stem)
 
 
 @router.delete("/{recording_id}")

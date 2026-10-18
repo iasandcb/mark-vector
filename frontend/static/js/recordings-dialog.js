@@ -5,6 +5,8 @@
 import * as api from "./api.js";
 import { t, getLanguage } from "./i18n.js";
 
+const APPLE = /Apple/.test(navigator.vendor || "");
+
 function escapeHtml(text) {
   return String(text).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
@@ -63,6 +65,9 @@ export async function openRecordingsDialog({ projectId, sessionId, filename, onC
     body.innerHTML = "";
     for (const rec of [...recordings].reverse()) {
       const url = api.recordingsUrl(projectId, sessionId, filename, rec.id);
+      // Safari says it might play a WebM, then doesn't - straight to the
+      // server's AAC copy there.
+      const src = APPLE && !rec.id.endsWith(".m4a") ? `${url}?format=m4a` : url;
       const when = startedAt(rec.id);
       const item = document.createElement("div");
       item.className = "recordings-item";
@@ -70,10 +75,20 @@ export async function openRecordingsDialog({ projectId, sessionId, filename, onC
         <div class="recordings-meta">
           <span>${escapeHtml(when ? when.toLocaleString(getLanguage()) : rec.id)}</span>
           <span class="recordings-size">${rec.size >= 1024 * 1024 ? `${(rec.size / 1024 / 1024).toFixed(1)} MB` : `${Math.ceil(rec.size / 1024)} KB`}</span>
-          <a class="icon-btn" href="${url}" download title="${escapeHtml(t("recordings.download"))}">⤓</a>
+          <a class="icon-btn" href="${src}" download title="${escapeHtml(t("recordings.download"))}">⤓</a>
           <button class="icon-btn" type="button" data-delete title="${escapeHtml(t("recordings.delete"))}">×</button>
         </div>
-        <audio controls preload="metadata" src="${url}"></audio>`;
+        <audio controls preload="metadata" src="${src}"></audio>`;
+      // A recording made in another browser may not play here (iOS won't
+      // play WebM from MediaRecorder) - then the server's AAC copy.
+      const audio = item.querySelector("audio");
+      audio.addEventListener(
+        "error",
+        () => {
+          if (src === url && !rec.id.endsWith(".m4a")) audio.src = `${url}?format=m4a`;
+        },
+        { once: true },
+      );
       item.querySelector("[data-delete]").addEventListener("click", async () => {
         if (!confirm(t("recordings.deleteConfirm"))) return;
         try {

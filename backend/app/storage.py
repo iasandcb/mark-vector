@@ -1455,11 +1455,26 @@ def recording_file(project_id: str, conv_id: str, filename: str, recording_id: s
     return path, RECORDING_EXTS[path.suffix[1:]]
 
 
+# A WebM recording made in one browser may not play in another (iOS
+# Safari won't play one MediaRecorder wrote), so it can also be had as AAC,
+# converted on first ask and kept beside it until the recording changes.
+PLAYABLE_DIRNAME = ".play"
+
+
+def playable_recording_paths(project_id: str, conv_id: str, filename: str, recording_id: str) -> tuple[Path, Path]:
+    """(the recording, where its .m4a copy goes) - the copy may not exist yet."""
+    path = _recording_path(project_id, conv_id, filename, recording_id)
+    if not path.exists():
+        raise FileNotFoundError(recording_id)
+    return path, path.parent / PLAYABLE_DIRNAME / f"{recording_id}.m4a"
+
+
 def delete_recording(project_id: str, conv_id: str, filename: str, recording_id: str) -> None:
     path = _recording_path(project_id, conv_id, filename, recording_id)
     if not path.exists():
         raise FileNotFoundError(recording_id)
     path.unlink()
+    (path.parent / PLAYABLE_DIRNAME / f"{recording_id}.m4a").unlink(missing_ok=True)
 
 
 # ---------- publishing (public read-only share links) ----------
