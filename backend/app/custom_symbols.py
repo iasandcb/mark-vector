@@ -59,10 +59,12 @@ def parse_custom_symbols_rows(csv_content: str) -> list[tuple[str, str]]:
 def build_config(csv_content: str) -> Config:
     """The subset of `parse_custom_symbols_rows` this package's LaTeX ->
     AsciiMath2 converter can actually act on, as an asciimath2.Config ready
-    to pass into `asciimath2.convert`."""
+    to pass into `asciimath2.convert`, plus every row's token as
+    `extra_tokens`."""
     custom_macros: dict[str, str] = {}
     custom_text: dict[str, str] = {}
-    for token, latex in parse_custom_symbols_rows(csv_content):
+    rows = parse_custom_symbols_rows(csv_content)
+    for token, latex in rows:
         m = _BARE_MACRO_RE.match(latex)
         if m:
             custom_macros.setdefault(m.group(1), token)
@@ -70,4 +72,7 @@ def build_config(csv_content: str) -> Config:
         m = _TEXT_OR_OPERATORNAME_RE.match(latex)
         if m:
             custom_text.setdefault(m.group(1).strip(), token)
-    return Config(custom_macros=custom_macros, custom_text=custom_text)
+    # Every row's token is a symbol the frontend renderer knows, whether or
+    # not the converter can produce it - output is never joined into one.
+    tokens = frozenset(token for token, _ in rows)
+    return Config(custom_macros=custom_macros, custom_text=custom_text, extra_tokens=tokens)

@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.14"
 
 [[package]]
@@ -52,14 +52,14 @@ wheels = [
 
 [[package]]
 name = "asciimath2"
-version = "0.1.1"
+version = "0.1.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pylatexenc" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/06/ae/70abffad42d6995010c263071f2f71fdd9f30b7caacf89f41a64d6d04e33/asciimath2-0.1.1.tar.gz", hash = "sha256:27d451c79c9b14ae4e1bd2f90c4bb7c8638beace4b8c5de33091461c059f2ceb", size = 18401, upload-time = "2026-10-05T04:18:30.489Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/27/e5/1c5433f2d57d114c7d9f2cd05d60b4d8e4a39bf646793ca36e2728dfd241/asciimath2-0.1.2.tar.gz", hash = "sha256:44e9157e3af7f0061d816c5971ae3036c2b9c8ef4c75cfe56b69880125654fd0", size = 23132, upload-time = "2026-10-18T05:49:33.448Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a2/48/273f21aebd202a6889f62705cfab56e8ece32488bd7b09043b3c0a47936a/asciimath2-0.1.1-py3-none-any.whl", hash = "sha256:968578340e3a96e775e78acf73bd9b129eb41e8ed04c28c9a6e4d3d72e9392cb", size = 21821, upload-time = "2026-10-05T04:18:29.422Z" },
+    { url = "https://files.pythonhosted.org/packages/31/88/afc0137bc0ade297a063330d81a0ebc180137329588814156a7a1560b795/asciimath2-0.1.2-py3-none-any.whl", hash = "sha256:9f3840f0d0d913867359d7ebd6cb42994a9e6748ae372ca6d7ce59e939a28437", size = 25858, upload-time = "2026-10-18T05:49:32.365Z" },
 ]
 
 [[package]]
@@ -362,7 +362,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "anthropic", specifier = ">=0.40" },
-    { name = "asciimath2", specifier = ">=0.1.1" },
+    { name = "asciimath2", specifier = ">=0.1.2" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx2", specifier = ">=2.12" },
     { name = "openai", specifier = ">=1.55" },

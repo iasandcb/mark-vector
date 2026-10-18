@@ -45,7 +45,7 @@ class TestWiredIntoConversion:
     def test_convert_math_applies_custom_symbols(self):
         config = build_config("pmf, \\text{pmf}")
         out, needs_directive = convert_math_to_asciimath(r"$\text{pmf}(x)$", config)
-        assert out == "$pmf ( x )$"
+        assert out == "$pmf (x)$"
         assert needs_directive is True
 
     def test_no_config_behaves_like_before(self):
