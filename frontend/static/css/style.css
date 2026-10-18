@@ -2229,6 +2229,7 @@ kbd.shortcut-key {
 
 .analysis-issue.severity-error { border-left-color: #b91c1c; }
 .analysis-issue.severity-suggestion { border-left-color: #2563eb; }
+.analysis-issue.severity-answer { border-left-color: #15803d; }
 
 .analysis-issue.locatable {
   cursor: pointer;
@@ -2255,6 +2256,7 @@ kbd.shortcut-key {
 
 .severity-error .analysis-severity { color: #b91c1c; }
 .severity-suggestion .analysis-severity { color: #2563eb; }
+.severity-answer .analysis-severity { color: #15803d; }
 
 /* The quoted document text, rendered (so its math shows as math) in a
    grey box - headings, lists and paragraphs flattened to one line's look. */

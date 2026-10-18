@@ -2335,6 +2335,7 @@ async function loadRealtimeSttConfig() {
   updateDictationButton();
 }
 const DICTATION_LANG_KEY = "mark-vector:dictation-lang";
+const DICTATION_NETWORK_RETRIES = 5;
 const DICTATION_LANG_BY_UI = { ko: "ko-KR", en: "en-US", ja: "ja-JP" };
 const DICTATION_ENGINE_KEY = "mark-vector:dictation-engine";
 
@@ -2538,6 +2539,7 @@ function startWebSpeechDictation() {
     from: el.editor.selectionStart,
     interim: "",
     error: null,
+    networkRetries: 0,
     // abort(), not stop(): stop() would still deliver one last "result"
     // after this point, into a session that's already been let go.
     stop: () => recognition.abort(),
@@ -2554,6 +2556,7 @@ function startWebSpeechDictation() {
       stopDictation();
       return;
     }
+    session.networkRetries = 0;
     let finalText = "";
     let interimText = "";
     for (let i = e.resultIndex; i < e.results.length; i++) {
@@ -2578,6 +2581,23 @@ function startWebSpeechDictation() {
   recognition.addEventListener("end", () => {
     if (dictation !== session) return;
     session.interim = "";
+    // Chrome's recognizer drops its connection now and then ("network")
+    // even on a working connection, and starting it again just works - so
+    // that's done here, a few times in a row before it counts as a failure.
+    if (session.error === "network" && session.networkRetries < DICTATION_NETWORK_RETRIES) {
+      session.error = null;
+      session.networkRetries++;
+      showRemoteStatus(t("editor.dictationReconnecting"));
+      setTimeout(() => {
+        if (dictation !== session) return;
+        try {
+          recognition.start();
+        } catch (err) {
+          stopDictation();
+        }
+      }, 500 * session.networkRetries);
+      return;
+    }
     if (session.error) {
       const denied = session.error === "not-allowed" || session.error === "service-not-allowed";
       stopDictation();

@@ -26,7 +26,7 @@ ANALYSIS_MAX_CHARS = 200_000
 
 LANGUAGE_NAMES = {"ko": "Korean", "en": "English", "ja": "Japanese"}
 
-SEVERITIES = ("error", "warning", "suggestion")
+SEVERITIES = ("error", "warning", "suggestion", "answer")
 VERDICTS = ("sound", "minor_issues", "flawed", "no_math", "no_claims")
 
 
@@ -111,6 +111,8 @@ LIVE_SYSTEM = """You check a lecture for mistakes while it is being given. The l
 
 Report only real problems in the NEW passage: a factual claim you are confident is false, a wrong computation or formula, a mathematical statement that is false or a step that does not follow, a contradiction with the context. Check every computation yourself. Report a doubtful claim you can't confirm only if it matters, as a warning that says you couldn't confirm it.
 
+The speaker may also ask you something in passing - a fact, a number, a definition, a quick check ("한국 인구가 얼마죠?", "what's the derivative of tan x again?"). Answer such a question as an "answer" item: the quote is the question, the problem field holds the answer - direct and short, a sentence or two with the key figure or fact first (say how current a changing figure is). Leave out rhetorical questions put to the audience that the lecture goes on to answer itself.
+
 Stay quiet otherwise. The text may be a speech transcript: ignore filler words, repetition, recognition slips that don't change the meaning, loose grammar, and a sentence cut off at the end of the passage (the speaker is mid-sentence - it will come again, complete, in the next passage). Do not report style, wording or formatting, and do not repeat problems in the context. Most passages have no problems; then return no issues.
 
 Math may be written in LaTeX or in AsciiMath (a `<!-- math: asciimath -->` line marks AsciiMath), or spoken out in words.
@@ -120,9 +122,9 @@ Reply with ONE JSON object and nothing else - no code fence, no text before or a
 {
   "issues": [
     {
-      "severity": "error" | "warning",
+      "severity": "error" | "warning" | "answer",
       "quote": "<the exact text the issue is about, copied character for character from the NEW passage - a short span, at most one line>",
-      "problem": "<what is wrong and why, in a sentence or two>",
+      "problem": "<what is wrong and why, in a sentence or two - or, for an answer, the answer>",
       "correction": "<what it should be; empty if there's nothing to add>"
     }
   ]

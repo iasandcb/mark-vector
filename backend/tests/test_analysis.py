@@ -184,6 +184,11 @@ class TestLive:
         assert [i["quote"] for i in second["issues"]] == ["1543년", "other"]
         assert [i["quote"] for i in second["added"]] == ["other"]
 
+    def test_answer_items_kept(self):
+        reply = json.dumps({"issues": [{"severity": "answer", "quote": "한국 인구가 얼마죠?", "problem": "약 5,100만 명"}]})
+        assert analysis.parse_live(reply)[0]["severity"] == "answer"
+        assert '"answer"' in analysis.live_system_prompt("ko")
+
     def test_passage_and_context(self):
         content = "A" * 5000 + "NEW PART"
         msg = analysis.live_user_message("f.md", content, 5000, len(content))
