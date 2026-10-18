@@ -1825,6 +1825,17 @@ document.addEventListener("keydown", (e) => {
   setPreviewView(view);
 });
 
+// ⌥R (Alt+R): the Evaluate / Formalize tab's run button - run, run again,
+// or start/stop the live check - when one of those tabs is the pane's view.
+document.addEventListener("keydown", (e) => {
+  if (e.code !== "KeyR" || !e.altKey || e.metaKey || e.ctrlKey || e.shiftKey) return;
+  if (!el.quickOpenOverlay.hidden || !el.shortcutsOverlay.hidden) return;
+  if (el.previewPane.dataset.view === "preview" || !el.previewPane.dataset.view) return;
+  e.preventDefault();
+  if (el.layout.classList.contains("preview-collapsed")) setPreviewCollapsed(false);
+  if (!el.analysisRunBtn.disabled) el.analysisRunBtn.click();
+});
+
 function paintSharedPreview(text, dialect) {
   // Threads are scratch conversation: collapsed ones are left out, expanded
   // ones are rendered in their own box (see renderDocumentWithThreads). The
@@ -4138,6 +4149,7 @@ function shortcutGroups() {
         { desc: "shortcuts.toggleTree", keys: [`${mod}B`] },
         { desc: "shortcuts.togglePreview", keys: [`${alt}${mod}B`] },
         { desc: "shortcuts.previewViews", keys: [IS_MAC ? `${alt}1 / 2 / 3` : `${alt}⇧1 / 2 / 3`] },
+        { desc: "shortcuts.analysisRun", keys: [`${alt}R`] },
         { desc: "shortcuts.jumpDoc", keys: [`${HINT_KEY_SYMBOL}1-9`] },
         { desc: "shortcuts.tabPrevNext", keys: [`${alt}[`, `${alt}]`] },
         { desc: "shortcuts.tabClose", keys: [`${alt}W`] },
@@ -4677,6 +4689,8 @@ const IS_MAC = /Mac|iPhone|iPad/i.test((navigator.userAgentData && navigator.use
 const HINT_KEYS = IS_MAC ? ["Control"] : ["Alt"];
 const HINT_KEY_NAME = IS_MAC ? "⌃" : "Alt";
 const HINT_KEY_SYMBOL = IS_MAC ? "⌃" : "⌥";
+// The ⌥R shortcut (see the preview pane tabs section), on its button.
+el.analysisRunBtn.title = IS_MAC ? "⌥R" : "Alt+R";
 // True while exactly the jump modifier is held - a chord like ⌃⌘F, or ⇧⌃
 // alone, must never arm or trigger the digits.
 const hintModifierHeld = (e) =>
