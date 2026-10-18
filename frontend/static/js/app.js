@@ -19,6 +19,7 @@ import { splitSlides, lastSlideStart } from "./slides.js";
 import { startRealtimeTranscription } from "./realtime-stt.js";
 import { parseEditBlocks, applyEditBlock, collapseEditBlocks } from "./doc-edits.js";
 import { createAnalysisPanel } from "./analysis.js";
+import { punctuateSpeech } from "./punctuation.js";
 
 // Inline-thread markers. Declared up here, away from the rest of the
 // inline-thread code further down, because `el` below builds the editor,
@@ -2482,13 +2483,17 @@ function writeDictationText(finalText, interimText) {
   if (math) {
     finalText = spokenMathToAsciiMath(finalText);
     interimText = spokenMathToAsciiMath(interimText);
+  } else if (d.engine === "webspeech") {
+    // The realtime engine punctuates on its own; the built-in one doesn't.
+    finalText = punctuateSpeech(finalText, el.dictationLang.value);
+    interimText = punctuateSpeech(interimText, el.dictationLang.value, { final: false });
   }
   const tidy = (text) => (math ? text.replace(/^ +| +$/g, "") : text.trim());
   const end = d.from + d.interim.length;
   let insert = "";
   if (tidy(finalText)) {
     const text = tidy(finalText);
-    insert += (text.startsWith("\n") ? "" : dictationSeparator(d.from)) + text;
+    insert += (/^[\n.,?!。、？！]/.test(text) ? "" : dictationSeparator(d.from)) + text;
   }
   const committedEnd = d.from + insert.length;
   let interim = "";
@@ -2496,7 +2501,7 @@ function writeDictationText(finalText, interimText) {
     const text = tidy(interimText);
     // Separator judged against what the final text above will leave behind.
     const before = insert ? insert[insert.length - 1] : committedEnd > 0 ? el.editor.value[d.from - 1] : "\n";
-    const sep = el.dictationLang.value.startsWith("ja") || /\s/.test(before) || committedEnd === 0 || text.startsWith("\n") ? "" : " ";
+    const sep = el.dictationLang.value.startsWith("ja") || /\s/.test(before) || committedEnd === 0 || /^[\n.,?!。、？！]/.test(text) ? "" : " ";
     interim = sep + text;
   }
   if (!insert && !interim && !d.interim) return;
