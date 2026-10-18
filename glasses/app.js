@@ -15,6 +15,8 @@ import { splitSlides } from "/static/js/slides.js";
 const filenameEl = document.getElementById("filename");
 const statusEl = document.getElementById("status");
 const contentEl = document.getElementById("content");
+const screenEl = document.getElementById("screen");
+const liveCheckEl = document.getElementById("live-check");
 
 // A specific document (from the editor's "Live to glasses" URL) if given -
 // otherwise this screen runs in ambient mode, always tracking whichever
@@ -106,8 +108,63 @@ function renderSlides(message, isNewDocument) {
   }
 }
 
+// ---------- live check ----------
+// While the editor's Evaluate tab runs its live check, each update carries
+// a snapshot of it (message.liveCheck - see analysis.js's liveSnapshot):
+// a status line and the newest findings, labels already in the editor's
+// language. Normally a strip under the document shows the newest finding;
+// in document view the D-pad's right swaps the document for the whole
+// list (left goes back). A finding that's just come in gets the strip's
+// top edge lit for a while.
+const FRESH_MS = 8000;
+let showFindings = false;
+let lastFindingCount = null;
+let freshTimer = null;
+
+function escapeHtml(text) {
+  return String(text).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+}
+
+function renderLiveCheck(message) {
+  const check = message && message.liveCheck;
+  if (!check) {
+    liveCheckEl.hidden = true;
+    screenEl.classList.remove("findings");
+    showFindings = false;
+    lastFindingCount = null;
+    return;
+  }
+  liveCheckEl.hidden = false;
+  if (lastFindingCount !== null && check.count > lastFindingCount) {
+    liveCheckEl.classList.add("fresh");
+    clearTimeout(freshTimer);
+    freshTimer = setTimeout(() => liveCheckEl.classList.remove("fresh"), FRESH_MS);
+  }
+  lastFindingCount = check.count;
+  const findings = showFindings && !slideMode(message);
+  screenEl.classList.toggle("findings", findings);
+  const dialect = message.dialect || "latex";
+  const md = (text) => renderMarkdown(text || "", dialect);
+  const shown = findings ? check.issues : check.issues.slice(0, 1);
+  const status = `<div class="lc-status">${escapeHtml(check.status)}${check.error ? ` <span class="lc-error">${escapeHtml(check.error)}</span>` : ""}</div>`;
+  const items = shown
+    .map(
+      (issue) => `<div class="lc-issue severity-${escapeHtml(issue.severity)}">
+        <span class="lc-label">${escapeHtml(issue.label)}</span>${issue.at ? `<span class="lc-time">${escapeHtml(new Date(issue.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))}</span>` : ""}
+        ${issue.quote ? `<div class="lc-quote">${md(issue.quote)}</div>` : ""}
+        <div class="lc-problem">${md(issue.problem)}</div>
+        ${issue.correction ? `<div class="lc-correction">→ ${md(issue.correction)}</div>` : ""}
+      </div>`
+    )
+    .join("");
+  const scroll = liveCheckEl.scrollTop;
+  liveCheckEl.innerHTML = status + items;
+  liveCheckEl.scrollTop = findings ? scroll : 0;
+}
+
 function render(message) {
   lastMessage = message;
+  renderLiveCheck(message);
   if (!message || !message.filename) {
     renderIdle("No document open in mark-vector.");
     return;
@@ -267,6 +324,25 @@ setInterval(async () => {
 // in slide view left/right step between slides.
 const SCROLL_STEP = 140;
 document.addEventListener("keydown", (event) => {
+  // Document view with a live check running: right shows the findings,
+  // left the document again, and up/down scroll whichever is showing.
+  if (lastMessage && lastMessage.liveCheck && !slideMode(lastMessage)) {
+    if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
+      event.preventDefault();
+      const next = event.key === "ArrowRight";
+      if (next !== showFindings) {
+        showFindings = next;
+        liveCheckEl.scrollTop = 0;
+        renderLiveCheck(lastMessage);
+      }
+      return;
+    }
+    if (showFindings && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+      event.preventDefault();
+      liveCheckEl.scrollTop += event.key === "ArrowDown" ? SCROLL_STEP : -SCROLL_STEP;
+      return;
+    }
+  }
   if ((event.key === "ArrowLeft" || event.key === "ArrowRight") && slideMode(lastMessage)) {
     event.preventDefault();
     const next = slideIndex + (event.key === "ArrowRight" ? 1 : -1);

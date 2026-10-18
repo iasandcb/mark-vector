@@ -13,6 +13,7 @@
 // `deps`:
 //   body, toolbar elements (see index.html's #analysis-view), lensSelect
 //   alert(on) - mark the Evaluate tab: live mode found something unseen
+//   onLiveChange() - what liveSnapshot() returns has changed
 //   getTarget() -> { projectId, sessionId, filename, content, dialect } | null
 //                  (null: nothing open, or a document that can't be analyzed)
 //   getSettings() -> { provider, model, reasoningEffort }
@@ -37,7 +38,8 @@ const LIVE_PAUSE_CHARS = 80; // ...with at least this much new
 const LIVE_IDLE_MS = 15000; // or after a long pause, with any real change
 const LIVE_IDLE_CHARS = 20;
 const LIVE_RETRY_MS = 10000;
-const LIVE_LOOKBACK_CHARS = 400; // how far a passage reaches back to its line's start
+const LIVE_LOOKBACK_CHARS = 400;
+const LIVE_SNAPSHOT_ISSUES = 30; // newest findings handed to the glasses screen // how far a passage reaches back to its line's start
 
 // What changed between the text last checked and the text now, as a range
 // of `now` widened to whole lines (an addition at the end of a line brings
@@ -330,6 +332,7 @@ export function createAnalysisPanel(deps) {
     live = { key: keyOf(target), baseline: target.content, lastChange: Date.now(), inFlight: false, retryAt: 0, error: null, lastCheckAt: null };
     liveTimer = setInterval(liveTick, LIVE_TICK_MS);
     render();
+    notifyLive();
   }
 
   function stopLive() {
@@ -337,9 +340,61 @@ export function createAnalysisPanel(deps) {
     liveTimer = null;
     live = null;
     render();
+    notifyLive();
+  }
+
+  // Live mode as the glasses screen shows it: a status line and the newest
+  // findings, labels already translated and quotes already made renderable
+  // (see quoteSource) - that screen has neither the strings nor the text
+  // the quote came from in hand. null while live mode is off.
+  function liveSnapshot() {
+    if (!live) return null;
+    const target = deps.getTarget();
+    const here = !!target && keyOf(target) === live.key;
+    const record = (results.get(live.key) || {})["evaluate-live"];
+    let state;
+    if (!here) state = t("analysis.live.otherDoc");
+    else if (live.inFlight) state = t("analysis.live.checkingChars", { count: live.sentSize });
+    else {
+      const region = changedRegion(live.baseline, target.content);
+      state = t("analysis.live.newChars", { count: region ? region.size : 0, burst: LIVE_BURST_CHARS });
+    }
+    const parts = [state];
+    if (record) parts.push(t("analysis.live.checks", { count: record.checks || 0 }));
+    const all = (record && record.issues) || [];
+    const issues = all.slice(-LIVE_SNAPSHOT_ISSUES).reverse().map((issue) => {
+      const found = here && issue.quote ? findText(target.content, issue.quote) : null;
+      return {
+        severity: issue.severity,
+        label: t(`analysis.severity.${issue.severity}`),
+        quote: found ? quoteSource(target.content, issue.quote, found[0]) : issue.quote,
+        problem: issue.problem,
+        correction: issue.correction,
+        at: issue.at,
+      };
+    });
+    return {
+      status: parts.join(" · "),
+      error: live.error ? t("analysis.failed", { message: live.error }) : null,
+      count: all.length,
+      issues,
+    };
+  }
+
+  let lastSnapshot = "null";
+  function notifyLive() {
+    const snapshot = JSON.stringify(liveSnapshot());
+    if (snapshot === lastSnapshot) return;
+    lastSnapshot = snapshot;
+    if (deps.onLiveChange) deps.onLiveChange();
   }
 
   async function liveTick() {
+    await liveStep();
+    notifyLive();
+  }
+
+  async function liveStep() {
     if (!live || live.inFlight) return;
     const target = deps.getTarget();
     const showing = isLiveShown();
@@ -365,6 +420,7 @@ export function createAnalysisPanel(deps) {
     session.inFlight = true;
     session.sentSize = region.size;
     if (showing) liveStatus();
+    notifyLive();
     const sent = target.content;
     const settings = { ...deps.getSettings(), language: getLanguage(), mathDialect: target.dialect };
     try {
@@ -460,6 +516,7 @@ export function createAnalysisPanel(deps) {
     try {
       await api.deleteAnalysis(target.projectId, target.sessionId, target.filename, "evaluate-live");
       (results.get(keyOf(target)) || {})["evaluate-live"] = null;
+      notifyLive();
     } catch (err) {
       status.textContent = t("analysis.failed", { message: err.message });
       return;
@@ -521,6 +578,7 @@ export function createAnalysisPanel(deps) {
       refreshHash();
     },
     contentChanged,
+    liveSnapshot,
     // A document went away or was renamed - its cached results with it.
     forget(projectId, sessionId, filename) {
       const key = `${projectId}/${sessionId}/${filename}`;

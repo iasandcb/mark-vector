@@ -145,6 +145,56 @@
     #content .math-error {
       color: #ff6b6b;
     }
+    /* The Evaluate tab's live check (see app.js's renderLiveCheck): a strip
+       under the document with its status and newest finding, or - with
+       the D-pad's right in document view - the whole list in its place. */
+    #live-check {
+      flex-shrink: 0;
+      max-height: 42%;
+      overflow: hidden;
+      border-top: 2px solid #3a3a36;
+      padding-top: 8px;
+      font-size: 17px;
+      line-height: 1.4;
+    }
+    #live-check[hidden] { display: none; }
+    #live-check.fresh { border-top-color: #ffd84d; }
+    #screen.findings #content { display: none; }
+    #screen.findings #live-check {
+      flex: 1;
+      max-height: none;
+      overflow-y: auto;
+      border-top: none;
+      padding-top: 0;
+    }
+    #live-check::-webkit-scrollbar { display: none; }
+    .lc-status {
+      font-size: 13px;
+      color: #9a9a92;
+      margin-bottom: 6px;
+    }
+    .lc-status .lc-error { color: #ff6b6b; }
+    .lc-issue {
+      border-left: 4px solid #ffb020;
+      padding-left: 10px;
+      margin-bottom: 12px;
+    }
+    .lc-issue.severity-error { border-left-color: #ff6b6b; }
+    .lc-issue.severity-answer { border-left-color: #5ee08a; }
+    .lc-label {
+      font-size: 12px;
+      font-weight: 700;
+      color: #ffb020;
+      margin-right: 6px;
+    }
+    .severity-error .lc-label { color: #ff6b6b; }
+    .severity-answer .lc-label { color: #5ee08a; }
+    .lc-time { font-size: 12px; color: #9a9a92; }
+    .lc-quote { color: #c8c8c0; margin: 2px 0; }
+    .lc-quote > *, .lc-problem > *, .lc-correction > * { margin: 0; display: inline; font-size: inherit; }
+    .lc-correction { color: #5ee08a; }
+    #live-check .katex { color: inherit; }
+
     /* KaTeX's own output is unstyled black text by default - repoint it to
        the same light foreground as everything else, or every equation
        renders invisible against the black background. */
@@ -162,6 +212,7 @@
     <div id="content">
       <p class="hint">Connecting…</p>
     </div>
+    <div id="live-check" hidden></div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/katex@0.18.4/dist/katex.min.js"

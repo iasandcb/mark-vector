@@ -1389,7 +1389,7 @@ function currentLiveState() {
 // `onCommand(message)` (optional) receives a command a screen sent back on
 // the channel (see live.py's _COMMAND_ACTIONS) - e.g. the glasses D-pad
 // asking for a new slide.
-function createLiveSocket(onConnectedChange, { belongsHere = () => true, onCommand = () => {} } = {}) {
+function createLiveSocket(onConnectedChange, { belongsHere = () => true, onCommand = () => {}, state = currentLiveState } = {}) {
   let channel = null;
   let socket = null;
   let sendTimer = null;
@@ -1411,7 +1411,7 @@ function createLiveSocket(onConnectedChange, { belongsHere = () => true, onComma
   function sendNow() {
     if (!socket || socket.readyState !== WebSocket.OPEN || !belongsHere(channel)) return;
     lastSentAt = Date.now();
-    socket.send(JSON.stringify(currentLiveState()));
+    socket.send(JSON.stringify(state()));
   }
 
   function send(immediate) {
@@ -1511,8 +1511,11 @@ function createLiveSocket(onConnectedChange, { belongsHere = () => true, onComma
 const GLASSES_CHANNEL_KEY = "mark-vector:live-channel";
 const GLASSES_ENABLED_KEY = "mark-vector:live-enabled";
 
+// Only the glasses get the Evaluate tab's live check findings (see
+// analysis.js's liveSnapshot) - for the speaker's eyes, never a public page.
 const glassesSocket = createLiveSocket((connected) => el.glassesStatusDot.classList.toggle("connected", connected), {
   onCommand: handleScreenCommand,
+  state: () => ({ ...currentLiveState(), liveCheck: analysisPanel.liveSnapshot() }),
 });
 
 function getOrCreateGlassesChannel() {
@@ -1807,6 +1810,9 @@ const analysisPanel = createAnalysisPanel({
   lensSelect: el.analysisLensSelect,
   clearBtn: el.analysisClearBtn,
   nowBtn: el.analysisNowBtn,
+  onLiveChange() {
+    if (el.glassesCheckbox.checked) glassesSocket.send(false);
+  },
   alert(on) {
     el.previewTabs.querySelector('[data-view="evaluate"]').classList.toggle("has-alert", on);
   },
