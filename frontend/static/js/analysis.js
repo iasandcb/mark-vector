@@ -31,8 +31,8 @@ const LENS_KINDS = { math: "evaluate", logic: "evaluate-logic", writing: "evalua
 // Live mode: when a changed passage is sent. Dictation rarely pauses, so a
 // long enough run of new text goes without waiting for one.
 const LIVE_TICK_MS = 1000;
-const LIVE_BURST_CHARS = 800; // sent as soon as this much is new
-const LIVE_PAUSE_MS = 3000; // or after a pause this long...
+const LIVE_BURST_CHARS = 400; // sent as soon as this much is new
+const LIVE_PAUSE_MS = 2000; // or after a pause this long...
 const LIVE_PAUSE_CHARS = 150; // ...with at least this much new
 const LIVE_IDLE_MS = 15000; // or after a long pause, with any real change
 const LIVE_IDLE_CHARS = 20;
@@ -69,7 +69,7 @@ function loadLens() {
 }
 
 export function createAnalysisPanel(deps) {
-  const { body, runBtn, status, copyBtn, leanLink, lensSelect, clearBtn } = deps;
+  const { body, runBtn, status, copyBtn, leanLink, lensSelect, clearBtn, nowBtn } = deps;
   let view = null; // "evaluate" | "formalize" while one of the tabs is shown
   let lens = loadLens();
   lensSelect.value = lens;
@@ -179,6 +179,7 @@ export function createAnalysisPanel(deps) {
     lensSelect.hidden = view !== "evaluate";
     const kind = kindOf();
     clearBtn.hidden = true;
+    nowBtn.hidden = true;
     if (kind === "evaluate-live") return renderLive();
     const target = deps.getTarget();
     if (!target) {
@@ -351,7 +352,8 @@ export function createAnalysisPanel(deps) {
     const quiet = now - live.lastChange;
     const due =
       region &&
-      (region.size >= LIVE_BURST_CHARS ||
+      (live.force ||
+        region.size >= LIVE_BURST_CHARS ||
         (quiet >= LIVE_PAUSE_MS && region.size >= LIVE_PAUSE_CHARS) ||
         (quiet >= LIVE_IDLE_MS && region.size >= LIVE_IDLE_CHARS));
     if (!due) {
@@ -359,6 +361,7 @@ export function createAnalysisPanel(deps) {
       return;
     }
     const session = live;
+    session.force = false;
     session.inFlight = true;
     session.sentSize = region.size;
     if (showing) liveStatus();
@@ -387,12 +390,14 @@ export function createAnalysisPanel(deps) {
     if (!live) return;
     const target = deps.getTarget();
     const parts = [];
+    nowBtn.disabled = true;
     if (!target || keyOf(target) !== live.key) parts.push(t("analysis.live.otherDoc"));
     else if (live.inFlight) parts.push(t("analysis.live.checkingChars", { count: live.sentSize }));
     else {
       parts.push(t("analysis.live.listening"));
       // How much is waiting to be checked, against the burst size.
       const region = changedRegion(live.baseline, target.content);
+      nowBtn.disabled = !region;
       parts.push(t("analysis.live.newChars", { count: region ? region.size : 0, burst: LIVE_BURST_CHARS }));
     }
     const record = (results.get(live.key) || {})["evaluate-live"];
@@ -424,6 +429,7 @@ export function createAnalysisPanel(deps) {
     const record = entry["evaluate-live"];
     if (record === undefined) load(target);
     clearBtn.hidden = !record || on;
+    nowBtn.hidden = !on;
     if (live) liveStatus();
     else status.textContent = record ? metaLine(record) : "";
     if (!record || (!record.issues.length && !on)) {
@@ -437,6 +443,15 @@ export function createAnalysisPanel(deps) {
     }
     body.appendChild(issueList([...record.issues].reverse(), target, { withTime: true }));
   }
+
+  // Sends what's new right away instead of waiting for the size or pause
+  // (or for a failed check's retry).
+  nowBtn.addEventListener("click", () => {
+    if (!live || live.inFlight) return;
+    live.force = true;
+    live.retryAt = 0;
+    liveTick();
+  });
 
   clearBtn.addEventListener("click", async () => {
     const target = deps.getTarget();

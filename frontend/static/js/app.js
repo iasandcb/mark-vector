@@ -49,6 +49,7 @@ const el = {
   analysisLeanLink: document.getElementById("analysis-lean-link"),
   analysisLensSelect: document.getElementById("analysis-lens-select"),
   analysisClearBtn: document.getElementById("analysis-clear-btn"),
+  analysisNowBtn: document.getElementById("analysis-now-btn"),
   analysisBody: document.getElementById("analysis-body"),
   treeResizer: document.getElementById("tree-resizer"),
   previewResizer: document.getElementById("preview-resizer"),
@@ -1805,6 +1806,7 @@ const analysisPanel = createAnalysisPanel({
   leanLink: el.analysisLeanLink,
   lensSelect: el.analysisLensSelect,
   clearBtn: el.analysisClearBtn,
+  nowBtn: el.analysisNowBtn,
   alert(on) {
     el.previewTabs.querySelector('[data-view="evaluate"]').classList.toggle("has-alert", on);
   },
