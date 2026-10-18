@@ -2181,6 +2181,13 @@ kbd.shortcut-key {
   min-width: 0;
 }
 
+/* A phone has no room for the status beside the buttons - it gets a row
+   of its own under them. */
+@media (max-width: 700px) {
+  .analysis-toolbar { padding: 8px 12px; }
+  .analysis-status { flex-basis: 100%; order: 10; }
+}
+
 .analysis-stale {
   color: #b45309;
   font-weight: 600;
