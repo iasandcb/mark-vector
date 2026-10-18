@@ -2256,10 +2256,28 @@ kbd.shortcut-key {
 .severity-error .analysis-severity { color: #b91c1c; }
 .severity-suggestion .analysis-severity { color: #2563eb; }
 
+/* The quoted document text, rendered (so its math shows as math) in a
+   grey box - headings, lists and paragraphs flattened to one line's look. */
 .analysis-quote {
   font-size: 12.5px;
-  white-space: pre-wrap;
   word-break: break-word;
+  background: var(--code-bg);
+  border-radius: 4px;
+  padding: 1px 6px;
+  max-width: 100%;
+}
+
+.analysis-quote > * {
+  margin: 0;
+  padding: 0;
+  font-size: inherit;
+  font-weight: inherit;
+  border: 0;
+}
+
+.analysis-quote ul,
+.analysis-quote ol {
+  list-style-position: inside;
 }
 
 .analysis-missing {

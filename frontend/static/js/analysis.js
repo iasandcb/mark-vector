@@ -260,7 +260,7 @@ export function createAnalysisPanel(deps) {
       item.innerHTML = `
         <div class="analysis-issue-head">
           <span class="analysis-severity">${escapeHtml(t(lens === "writing" && issue.severity === "warning" ? "analysis.severityWriting.warning" : `analysis.severity.${issue.severity}`))}</span>
-          ${issue.quote ? `<code class="analysis-quote">${escapeHtml(issue.quote)}</code>` : ""}
+          ${issue.quote ? `<div class="analysis-quote">${md(issue.quote)}</div>` : ""}
           ${withTime && issue.at ? `<span class="analysis-time">${escapeHtml(new Date(issue.at).toLocaleTimeString(getLanguage()))}</span>` : ""}
         </div>
         <div class="analysis-problem">${md(issue.problem)}</div>
