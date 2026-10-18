@@ -2304,7 +2304,7 @@ function updateInlineCompleteButton() {
 //     SpeechRecognition in Safari only - Chrome on iOS even exposes
 //     webkitSpeechRecognition, but it never works there) and Firefox.
 //     Needs the server's OPENAI_API_KEY and is billed per minute streamed,
-//     so it stops when the tab is hidden or nothing's been heard for a while.
+//     so it stops when the microphone is taken away or nothing's been heard for a while.
 //     Where both work, an engine select next to the language one lets the
 //     realtime engine be picked anyway (built-in recognizers vary a lot -
 //     Safari's is weak) - built-in stays the default since realtime costs.
@@ -2803,6 +2803,15 @@ function startRealtimeDictation() {
       session.stop = handle.stop;
       session.commit = handle.commit;
       session.stream = handle.stream;
+      // Hidden, it goes on as long as the browser lets the microphone run
+      // (Orion does, locked or not) - it's billed, so it ends once the
+      // microphone is taken away (Safari and Chrome do that on hiding),
+      // and after REALTIME_IDLE_MS of silence either way.
+      handle.stream.getAudioTracks().forEach((track) => {
+        const end = () => dictation === session && stopDictation();
+        track.addEventListener("ended", end);
+        track.addEventListener("mute", () => document.hidden && end());
+      });
       showRemoteStatus(t("editor.dictationListening"));
       if (recordWithDictation && recordingSupported()) startDictationRecording(session, handle.stream, false);
     })
@@ -2864,7 +2873,6 @@ function rebaseDictation(edit) {
 // Realtime dictation is billed per minute streamed: a hidden tab (another
 // app, a locked phone) stops it.
 document.addEventListener("visibilitychange", () => {
-  if (document.hidden && dictation && dictation.engine === "realtime") stopDictation();
   // The browser drops a wake lock whenever the page is hidden.
   if (!document.hidden && dictation) keepScreenOn(true);
 });
