@@ -260,7 +260,7 @@ export function createAnalysisPanel(deps) {
       item.innerHTML = `
         <div class="analysis-issue-head">
           <span class="analysis-severity">${escapeHtml(t(lens === "writing" && issue.severity === "warning" ? "analysis.severityWriting.warning" : `analysis.severity.${issue.severity}`))}</span>
-          ${issue.quote ? `<div class="analysis-quote">${md(issue.quote)}</div>` : ""}
+          ${issue.quote ? `<div class="analysis-quote">${md(found ? quoteSource(target.content, issue.quote, found[0]) : issue.quote)}</div>` : ""}
           ${withTime && issue.at ? `<span class="analysis-time">${escapeHtml(new Date(issue.at).toLocaleTimeString(getLanguage()))}</span>` : ""}
         </div>
         <div class="analysis-problem">${md(issue.problem)}</div>
@@ -506,6 +506,24 @@ export function createAnalysisPanel(deps) {
       if (live && live.key === key) stopLive();
     },
   };
+}
+
+// A quote as Markdown that renders the way it does in the document. A line
+// quoted from inside a $$ block, or a piece of an inline $...$, carries no
+// delimiters of its own and would show as plain text - so it gets the "$"
+// it sits inside of (inline, to fit the grey box), and a closing one if it
+// doesn't already end the span.
+export function quoteSource(content, quote, at) {
+  const before = content.slice(0, at);
+  const dollars = (text) => (text.replace(/\\\$/g, "").match(/\$/g) || []).length;
+  const inDisplay = (before.match(/\$\$/g) || []).length % 2 === 1;
+  const line = before.slice(before.lastIndexOf("\n") + 1).replace(/\$\$/g, "");
+  const inInline = !inDisplay && dollars(line) % 2 === 1;
+  // Outside math, a quote that stops partway into a span gets it closed.
+  if (!inDisplay && !inInline) return dollars(quote) % 2 === 1 ? quote + "$" : quote;
+  const body = inDisplay ? quote.replace(/\$\$/g, "") : quote;
+  const opened = "$" + body;
+  return dollars(opened) % 2 === 1 ? opened + "$" : opened;
 }
 
 function escapeHtml(text) {
