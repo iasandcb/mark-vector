@@ -895,7 +895,25 @@ body.row-dragging {
   cursor: pointer;
 }
 
-.dictation-record[aria-pressed="true"] { color: #dc2626; }
+/* A drawn dot rather than "⏺", which iOS shows as a grey emoji that no
+   colour reaches: an outline when off, solid red when on. */
+.dictation-record {
+  min-width: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.rec-dot {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 2px solid var(--muted);
+  box-sizing: border-box;
+}
+.dictation-record[aria-pressed="true"] .rec-dot {
+  background: #dc2626;
+  border-color: #dc2626;
+}
 .dictation-record.recording {
   background: #b91c1c;
   border-color: #b91c1c;

@@ -2422,7 +2422,7 @@ function updateRecordButton(progress) {
   const recording = !!(dictation && dictation.recording);
   btn.classList.toggle("recording", recording);
   if (!recording) {
-    btn.textContent = "⏺";
+    btn.innerHTML = '<span class="rec-dot"></span>';
     btn.classList.remove("behind");
     btn.title = t("editor.dictationRecordTitle");
     return;
