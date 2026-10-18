@@ -360,6 +360,7 @@ export function createAnalysisPanel(deps) {
     }
     const session = live;
     session.inFlight = true;
+    session.sentSize = region.size;
     if (showing) liveStatus();
     const sent = target.content;
     const settings = { ...deps.getSettings(), language: getLanguage(), mathDialect: target.dialect };
@@ -387,12 +388,18 @@ export function createAnalysisPanel(deps) {
     const target = deps.getTarget();
     const parts = [];
     if (!target || keyOf(target) !== live.key) parts.push(t("analysis.live.otherDoc"));
-    else if (live.inFlight) parts.push(t("analysis.live.checking"));
-    else parts.push(t("analysis.live.listening"));
+    else if (live.inFlight) parts.push(t("analysis.live.checkingChars", { count: live.sentSize }));
+    else {
+      parts.push(t("analysis.live.listening"));
+      // How much is waiting to be checked, against the burst size.
+      const region = changedRegion(live.baseline, target.content);
+      parts.push(t("analysis.live.newChars", { count: region ? region.size : 0, burst: LIVE_BURST_CHARS }));
+    }
     const record = (results.get(live.key) || {})["evaluate-live"];
     if (record) parts.push(t("analysis.live.checks", { count: record.checks || 0 }));
     if (live.lastCheckAt) parts.push(t("analysis.live.ago", { seconds: Math.round((Date.now() - live.lastCheckAt) / 1000) }));
     status.textContent = parts.join(" · ");
+    status.title = t("analysis.live.newCharsTitle", { burst: LIVE_BURST_CHARS, pause: LIVE_PAUSE_MS / 1000, pauseChars: LIVE_PAUSE_CHARS, idle: LIVE_IDLE_MS / 1000, idleChars: LIVE_IDLE_CHARS });
     if (live.error) status.insertAdjacentHTML("beforeend", ` <span class="analysis-stale">${escapeHtml(t("analysis.failed", { message: live.error }))}</span>`);
   }
 
