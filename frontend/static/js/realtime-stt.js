@@ -21,10 +21,12 @@ const TICK_MS = 100;
 // resumed inside a user gesture, and getUserMedia's await ends the gesture.
 // `onEvent(event)` gets every Realtime event from the data channel.
 // `onIdle()` is called once nothing has been heard for `idleMs`.
-// Resolves to { stop(), commit() } once the session is live.
-export async function startRealtimeTranscription({ language, audioContext, onEvent, onIdle, idleMs }) {
+// `audio` - getUserMedia's audio constraints, for a caller that also
+// records the stream. Resolves to { stop(), commit(), stream } once the
+// session is live.
+export async function startRealtimeTranscription({ language, audioContext, onEvent, onIdle, idleMs, audio }) {
   const stream = await navigator.mediaDevices.getUserMedia({
-    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    audio: audio || { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
   });
   const pc = new RTCPeerConnection();
   let stopped = false;

@@ -18,7 +18,7 @@ import { openRecordingsDialog } from "./recordings-dialog.js";
 import { createGamepadRemote } from "./remote.js";
 import { splitSlides, lastSlideStart } from "./slides.js";
 import { startRealtimeTranscription } from "./realtime-stt.js";
-import { recordingSupported, startRecording } from "./recording.js";
+import { recordingSupported, startRecording, RECORDING_AUDIO } from "./recording.js";
 import { parseEditBlocks, applyEditBlock, collapseEditBlocks } from "./doc-edits.js";
 import { createAnalysisPanel } from "./analysis.js";
 import { punctuateSpeech } from "./punctuation.js";
@@ -2635,7 +2635,7 @@ function startDictation() {
   const session = dictation;
   if (recordWithDictation && recordingSupported() && session.engine === "webspeech") {
     navigator.mediaDevices
-      .getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
+      .getUserMedia({ audio: RECORDING_AUDIO })
       .then((stream) => {
         if (dictation !== session) stream.getTracks().forEach((track) => track.stop());
         else startDictationRecording(session, stream, true);
@@ -2766,6 +2766,8 @@ function startRealtimeDictation() {
   startRealtimeTranscription({
     language: el.dictationLang.value.split("-")[0],
     audioContext,
+    // Recording takes the same stream, so it's opened unprocessed then.
+    audio: recordWithDictation && recordingSupported() ? RECORDING_AUDIO : undefined,
     idleMs: REALTIME_IDLE_MS,
     onIdle: () => {
       if (dictation !== session) return;
@@ -2880,7 +2882,7 @@ el.dictationRecordBtn.addEventListener("click", () => {
     if (session.engine === "realtime" && session.stream) startDictationRecording(session, session.stream, false);
     else if (session.engine === "webspeech")
       navigator.mediaDevices
-        .getUserMedia({ audio: true })
+        .getUserMedia({ audio: RECORDING_AUDIO })
         .then((stream) => (dictation === session ? startDictationRecording(session, stream, true) : stream.getTracks().forEach((tr) => tr.stop())))
         .catch((err) => showRemoteStatus(t("editor.recordingFailed", { message: err.message })));
   }

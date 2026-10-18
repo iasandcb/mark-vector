@@ -13,13 +13,20 @@
 import * as api from "./api.js";
 
 const SLICE_MS = 3000;
-const BITS_PER_SECOND = 32000; // speech grade, ~14 MB an hour
+// [mime, extension, bits per second]. Opus at 64 kbps is close to
+// transparent for one voice (~28 MB an hour); iOS's AAC needs more for the
+// same (~43 MB an hour).
 const MIME_TYPES = [
-  ["audio/webm;codecs=opus", "webm"],
-  ["audio/webm", "webm"],
-  ["audio/mp4", "m4a"],
-  ["audio/ogg;codecs=opus", "ogg"],
+  ["audio/webm;codecs=opus", "webm", 64000],
+  ["audio/webm", "webm", 64000],
+  ["audio/mp4", "m4a", 96000],
+  ["audio/ogg;codecs=opus", "ogg", 64000],
 ];
+// The microphone as it is, for recording: the browser's call processing
+// (echo cancelling, noise suppression, gain riding) is tuned for a video
+// call and leaves a recording muffled and pumping - and on iOS turning it
+// off also gets the full-band microphone instead of the phone-call one.
+export const RECORDING_AUDIO = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
 const RETRY_MIN_MS = 1000;
 const RETRY_MAX_MS = 15000;
 
@@ -37,10 +44,10 @@ function localStamp(date) {
 // server. Resolves to { stop() } - stop() ends the recording and resolves
 // once everything recorded is uploaded (or given up on).
 export async function startRecording(stream, doc, onChange = () => {}) {
-  const [mimeType, ext] = MIME_TYPES.find(([mime]) => MediaRecorder.isTypeSupported(mime));
+  const [mimeType, ext, bitsPerSecond] = MIME_TYPES.find(([mime]) => MediaRecorder.isTypeSupported(mime));
   const startedAt = new Date();
   const { id } = await api.createRecording(doc.projectId, doc.sessionId, doc.filename, ext, localStamp(startedAt));
-  const recorder = new MediaRecorder(stream, { mimeType, audioBitsPerSecond: BITS_PER_SECOND });
+  const recorder = new MediaRecorder(stream, { mimeType, audioBitsPerSecond: bitsPerSecond });
   const queue = [];
   let offset = 0;
   let uploading = false;
