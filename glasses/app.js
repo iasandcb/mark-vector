@@ -281,7 +281,14 @@ async function checkForNewVersion() {
     if (!res.ok) return;
     const { version } = await res.json();
     if (loadedVersion === null) loadedVersion = version;
-    else if (version !== loadedVersion) location.reload();
+    else if (version !== loadedVersion) {
+      // Reloading with no connection leaves the glasses on an "App not
+      // loading" screen nobody can get past without the menu - so only once
+      // the page itself (and its script) can be fetched; otherwise next round.
+      const page = await fetch(location.href, { cache: "reload" });
+      const script = await fetch("/glasses/app.js", { cache: "reload" });
+      if (page.ok && script.ok) location.reload();
+    }
   } catch (err) {
     // offline for a moment - check again next round
   }
