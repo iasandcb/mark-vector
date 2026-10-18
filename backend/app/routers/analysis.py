@@ -5,8 +5,13 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
 from .. import analysis, storage
+from ..custom_symbols import parse_custom_symbols_rows
 from ..models import AnalysisRequest, LiveCheckRequest
 from ..providers.registry import get_provider
+
+def _custom_symbols() -> list[tuple[str, str]]:
+    return parse_custom_symbols_rows(storage.get_global_custom_symbols())
+
 
 router = APIRouter(prefix="/api/projects/{project_id}/conversations", tags=["analysis"])
 
@@ -57,7 +62,7 @@ async def live_check(project_id: str, conv_id: str, filename: str, req: LiveChec
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    system_prompt = analysis.live_system_prompt(req.language, req.math_dialect)
+    system_prompt = analysis.live_system_prompt(req.language, req.math_dialect, _custom_symbols())
     messages = [{"role": "user", "content": analysis.live_user_message(filename, req.content, req.start, req.end)}]
     chunks: list[str] = []
     try:
@@ -107,7 +112,7 @@ async def run_analysis(project_id: str, conv_id: str, filename: str, kind: str, 
     # Deliberately not the folder's system-prompt chain: that sets up a
     # conversation partner, and a review should read the same whoever's
     # folder the document sits in.
-    system_prompt = analysis.system_prompt(kind, req.language, req.math_dialect)
+    system_prompt = analysis.system_prompt(kind, req.language, req.math_dialect, _custom_symbols())
     messages = [{"role": "user", "content": analysis.user_message(kind, filename, req.content)}]
 
     async def event_stream():

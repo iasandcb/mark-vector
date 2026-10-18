@@ -131,8 +131,8 @@ Reply with ONE JSON object and nothing else - no code fence, no text before or a
 """
 
 
-def live_system_prompt(language: str, dialect: str = "latex") -> str:
-    return LIVE_SYSTEM + _math_line("evaluate", dialect) + _language_line(language)
+def live_system_prompt(language: str, dialect: str = "latex", custom_symbols=()) -> str:
+    return LIVE_SYSTEM + _asciimath_guide(dialect, custom_symbols) + _math_line("evaluate", dialect) + _language_line(language)
 
 
 def live_user_message(filename: str, content: str, start: int, end: int) -> str:
@@ -195,9 +195,39 @@ def _math_line(kind: str, dialect: str) -> str:
     )
 
 
-def system_prompt(kind: str, language: str, dialect: str = "latex") -> str:
+# AsciiMath's multi-letter symbols, which read letter by letter look like
+# products of variables - "v^TT" taken as v^T times a matrix T, when it is
+# v transposed.
+ASCIIMATH_TOKENS = (
+    "TT = ⊤ (transpose: v^TT is v transposed), xx = ×, * = ⋅, ** = ∗, -: = ÷, o. = ⊙, ox = ⊗, o+ = ⊕, "
+    "RR = ℝ, NN = ℕ, ZZ = ℤ, QQ = ℚ, CC = ℂ, AA = ∀, EE = ∃, del = ∂, grad = ∇, oo = ∞, O/ = ∅, "
+    "^^ = ∧, vv = ∨, ~= = ≅, ~~ = ≈, -= = ≡, != = ≠, <= = ≤, >= = ≥, -> = →, => = ⇒, <=> = ⇔, |-> = ↦, "
+    "in = ∈, !in = ∉, sub = ⊂, sube = ⊆, uu = ∪, nn = ∩, prop = ∝, (: :) = ⟨ ⟩, |__ __| = ⌊ ⌋, |~ ~| = ⌈ ⌉"
+)
+CUSTOM_SYMBOLS_MAX = 200
+
+
+def _asciimath_guide(dialect: str, custom_symbols) -> str:
+    """How to read an AsciiMath document's math: its multi-letter symbols,
+    and the workspace's own (data/custom-symbols.csv, as (token, latex)
+    rows). Nothing for a LaTeX document."""
+    if dialect not in ("asciimath", "hybrid"):
+        return ""
+    guide = (
+        "\n\nThis document's math is AsciiMath. Its symbols are tokens of one or more characters, matched longest first: "
+        "read each as the single symbol it stands for, never as separate letters multiplied together - "
+        f"{ASCIIMATH_TOKENS}. Parentheses right after /, ^ or _ only group, as in (a+b)/(c) or e^(i x)."
+    )
+    rows = list(custom_symbols)[:CUSTOM_SYMBOLS_MAX]
+    if rows:
+        listed = "; ".join(f"{token} = {latex}" for token, latex in rows)
+        guide += f" This workspace also defines its own tokens (token = LaTeX it stands for), read the same way: {listed}."
+    return guide + "\n\n"
+
+
+def system_prompt(kind: str, language: str, dialect: str = "latex", custom_symbols=()) -> str:
     base = _evaluate_system(kind) if kind in EVALUATE_KINDS else FORMALIZE_SYSTEM
-    return base + _math_line(kind, dialect) + _language_line(language)
+    return base + _asciimath_guide(dialect, custom_symbols) + _math_line(kind, dialect) + _language_line(language)
 
 
 def user_message(kind: str, filename: str, content: str) -> str:

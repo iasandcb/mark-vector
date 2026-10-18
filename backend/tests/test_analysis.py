@@ -210,3 +210,20 @@ class TestLive:
 
         provider.text = "not json"
         assert client.post(url, json=body).json()["added"] == []
+
+
+class TestAsciiMathGuide:
+    def test_only_for_asciimath(self):
+        assert "TT = ⊤" in analysis.system_prompt("evaluate", "ko", "asciimath")
+        assert "TT = ⊤" in analysis.live_system_prompt("ko", "hybrid")
+        assert "TT = ⊤" not in analysis.system_prompt("evaluate", "ko", "latex")
+
+    def test_custom_symbols_listed(self, isolated_data_dir, monkeypatch):
+        storage.save_global_custom_symbols("proj, \\operatorname{proj}\n@->, \\hookrightarrow\n")
+        pid, conv_id, filename = _draft()
+        provider = FakeProvider(json.dumps({"verdict": "sound", "score": 100, "summary": "", "issues": []}))
+        monkeypatch.setattr(analysis_router, "get_provider", lambda provider_id: provider)
+        url = f"/api/projects/{pid}/conversations/{conv_id}/documents/{filename}/analysis/evaluate"
+        body = {"content": "x", "provider": "openai", "model": "m", "math_dialect": "asciimath"}
+        _events(TestClient(app).post(url, json=body))
+        assert "@-> = \\hookrightarrow" in provider.system_prompt
