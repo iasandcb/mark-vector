@@ -2322,6 +2322,8 @@ const WEB_SPEECH_USABLE = !!SpeechRecognitionImpl && !IOS_NON_SAFARI;
 let realtimeSttAvailable = false;
 // Realtime dictation stops itself after this long without hearing anything.
 const REALTIME_IDLE_MS = 3 * 60 * 1000;
+// A muted microphone with the page hidden ends realtime dictation after this.
+const MIC_MUTED_HIDDEN_MS = 60 * 1000;
 
 function dictationSupported() {
   return WEB_SPEECH_USABLE || realtimeSttAvailable;
@@ -2806,11 +2808,24 @@ function startRealtimeDictation() {
       // Hidden, it goes on as long as the browser lets the microphone run
       // (Orion does, locked or not) - it's billed, so it ends once the
       // microphone is taken away (Safari and Chrome do that on hiding),
-      // and after REALTIME_IDLE_MS of silence either way.
+      // and after REALTIME_IDLE_MS of silence either way. A microphone
+      // that's only muted may come back (iOS mutes some USB ones on
+      // hiding) - that gets a minute, and saying how long it was out.
       handle.stream.getAudioTracks().forEach((track) => {
         const end = () => dictation === session && stopDictation();
+        let mutedAt = 0;
+        let timer = null;
         track.addEventListener("ended", end);
-        track.addEventListener("mute", () => document.hidden && end());
+        track.addEventListener("mute", () => {
+          mutedAt = Date.now();
+          if (document.hidden) timer = setTimeout(end, MIC_MUTED_HIDDEN_MS);
+        });
+        track.addEventListener("unmute", () => {
+          clearTimeout(timer);
+          if (mutedAt && dictation === session)
+            showRemoteStatus(t("editor.micWasMuted", { seconds: Math.round((Date.now() - mutedAt) / 1000) }));
+          mutedAt = 0;
+        });
       });
       showRemoteStatus(t("editor.dictationListening"));
       if (recordWithDictation && recordingSupported()) startDictationRecording(session, handle.stream, false);
