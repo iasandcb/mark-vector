@@ -140,6 +140,7 @@ const el = {
   dictationLang: document.getElementById("dictation-lang"),
   dictationEngine: document.getElementById("dictation-engine"),
   dictationRecordBtn: document.getElementById("dictation-record-btn"),
+  dictationMicBtn: document.getElementById("dictation-mic-btn"),
   threadToggleBtn: document.getElementById("thread-toggle-btn"),
   sendBtn: document.getElementById("send-btn"),
   viewModeBtn: document.getElementById("view-mode-btn"),
@@ -2440,6 +2441,105 @@ function saveDictationLang() {
 // recorded; the built-in engine listens on its own, so a second stream is
 // opened for the recorder. While dictating, the screen is kept on (a
 // locked phone stops the page, its microphone and with it the recording).
+// ---------- microphone choice ----------
+// Which microphone dictation and recording open - the system default
+// unless one is picked from the 🎙 menu (in the ⚙ row). Kept per browser by label as well
+// as id: Safari hands out a fresh device id now and then, while "DJI Mic
+// Mini" stays "DJI Mic Mini". The built-in (Web Speech) engine can't be
+// pointed at a microphone - it always hears the system default - so there
+// the choice reaches only the recording.
+const DICTATION_MIC_KEY = "mark-vector:dictation-mic";
+// The realtime engine's microphone when nothing's recorded from it.
+const DICTATION_AUDIO = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+let micChoice = null; // { deviceId, label } | null for the system default
+let micDevices = []; // the last enumerateDevices() audio inputs
+
+function restoreMicChoice() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(DICTATION_MIC_KEY) || "null");
+    micChoice = stored && stored.deviceId ? stored : null;
+  } catch (err) {
+    micChoice = null;
+  }
+}
+
+function saveMicChoice() {
+  try {
+    if (micChoice) localStorage.setItem(DICTATION_MIC_KEY, JSON.stringify(micChoice));
+    else localStorage.removeItem(DICTATION_MIC_KEY);
+  } catch (err) {
+    // localStorage unavailable - the choice just won't persist across reloads
+  }
+}
+
+// The picked microphone as it's connected now - by id, else by label -
+// or null (none picked, or it isn't plugged in).
+function chosenMic() {
+  if (!micChoice) return null;
+  return micDevices.find((d) => d.deviceId === micChoice.deviceId) || micDevices.find((d) => d.label && d.label === micChoice.label) || null;
+}
+
+// getUserMedia's audio constraints: `base` plus the picked microphone.
+function micConstraints(base) {
+  const mic = chosenMic();
+  return mic ? { ...base, deviceId: { exact: mic.deviceId } } : base;
+}
+
+async function refreshMicDevices() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+  try {
+    micDevices = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "audioinput" && d.deviceId !== "default" && d.deviceId !== "communications");
+  } catch (err) {
+    micDevices = [];
+  }
+  updateMicButton();
+}
+
+function updateMicButton() {
+  const btn = el.dictationMicBtn;
+  btn.hidden = !(navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) || !dictationSupported();
+  const mic = chosenMic();
+  btn.classList.toggle("chosen", !!micChoice);
+  btn.classList.toggle("missing", !!micChoice && !mic);
+  const name = micChoice ? micChoice.label || "?" : t("editor.micDefault");
+  btn.textContent = `🎙 ${name}`;
+  btn.title = t(micChoice && !mic ? "editor.micMissingTitle" : "editor.micTitle", { name });
+}
+
+async function openMicMenu() {
+  // Until the page has been allowed the microphone, the browser lists
+  // devices without names - ask once, briefly, so the menu can say which is which.
+  if (!micDevices.length || micDevices.every((d) => !d.label)) {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach((track) => track.stop());
+    } catch (err) {
+      // denied - the menu still offers the default
+    }
+  }
+  await refreshMicDevices();
+  const current = chosenMic();
+  const pick = (device) => {
+    micChoice = device ? { deviceId: device.deviceId, label: device.label } : null;
+    saveMicChoice();
+    updateMicButton();
+    if (device && !useRealtimeDictation()) showRemoteStatus(t("editor.micBuiltinNote"));
+    // Like a language change: a running dictation starts over on the new one.
+    if (dictation) {
+      stopDictation();
+      startDictation();
+    }
+  };
+  openRowMenu(el.dictationMicBtn, [
+    { icon: current || micChoice ? "" : "✓", label: t("editor.micDefault"), onSelect: () => pick(null) },
+    ...micDevices.map((device, i) => ({
+      icon: current && current.deviceId === device.deviceId ? "✓" : "",
+      label: device.label || t("editor.micUnnamed", { n: i + 1 }),
+      onSelect: () => pick(device),
+    })),
+  ]);
+}
+
 let recordWithDictation = false;
 
 function restoreDictationRecord() {
@@ -2533,6 +2633,7 @@ function dictationUsable() {
 
 function updateDictationButton() {
   el.dictationGroup.hidden = !dictationSupported() || !active;
+  updateMicButton();
   el.dictationEngine.hidden = !(WEB_SPEECH_USABLE && realtimeSttAvailable);
   // When the realtime engine is the one in use, say so - it's the one that costs.
   el.dictationBtn.title = t(useRealtimeDictation() ? "editor.dictationRealtimeTitle" : "editor.dictationTitle");
@@ -2679,7 +2780,7 @@ function startDictation() {
   const session = dictation;
   if (recordWithDictation && recordingSupported() && session.engine === "webspeech") {
     navigator.mediaDevices
-      .getUserMedia({ audio: RECORDING_AUDIO })
+      .getUserMedia({ audio: micConstraints(RECORDING_AUDIO) })
       .then((stream) => {
         if (dictation !== session) stream.getTracks().forEach((track) => track.stop());
         else startDictationRecording(session, stream, true);
@@ -2811,7 +2912,7 @@ function startRealtimeDictation() {
     language: el.dictationLang.value.split("-")[0],
     audioContext,
     // Recording takes the same stream, so it's opened unprocessed then.
-    audio: recordWithDictation && recordingSupported() ? RECORDING_AUDIO : undefined,
+    audio: micConstraints(recordWithDictation && recordingSupported() ? RECORDING_AUDIO : DICTATION_AUDIO),
     idleMs: REALTIME_IDLE_MS,
     onIdle: () => {
       if (dictation !== session) return;
@@ -2947,12 +3048,17 @@ el.dictationRecordBtn.addEventListener("click", () => {
     if (session.engine === "realtime" && session.stream) startDictationRecording(session, session.stream, false);
     else if (session.engine === "webspeech")
       navigator.mediaDevices
-        .getUserMedia({ audio: RECORDING_AUDIO })
+        .getUserMedia({ audio: micConstraints(RECORDING_AUDIO) })
         .then((stream) => (dictation === session ? startDictationRecording(session, stream, true) : stream.getTracks().forEach((tr) => tr.stop())))
         .catch((err) => showRemoteStatus(t("editor.recordingFailed", { message: err.message })));
   }
 });
 restoreDictationRecord();
+restoreMicChoice();
+updateMicButton();
+refreshMicDevices();
+if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) navigator.mediaDevices.addEventListener("devicechange", refreshMicDevices);
+el.dictationMicBtn.addEventListener("click", openMicMenu);
 loadRealtimeSttConfig();
 
 function toggleDictation() {

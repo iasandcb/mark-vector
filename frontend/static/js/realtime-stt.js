@@ -25,9 +25,16 @@ const TICK_MS = 100;
 // records the stream. Resolves to { stop(), commit(), stream } once the
 // session is live.
 export async function startRealtimeTranscription({ language, audioContext, onEvent, onIdle, idleMs, audio }) {
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: audio || { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-  });
+  const constraints = audio || { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: constraints });
+  } catch (err) {
+    // The picked microphone went away - the default rather than nothing.
+    if (!constraints.deviceId || !["OverconstrainedError", "NotFoundError", "NotReadableError"].includes(err.name)) throw err;
+    const { deviceId, ...rest } = constraints;
+    stream = await navigator.mediaDevices.getUserMedia({ audio: rest });
+  }
   const pc = new RTCPeerConnection();
   let stopped = false;
   let timer = null;

@@ -185,6 +185,9 @@
           <option value="sibling" data-i18n="editor.contextScopeSibling"></option>
           <option value="descendants" data-i18n="editor.contextScopeDescendants"></option>
         </select>
+        <!-- Dictation's microphone - here rather than beside the 🎤, which
+             has no room for it on a phone. See "microphone choice" in app.js. -->
+        <button id="dictation-mic-btn" class="secondary-btn dictation-mic" type="button" hidden></button>
         <label id="live-public-row" class="checkbox-row live-public-row" hidden data-i18n-title="editor.liveTitle">
           <input type="checkbox" id="live-public-checkbox">
           <span id="live-public-status-dot" class="live-status-dot"></span>
