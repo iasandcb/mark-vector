@@ -75,6 +75,7 @@ FastAPI가 `frontend/` 디렉터리를 함께 서빙하므로 별도의 프론�
 |---|---|
 | `ANTHROPIC_API_KEY` | Anthropic API 키 (선택, 미설정 시 해당 프로바이더 비활성) |
 | `OPENAI_API_KEY` | OpenAI API 키 (선택, 미설정 시 해당 프로바이더 비활성) |
+| `XAI_API_KEY` | xAI(Grok) API 키 (선택, 미설정 시 해당 프로바이더 비활성) |
 | `DATA_DIR` | 대화 저장 경로 (기본값: `../data`) |
 
 프로바이더는 최소 하나만 설정하면 됩니다. API 키가 없는 프로바이더는 드롭다운에 나오지 않고, 하나도 없으면 툴바에 "설정된 LLM 프로바이더가 없습니다. 서버의 .env에서 API 키를 설정하세요."가 표시됩니다.
@@ -89,6 +90,7 @@ FastAPI가 `frontend/` 디렉터리를 함께 서빙하므로 별도의 프론�
 
 - **Anthropic**: 모델 capabilities가 adaptive thinking을 지원하면 `thinking: {type: "adaptive"}`를 켜고, 그 모델이 받는 수준일 때만 `output_config.effort`에 고른 값을 넣습니다(`max_tokens`는 64000). 그 수준을 받지 않으면 effort만 빼고 adaptive thinking은 유지합니다. 예전 모델(thinking type이 `enabled`뿐인 것)만 `budget_tokens`를 낮음 2000 / 중간 8000 / 높음 24000으로 두고 `max_tokens`를 budget + 4096으로 늘리며, 그 모델에 없는 수준은 가까운 budget으로 바꿉니다. 사고 자체를 지원하지 않으면 설정 없이 답합니다.
 - **OpenAI**: 공식 API는 Responses API로 보내고, 사고 수준은 `reasoning: {"effort": ...}`입니다(Chat Completions의 `reasoning_effort`가 아님). 선택지는 모델마다 `_EFFORT_RULES`에 적힌 것(`none`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max` 중 일부)이고, 표에 없는 추론 모델은 `low`/`medium`/`high`만 나옵니다. 추론 모델이 아니면(gpt-4o 등) 사고 수준 선택이 꺼집니다. OpenAI 호환 커스텀 엔드포인트만 Chat Completions의 `reasoning_effort`를 그대로 넘기며, 그 서비스가 거부하면 오류가 화면에 표시됩니다.
+- **xAI (Grok)**: OpenAI와 같은 Responses API(`https://api.x.ai/v1`)로 보내고, 웹 검색(`web_search`)과 X 검색(`x_search`)을 켭니다. 사고 수준은 `xai_provider.py`의 `_EFFORT_RULES`(grok-4.7·4.6은 낮음~`xhigh`, 기본 높음 / 4.5는 낮음~높음, 기본 높음 / 4.3은 `none`~`xhigh`, 기본 낮음)를 따르고, 표에 없는 모델과 `non-reasoning` 모델은 사고 수준 선택이 꺼집니다. 기본 모델은 `grok-4.7`입니다.
 
 ### 프로바이더/모델/사고 수준/맥락은 메시지 단위이고, 수식 표기는 문서 단위입니다
 

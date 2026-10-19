@@ -11,6 +11,7 @@ from .anthropic_provider import AnthropicProvider
 from .base import LLMProvider
 from .chatgpt_provider import ChatGPTProvider
 from .openai_provider import OpenAIProvider
+from .xai_provider import XAIProvider
 
 STATIC_PROVIDER_INFO: dict[str, dict] = {
     "openai": {"label": "OpenAI", "preferred_default_model": "gpt-6.1-sol"},
@@ -20,6 +21,7 @@ STATIC_PROVIDER_INFO: dict[str, dict] = {
     # The frontend shows a translated label instead when it has one for this
     # id (i18n "provider.label.chatgpt") - this English one is the fallback.
     "chatgpt": {"label": "ChatGPT (my plan)", "preferred_default_model": "gpt-6.1-sol"},
+    "xai": {"label": "xAI (Grok)", "preferred_default_model": "grok-4.7"},
 }
 
 _instances: dict[str, LLMProvider] = {}
@@ -65,6 +67,8 @@ def get_provider(provider_id: str) -> LLMProvider:
         _instances[provider_id] = OpenAIProvider(settings.openai_api_key)
     elif provider_id == "chatgpt":
         _instances[provider_id] = ChatGPTProvider(chatgpt_auth.credentials)
+    elif provider_id == "xai":
+        _instances[provider_id] = XAIProvider(settings.xai_api_key)
     else:
         cfg = _custom_provider_config(provider_id)
         if cfg is None:
@@ -86,6 +90,8 @@ def _is_configured(provider_id: str) -> bool:
         return bool(settings.openai_api_key)
     if provider_id == "chatgpt":
         return chatgpt_auth.credentials.available()
+    if provider_id == "xai":
+        return bool(settings.xai_api_key)
     cfg = _custom_provider_config(provider_id)
     return bool(cfg and cfg.get("api_key") and cfg.get("base_url"))
 

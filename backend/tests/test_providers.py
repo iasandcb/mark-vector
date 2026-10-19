@@ -5,6 +5,7 @@ import pytest
 
 from app.providers.anthropic_provider import WEB_FETCH_TOOL, AnthropicProvider
 from app.providers.openai_provider import OpenAIProvider, _is_current_chat_model
+from app.providers.xai_provider import XAIProvider
 
 
 def async_test(fn):
@@ -390,3 +391,58 @@ async def test_openai_reasoning_capable_models_matches_by_name_pattern():
 def test_custom_base_url_does_not_use_real_openai_path():
     provider = OpenAIProvider(api_key="fake", base_url="http://127.0.0.1:8642/v1")
     assert provider._is_real_openai is False
+
+
+# ---------- XAIProvider (Grok) ----------
+
+
+@async_test
+async def test_xai_uses_responses_api_with_web_and_x_search(monkeypatch):
+    provider = XAIProvider(api_key="fake")
+    assert str(provider._client.base_url).startswith("https://api.x.ai/v1")
+    captured = {}
+
+    async def fake_create(**kwargs):
+        captured.update(kwargs)
+        return _FakeAsyncStream(
+            [
+                _Obj(type="response.x_search_call.searching"),
+                _Obj(type="response.x_search_call.completed"),
+                _Obj(type="response.output_text.delta", delta="hi"),
+            ]
+        )
+
+    monkeypatch.setattr(provider._client.responses, "create", fake_create)
+
+    events = [e async for e in provider.stream([{"role": "user", "content": "hi"}], "grok-4.7", reasoning_effort="xhigh")]
+
+    assert captured["tools"] == [{"type": "web_search"}, {"type": "x_search"}]
+    assert captured["reasoning"] == {"effort": "xhigh"}
+    assert events == [
+        {"type": "tool_status", "status": "running", "tool": "x_search", "emoji": "𝕏", "label": "X 검색 중"},
+        {"type": "tool_status", "status": "completed", "tool": "x_search", "emoji": "✅", "label": "X 검색 완료"},
+        {"type": "text", "text": "hi"},
+    ]
+
+
+@async_test
+async def test_xai_models_and_reasoning_levels(monkeypatch):
+    provider = XAIProvider(api_key="fake")
+    ids = ["grok-4.7", "grok-4.5", "grok-4.3", "grok-4.20-0309-non-reasoning", "grok-build-0.1", "grok-imagine-image", "grok-voice-3.0"]
+
+    async def fake_list():
+        return _Obj(data=[_Obj(id=i) for i in ids])
+
+    monkeypatch.setattr(provider._client.models, "list", fake_list)
+
+    models = await provider.list_models()
+    assert models == ["grok-4.20-0309-non-reasoning", "grok-4.3", "grok-4.5", "grok-4.7", "grok-build-0.1"]
+    efforts = await provider.reasoning_efforts(models)
+    assert efforts == {
+        "grok-4.3": ["none", "low", "medium", "high", "xhigh"],
+        "grok-4.5": ["low", "medium", "high"],
+        "grok-4.7": ["low", "medium", "high", "xhigh"],
+    }
+    assert provider.reasoning_default("grok-4.7") == "high"
+    assert provider.reasoning_default("grok-4.3") == "low"
+    assert provider.reasoning_default("grok-build-0.1") is None

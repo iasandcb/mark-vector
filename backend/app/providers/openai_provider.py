@@ -113,12 +113,37 @@ def _effort_levels(model_id: str) -> tuple[str, ...]:
     return next((levels for pattern, levels in _EFFORT_RULES if pattern.match(lower)), _DEFAULT_EFFORTS)
 
 
+# Responses API progress events for hosted tools, "response.<tool>_call.<phase>"
+# (OpenAI's web_search, xAI's web_search/x_search), as the tool_status events
+# the UI shows while a search runs.
+_HOSTED_TOOL_LABELS = {"web_search": ("🌐", "웹 검색"), "x_search": ("𝕏", "X 검색")}
+_HOSTED_TOOL_PHASES = {
+    "in_progress": ("running", "{} 준비 중"),
+    "searching": ("running", "{} 중"),
+    "completed": ("completed", "{} 완료"),
+}
+_HOSTED_TOOL_EVENT_RE = re.compile(r"^response\.(\w+)_call\.(\w+)$")
+
+
+def _hosted_tool_status(event_type: str) -> dict | None:
+    match = _HOSTED_TOOL_EVENT_RE.match(event_type)
+    if not match or match[1] not in _HOSTED_TOOL_LABELS or match[2] not in _HOSTED_TOOL_PHASES:
+        return None
+    emoji, name = _HOSTED_TOOL_LABELS[match[1]]
+    status, label = _HOSTED_TOOL_PHASES[match[2]]
+    return {"type": "tool_status", "status": status, "tool": match[1], "emoji": "✅" if status == "completed" else emoji, "label": label.format(name)}
+
+
 class OpenAIProvider(LLMProvider):
     """Talks to OpenAI's own API, or to anything that speaks the same
     /v1/chat/completions wire format (Together, Fireworks, OpenRouter,
     Nous' Hermes API, a local vLLM/Ollama/LM Studio server, ...) when given
     a custom `base_url`.
     """
+
+    # Hosted (server-side) tools sent on the Responses API path - see
+    # _stream_responses_api.
+    _hosted_tools: tuple[str, ...] = ("web_search",)
 
     def __init__(
         self,
@@ -250,7 +275,7 @@ class OpenAIProvider(LLMProvider):
         already is, so no conversion is needed; `system_prompt` maps to the
         separate top-level `instructions` param instead of being folded into
         `input` the way Chat Completions folds it into `messages`."""
-        kwargs = {"model": model, "input": messages, "tools": [{"type": "web_search"}], "stream": True, **extra}
+        kwargs = {"model": model, "input": messages, "tools": [{"type": t} for t in self._hosted_tools], "stream": True, **extra}
         if system_prompt:
             kwargs["instructions"] = system_prompt
         if reasoning_effort and reasoning_effort != "off":
@@ -261,12 +286,8 @@ class OpenAIProvider(LLMProvider):
             async for event in stream:
                 if event.type == "response.output_text.delta":
                     yield {"type": "text", "text": event.delta}
-                elif event.type == "response.web_search_call.in_progress":
-                    yield {"type": "tool_status", "status": "running", "tool": "web_search", "emoji": "🌐", "label": "웹 검색 준비 중"}
-                elif event.type == "response.web_search_call.searching":
-                    yield {"type": "tool_status", "status": "running", "tool": "web_search", "emoji": "🌐", "label": "웹 검색 중"}
-                elif event.type == "response.web_search_call.completed":
-                    yield {"type": "tool_status", "status": "completed", "tool": "web_search", "emoji": "✅", "label": "웹 검색 완료"}
+                elif status := _hosted_tool_status(event.type):
+                    yield status
                 elif event.type in ("response.failed", "response.incomplete"):
                     raise RuntimeError(self._describe_failure(event))
 

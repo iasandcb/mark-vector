@@ -50,6 +50,7 @@ class Settings:
     data_dir: str = os.getenv("DATA_DIR", "../data")
     anthropic_api_key: str | None = os.getenv("ANTHROPIC_API_KEY") or None
     openai_api_key: str | None = os.getenv("OPENAI_API_KEY") or None
+    xai_api_key: str | None = os.getenv("XAI_API_KEY") or None
     custom_providers: list[dict] = field(default_factory=_load_custom_providers)
     # Google sign-in is off entirely until both of these are set (see
     # auth.AuthMiddleware) - so a fresh checkout keeps working with no auth,
