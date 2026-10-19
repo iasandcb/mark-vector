@@ -1,3 +1,4 @@
+import re
 import shutil
 import subprocess
 
@@ -73,3 +74,29 @@ def test_webm_converted_for_players_that_need_aac(doc, tmp_path):
     assert len(storage.list_recordings(pid, conv_id, filename)) == 1  # the copy isn't a recording
     client.delete(url)
     assert not list((storage._conversations_dir(pid) / conv_id / ".recordings" / filename / ".play").iterdir())
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
+def test_one_sided_stereo_becomes_mono_at_full_level(doc, tmp_path):
+    pid, conv_id, filename = doc
+    src = tmp_path / "left.m4a"
+    # left: a tone; right: silence - what iOS makes of the glasses' microphone
+    subprocess.run(
+        ["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", "sine=duration=2", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono",
+         "-filter_complex", "[0][1]amerge=inputs=2", "-t", "2", "-c:a", "aac", str(src)],
+        check=True,
+    )
+    client = TestClient(app)
+    base = f"/api/projects/{pid}/conversations/{conv_id}/documents/{filename}/recordings"
+    rec = client.post(base, json={"ext": "m4a", "started": "2026-10-19T09:00:00"}).json()
+    url = f"{base}/{rec['id']}"
+    client.put(f"{url}?offset=0", content=src.read_bytes())
+    got = client.get(f"{url}?format=m4a")
+    out = tmp_path / "out.m4a"
+    out.write_bytes(got.content)
+    probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=channels", "-of", "csv=p=0", str(out)], capture_output=True, text=True)
+    assert probe.stdout.strip() == "1"
+    levels = subprocess.run(["ffmpeg", "-hide_banner", "-nostats", "-i", str(out), "-af", "astats=measure_overall=none", "-f", "null", "-"], capture_output=True, text=True).stderr
+    rms = float(re.findall(r"RMS level dB:\s*(\S+)", levels)[0])
+    source_rms = float(re.findall(r"RMS level dB:\s*(\S+)", subprocess.run(["ffmpeg", "-hide_banner", "-nostats", "-i", str(src), "-af", "astats=measure_overall=none", "-f", "null", "-"], capture_output=True, text=True).stderr)[0])
+    assert abs(rms - source_rms) < 1.5  # the left side as it was, not halved

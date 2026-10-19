@@ -1455,10 +1455,14 @@ def recording_file(project_id: str, conv_id: str, filename: str, recording_id: s
     return path, RECORDING_EXTS[path.suffix[1:]]
 
 
-# A WebM recording made in one browser may not play in another (iOS
-# Safari won't play one MediaRecorder wrote), so it can also be had as AAC,
-# converted on first ask and kept beside it until the recording changes.
+# A recording is played and downloaded as a mono AAC copy, converted on
+# first ask and kept beside it until the recording changes: a WebM made in
+# one browser may not play in another (iOS Safari won't play one
+# MediaRecorder wrote), and iOS records some microphones (the Meta glasses')
+# as stereo with the right side silent. The suffix changes whenever what
+# the copy is changes, so older copies are simply remade.
 PLAYABLE_DIRNAME = ".play"
+PLAYABLE_SUFFIX = ".mono.m4a"
 
 
 def playable_recording_paths(project_id: str, conv_id: str, filename: str, recording_id: str) -> tuple[Path, Path]:
@@ -1466,7 +1470,7 @@ def playable_recording_paths(project_id: str, conv_id: str, filename: str, recor
     path = _recording_path(project_id, conv_id, filename, recording_id)
     if not path.exists():
         raise FileNotFoundError(recording_id)
-    return path, path.parent / PLAYABLE_DIRNAME / f"{recording_id}.m4a"
+    return path, path.parent / PLAYABLE_DIRNAME / f"{recording_id}{PLAYABLE_SUFFIX}"
 
 
 def delete_recording(project_id: str, conv_id: str, filename: str, recording_id: str) -> None:
@@ -1474,7 +1478,8 @@ def delete_recording(project_id: str, conv_id: str, filename: str, recording_id:
     if not path.exists():
         raise FileNotFoundError(recording_id)
     path.unlink()
-    (path.parent / PLAYABLE_DIRNAME / f"{recording_id}.m4a").unlink(missing_ok=True)
+    for copy in (path.parent / PLAYABLE_DIRNAME).glob(f"{recording_id}.*"):
+        copy.unlink(missing_ok=True)
 
 
 # ---------- publishing (public read-only share links) ----------

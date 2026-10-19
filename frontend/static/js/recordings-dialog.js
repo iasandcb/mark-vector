@@ -5,8 +5,6 @@
 import * as api from "./api.js";
 import { t, getLanguage } from "./i18n.js";
 
-const APPLE = /Apple/.test(navigator.vendor || "");
-
 function escapeHtml(text) {
   return String(text).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
@@ -65,10 +63,11 @@ export async function openRecordingsDialog({ projectId, sessionId, filename, onC
     body.innerHTML = "";
     for (const rec of [...recordings].reverse()) {
       const url = api.recordingsUrl(projectId, sessionId, filename, rec.id);
-      // Downloads are always the server's AAC copy, which plays anywhere.
-      // Safari says it might play a WebM, then doesn't - the copy there too.
-      const m4a = rec.id.endsWith(".m4a") ? url : `${url}?format=m4a`;
-      const src = APPLE ? m4a : url;
+      // Played and downloaded as the server's mono AAC copy: it plays
+      // anywhere (Safari won't play a MediaRecorder WebM), and iOS records
+      // some microphones with one side silent, which the copy fixes.
+      const m4a = `${url}?format=m4a`;
+      const src = m4a;
       const when = startedAt(rec.id);
       const item = document.createElement("div");
       item.className = "recordings-item";
@@ -82,16 +81,9 @@ export async function openRecordingsDialog({ projectId, sessionId, filename, onC
         <audio controls preload="none" src="${src}"></audio>`;
       // preload="none": nothing is fetched (or converted) until its own
       // play button is pressed.
-      // A recording made in another browser may not play here (iOS won't
-      // play WebM from MediaRecorder) - then the server's AAC copy.
+      // No copy to be had (the server couldn't convert) - the original.
       const audio = item.querySelector("audio");
-      audio.addEventListener(
-        "error",
-        () => {
-          if (src !== m4a) audio.src = m4a;
-        },
-        { once: true },
-      );
+      audio.addEventListener("error", () => (audio.src = url), { once: true });
       item.querySelector("[data-delete]").addEventListener("click", async () => {
         if (!confirm(t("recordings.deleteConfirm"))) return;
         try {
