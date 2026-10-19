@@ -22,13 +22,15 @@ const TICK_MS = 100;
 // `onEvent(event)` gets every Realtime event from the data channel.
 // `onIdle()` is called once nothing has been heard for `idleMs`.
 // `audio` - getUserMedia's audio constraints, for a caller that also
-// records the stream. Resolves to { stop(), commit(), stream } once the
+// records the stream. `stream` - transcribe this instead of opening the
+// microphone (an audio file being played - see "audio file" in app.js);
+// stop() ends its tracks too. Resolves to { stop(), commit(), stream } once the
 // session is live.
-export async function startRealtimeTranscription({ language, audioContext, onEvent, onIdle, idleMs, audio }) {
+export async function startRealtimeTranscription({ language, audioContext, onEvent, onIdle, idleMs, audio, stream: source }) {
   const constraints = audio || { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
-  let stream;
+  let stream = source;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: constraints });
+    if (!stream) stream = await navigator.mediaDevices.getUserMedia({ audio: constraints });
   } catch (err) {
     // The picked microphone went away - the default rather than nothing.
     if (!constraints.deviceId || !["OverconstrainedError", "NotFoundError", "NotReadableError"].includes(err.name)) throw err;

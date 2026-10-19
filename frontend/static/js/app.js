@@ -140,6 +140,13 @@ const el = {
   dictationLang: document.getElementById("dictation-lang"),
   dictationEngine: document.getElementById("dictation-engine"),
   dictationRecordBtn: document.getElementById("dictation-record-btn"),
+  audioFileBar: document.getElementById("audio-file-bar"),
+  audioFilePlayBtn: document.getElementById("audio-file-play-btn"),
+  audioFileName: document.getElementById("audio-file-name"),
+  audioFileSeek: document.getElementById("audio-file-seek"),
+  audioFileTime: document.getElementById("audio-file-time"),
+  audioFileRateBtn: document.getElementById("audio-file-rate-btn"),
+  audioFileCloseBtn: document.getElementById("audio-file-close-btn"),
   dictationMicBtn: document.getElementById("dictation-mic-btn"),
   threadToggleBtn: document.getElementById("thread-toggle-btn"),
   sendBtn: document.getElementById("send-btn"),
@@ -2537,8 +2544,105 @@ async function openMicMenu() {
       label: device.label || t("editor.micUnnamed", { n: i + 1 }),
       onSelect: () => pick(device),
     })),
+    ...(realtimeSttAvailable ? ["-", { icon: "🎵", label: t("editor.audioFile"), onSelect: pickAudioFile }] : []),
   ]);
 }
+
+// ---------- audio file ----------
+// 🎙 menu > "Play an audio file…": the file plays on the page, and what it
+// plays is what the realtime engine transcribes instead of the microphone -
+// heard and written down at the caret as it goes, so Evaluate's live mode
+// checks it like any lecture. ▶ starts a dictation session on the file
+// (the click is the gesture iOS wants for both the AudioContext and the
+// player); ⏸ only pauses the player, and a pause long enough for
+// REALTIME_IDLE_MS ends the session - ▶ then starts a new one from the same
+// spot. Nothing is recorded: the file is the recording.
+const AUDIO_FILE_RATES = [1, 1.25, 1.5];
+// Once the file ends, how long the last phrase gets to come back written.
+const AUDIO_FILE_TAIL_MS = 4000;
+let audioFile = null; // { name, url, position, duration, rate } while one is loaded
+
+function pickAudioFile() {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = "audio/*,video/*";
+  input.hidden = true;
+  document.body.appendChild(input);
+  input.addEventListener("change", () => {
+    const file = input.files && input.files[0];
+    input.remove();
+    if (!file) return;
+    closeAudioFile();
+    audioFile = { name: file.name, url: URL.createObjectURL(file), position: 0, duration: 0, rate: 1 };
+    // Just for its length, before anything plays.
+    const probe = new Audio();
+    probe.preload = "metadata";
+    probe.addEventListener("loadedmetadata", () => {
+      if (audioFile && probe.src === audioFile.url && Number.isFinite(probe.duration)) audioFile.duration = probe.duration;
+      updateAudioFileBar();
+    }, { once: true });
+    probe.src = audioFile.url;
+    updateAudioFileBar();
+  });
+  input.click();
+}
+
+function closeAudioFile() {
+  if (dictation && dictation.file) stopDictation();
+  if (audioFile) URL.revokeObjectURL(audioFile.url);
+  audioFile = null;
+  updateAudioFileBar();
+}
+
+// The player of the dictation session on the file, if one is running.
+const audioFilePlayer = () => (dictation && dictation.file ? dictation.file.audio : null);
+
+function updateAudioFileBar() {
+  el.audioFileBar.hidden = !audioFile || !active;
+  if (!audioFile) return;
+  const player = audioFilePlayer();
+  const playing = !!player && !player.paused;
+  el.audioFilePlayBtn.textContent = playing ? "⏸" : "▶";
+  el.audioFilePlayBtn.title = t(playing ? "editor.audioFilePause" : "editor.audioFilePlay");
+  el.audioFilePlayBtn.disabled = !playing && !dictationUsable() && !player;
+  el.audioFileName.textContent = audioFile.name;
+  el.audioFileName.title = t("editor.audioFileTitle");
+  el.audioFileSeek.max = String(audioFile.duration || 0);
+  el.audioFileSeek.value = String(audioFile.position);
+  el.audioFileSeek.disabled = !audioFile.duration;
+  el.audioFileTime.textContent = `${formatClock(audioFile.position * 1000)} / ${audioFile.duration ? formatClock(audioFile.duration * 1000) : "--:--"}`;
+  el.audioFileRateBtn.textContent = `${audioFile.rate}×`;
+}
+
+el.audioFilePlayBtn.addEventListener("click", () => {
+  if (!audioFile) return;
+  const player = audioFilePlayer();
+  if (player) {
+    if (player.paused) player.play().catch(() => {});
+    else player.pause();
+    return;
+  }
+  // Dictating from the microphone: the file takes over.
+  if (dictation) stopDictation();
+  if (!realtimeSttAvailable || !dictationUsable()) return;
+  startRealtimeDictation(audioFile);
+  if (dictation) keepScreenOn(true);
+});
+el.audioFileSeek.addEventListener("input", () => {
+  if (!audioFile) return;
+  audioFile.position = Number(el.audioFileSeek.value);
+  const player = audioFilePlayer();
+  if (player) player.currentTime = audioFile.position;
+  updateAudioFileBar();
+});
+el.audioFileRateBtn.addEventListener("click", () => {
+  if (!audioFile) return;
+  audioFile.rate = AUDIO_FILE_RATES[(AUDIO_FILE_RATES.indexOf(audioFile.rate) + 1) % AUDIO_FILE_RATES.length];
+  const player = audioFilePlayer();
+  if (player) player.playbackRate = audioFile.rate;
+  updateAudioFileBar();
+});
+el.audioFileCloseBtn.addEventListener("click", closeAudioFile);
 
 let recordWithDictation = false;
 
@@ -2644,6 +2748,7 @@ function updateDictationButton() {
   el.dictationBtn.setAttribute("aria-pressed", listening ? "true" : "false");
   el.dictationLabel.textContent = t(listening ? "editor.dictationStop" : "editor.dictation");
   updateRecordButton();
+  updateAudioFileBar();
 }
 
 // A space between the new text and whatever precedes it, unless it starts
@@ -2887,7 +2992,7 @@ function startWebSpeechDictation() {
 // are shown as interim text in arrival order; a completed one becomes final
 // text. Items started before a rebase (see rebaseDictation) are abandoned:
 // their text stays where it was typed and their final version is dropped.
-function startRealtimeDictation() {
+function startRealtimeDictation(file = null) {
   // Created here, inside the click, for iOS - see realtime-stt.js.
   const audioContext = new (window.AudioContext || window.webkitAudioContext)();
   const session = {
@@ -2901,6 +3006,42 @@ function startRealtimeDictation() {
     commit: () => {},
   };
   dictation = session;
+  // An audio file (see "audio file" above): played through the session's
+  // own AudioContext - to the speakers and, as a stream, to the engine - so
+  // closing that context at the end silences it too.
+  let fileStream = null;
+  if (file) {
+    const audio = new Audio(file.url);
+    audio.playbackRate = file.rate;
+    const source = audioContext.createMediaElementSource(audio);
+    const out = audioContext.createMediaStreamDestination();
+    source.connect(out);
+    source.connect(audioContext.destination);
+    fileStream = out.stream;
+    // Played and paused inside the click, so iOS lets it play once connected.
+    audio.play().catch(() => {});
+    audio.pause();
+    audio.addEventListener("timeupdate", () => {
+      if (dictation !== session) return;
+      file.position = audio.currentTime;
+      updateAudioFileBar();
+    });
+    audio.addEventListener("play", updateAudioFileBar);
+    audio.addEventListener("pause", updateAudioFileBar);
+    audio.addEventListener("ended", () => {
+      if (dictation !== session) return;
+      session.commit();
+      setTimeout(() => {
+        if (dictation !== session) return;
+        stopDictation();
+        // ▶ next plays it from the start.
+        file.position = 0;
+        updateAudioFileBar();
+      }, AUDIO_FILE_TAIL_MS);
+      showRemoteStatus(t("editor.audioFileEnded"));
+    });
+    session.file = { audio };
+  }
   if (el.editor.selectionEnd > el.editor.selectionStart) {
     replaceEditorRange(el.editor.selectionStart, el.editor.selectionEnd, "");
   }
@@ -2913,6 +3054,7 @@ function startRealtimeDictation() {
     audioContext,
     // Recording takes the same stream, so it's opened unprocessed then.
     audio: micConstraints(recordWithDictation && recordingSupported() ? RECORDING_AUDIO : DICTATION_AUDIO),
+    stream: fileStream,
     idleMs: REALTIME_IDLE_MS,
     onIdle: () => {
       if (dictation !== session) return;
@@ -2968,6 +3110,14 @@ function startRealtimeDictation() {
           mutedAt = 0;
         });
       });
+      if (file) {
+        const audio = session.file.audio;
+        const seek = () => (audio.currentTime = file.position);
+        if (audio.readyState >= 1) seek();
+        else audio.addEventListener("loadedmetadata", seek, { once: true });
+        audio.play().catch((err) => showRemoteStatus(t("editor.dictationFailed", { message: err.message })));
+        return;
+      }
       showRemoteStatus(t("editor.dictationListening"));
       if (recordWithDictation && recordingSupported()) startDictationRecording(session, handle.stream, false);
     })
@@ -2988,6 +3138,7 @@ function stopDictation() {
   dictation = null;
   // The recorder first: the realtime engine's stop() ends the stream it records.
   stopDictationRecording(session);
+  if (session.file) session.file.audio.pause();
   keepScreenOn(false);
   // Whatever interim text is on screen simply stays as typed.
   try {
@@ -3044,7 +3195,7 @@ el.dictationRecordBtn.addEventListener("click", () => {
   updateRecordButton();
   // Turned on mid-dictation: start recording right away.
   const session = dictation;
-  if (recordWithDictation && session && !session.recording) {
+  if (recordWithDictation && session && !session.recording && !session.file) {
     if (session.engine === "realtime" && session.stream) startDictationRecording(session, session.stream, false);
     else if (session.engine === "webspeech")
       navigator.mediaDevices

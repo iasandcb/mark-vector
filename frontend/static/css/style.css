@@ -2402,3 +2402,45 @@ kbd.shortcut-key {
   font-size: 12.5px;
   overflow-x: auto;
 }
+
+/* An audio file being transcribed as it plays (see "audio file" in app.js). */
+.audio-file-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  min-width: 0;
+}
+.audio-file-bar[hidden] {
+  display: none;
+}
+.audio-file-play {
+  min-width: 34px;
+  padding: 4px 8px;
+}
+.audio-file-name {
+  flex: 0 1 auto;
+  max-width: 30%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+.audio-file-seek {
+  flex: 1 1 80px;
+  min-width: 60px;
+}
+.audio-file-time {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.audio-file-rate {
+  padding: 4px 6px;
+}
+@media (max-width: 700px) {
+  .audio-file-name {
+    display: none;
+  }
+}

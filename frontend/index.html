@@ -202,6 +202,15 @@
         </label>
         <p id="provider-warning" class="warning" hidden data-i18n="provider.notConfigured"></p>
       </div>
+      <!-- An audio file being transcribed as it plays - see "audio file" in app.js. -->
+      <div id="audio-file-bar" class="audio-file-bar" hidden>
+        <button id="audio-file-play-btn" class="secondary-btn audio-file-play" type="button">▶</button>
+        <span id="audio-file-name" class="audio-file-name"></span>
+        <input id="audio-file-seek" class="audio-file-seek" type="range" min="0" max="0" step="1" value="0" data-i18n-title="editor.audioFileSeek">
+        <span id="audio-file-time" class="audio-file-time"></span>
+        <button id="audio-file-rate-btn" class="secondary-btn audio-file-rate" type="button" data-i18n-title="editor.audioFileRate">1×</button>
+        <button id="audio-file-close-btn" class="icon-btn audio-file-close" type="button" data-i18n-title="editor.audioFileClose">✕</button>
+      </div>
       <textarea id="editor" class="editor" data-i18n-placeholder="editor.placeholder" disabled></textarea>
       <!-- The "rendered" half of #view-mode-btn's toggle: an absolutely-
            positioned cover over the editor (.editor-pane already establishes
