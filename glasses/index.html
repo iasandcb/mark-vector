@@ -168,6 +168,22 @@
       padding-top: 0;
     }
     #live-check::-webkit-scrollbar { display: none; }
+    /* With a live check running the findings are what's read: the document
+       (the transcript, usually) shrinks to a strip of its newest lines and
+       the findings get the rest of the screen, in larger type. */
+    #screen.checking #content {
+      flex: 0 0 30%;
+      font-size: 17px;
+    }
+    #screen.checking #live-check {
+      flex: 1;
+      max-height: none;
+      font-size: 24px;
+      line-height: 1.35;
+    }
+    #screen.checking .lc-status { font-size: 16px; }
+    #screen.checking .lc-label { font-size: 17px; }
+    #screen.checking .lc-time { font-size: 16px; }
     .lc-status {
       font-size: 13px;
       color: #9a9a92;

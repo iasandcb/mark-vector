@@ -112,11 +112,14 @@ function renderSlides(message, isNewDocument) {
 // While the editor's Evaluate tab runs its live check, each update carries
 // a snapshot of it (message.liveCheck - see analysis.js's liveSnapshot):
 // a status line and the newest findings, labels already in the editor's
-// language. Normally a strip under the document shows the newest finding;
-// in document view the D-pad's right swaps the document for the whole
-// list (left goes back). A finding that's just come in gets the strip's
-// top edge lit for a while.
+// language. In document view the newest findings take most of the screen,
+// under a strip of the document's newest lines (slides keep theirs, with
+// the findings in a strip below), and the D-pad's right swaps the document
+// for the whole list (left goes back). A finding that's just come in gets
+// the findings' top edge lit for a while.
 const FRESH_MS = 8000;
+// How many of the newest findings are shown outside the full list (as many as fit).
+const STRIP_ISSUES = 3;
 let showFindings = false;
 let lastFindingCount = null;
 let freshTimer = null;
@@ -129,12 +132,13 @@ function renderLiveCheck(message) {
   const check = message && message.liveCheck;
   if (!check) {
     liveCheckEl.hidden = true;
-    screenEl.classList.remove("findings");
+    screenEl.classList.remove("findings", "checking");
     showFindings = false;
     lastFindingCount = null;
     return;
   }
   liveCheckEl.hidden = false;
+  screenEl.classList.toggle("checking", !slideMode(message));
   if (lastFindingCount !== null && check.count > lastFindingCount) {
     liveCheckEl.classList.add("fresh");
     clearTimeout(freshTimer);
@@ -145,7 +149,7 @@ function renderLiveCheck(message) {
   screenEl.classList.toggle("findings", findings);
   const dialect = message.dialect || "latex";
   const md = (text) => renderMarkdown(text || "", dialect);
-  const shown = findings ? check.issues : check.issues.slice(0, 1);
+  const shown = findings ? check.issues : check.issues.slice(0, STRIP_ISSUES);
   const status = `<div class="lc-status">${escapeHtml(check.status)}${check.error ? ` <span class="lc-error">${escapeHtml(check.error)}</span>` : ""}</div>`;
   const items = shown
     .map(
