@@ -104,3 +104,12 @@ def test_ping_is_answered_to_the_sender_alone(client, without_passcode):
         assert editor.receive_json() == {"type": "pong"}
         editor.send_json({"type": "update", "filename": "p.md", "content": "x"})
         assert screen.receive_json()["type"] == "update"  # the ping never reached it
+
+
+def test_ambient_screen_ping_is_answered(client, without_passcode):
+    with client.websocket_connect("/ws/live") as screen:
+        screen.send_json({"type": "ping"})
+        reply = screen.receive_json()
+        if reply.get("type") == "update":  # an earlier test's state, replayed on join
+            reply = screen.receive_json()
+        assert reply == {"type": "pong"}

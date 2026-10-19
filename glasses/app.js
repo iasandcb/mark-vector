@@ -213,30 +213,69 @@ let openedThisAttempt = false;
 let attemptStartedAt = 0;
 let consecutiveFastFails = 0;
 
+// A connection the network dropped without a word (the glasses' Wi-Fi or
+// the phone's hotspot blinking) can stay "open" here indefinitely - the
+// dot lit, nothing arriving. So every LIVE_HEARTBEAT_MS a ping goes out
+// (answered by routers/live.py), and one still unanswered at the next beat
+// means the socket is replaced; the server replays the latest state to the
+// new one.
+const LIVE_HEARTBEAT_MS = 10000;
+let awaitingPong = false;
+
+setInterval(() => {
+  if (!socket || socket.readyState !== WebSocket.OPEN) return;
+  if (awaitingPong) {
+    // Not waiting on close(): a dead connection's close can take minutes
+    // to come back - the new socket goes up now, and the old one's events
+    // are ignored from here on (see connect).
+    const dead = socket;
+    socket = null;
+    setStatus(false);
+    dead.close();
+    connect();
+    return;
+  }
+  awaitingPong = true;
+  try {
+    socket.send(JSON.stringify({ type: "ping" }));
+  } catch (err) {
+    socket.close();
+  }
+}, LIVE_HEARTBEAT_MS);
+
 function connect() {
+  awaitingPong = false;
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const path = channel ? `/ws/live/${encodeURIComponent(channel)}` : "/ws/live";
   const query = pin ? `?pin=${encodeURIComponent(pin)}` : "";
   openedThisAttempt = false;
   attemptStartedAt = Date.now();
-  socket = new WebSocket(`${proto}://${location.host}${path}${query}`);
+  const ws = new WebSocket(`${proto}://${location.host}${path}${query}`);
+  socket = ws;
 
-  socket.addEventListener("open", () => {
+  ws.addEventListener("open", () => {
+    if (socket !== ws) return;
     openedThisAttempt = true;
     consecutiveFastFails = 0;
     setStatus(true);
     retryDelay = 1000;
   });
-  socket.addEventListener("message", (event) => {
+  ws.addEventListener("message", (event) => {
+    if (socket !== ws) return;
     let message;
     try {
       message = JSON.parse(event.data);
     } catch (err) {
       return;
     }
+    if (message && message.type === "pong") {
+      awaitingPong = false;
+      return;
+    }
     render(message);
   });
-  socket.addEventListener("close", () => {
+  ws.addEventListener("close", () => {
+    if (socket !== ws) return;
     setStatus(false);
     if (!openedThisAttempt && Date.now() - attemptStartedAt < 2000) {
       consecutiveFastFails += 1;
@@ -258,7 +297,7 @@ function connect() {
   // A network blip fires "error" then "close" - closing explicitly here
   // just avoids waiting out however long the browser takes to notice on
   // its own before the "close" handler above kicks off the retry.
-  socket.addEventListener("error", () => socket.close());
+  ws.addEventListener("error", () => ws.close());
 }
 
 // Commands back to the editor (see app.js's handleScreenCommand): returns

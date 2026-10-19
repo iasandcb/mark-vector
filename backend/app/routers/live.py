@@ -90,8 +90,9 @@ async def live_channel(websocket: WebSocket, channel: str):
                 await _broadcast(entry["sockets"], message, exclude=websocket)
                 continue
             if isinstance(message, dict) and message.get("type") == "ping":
-                # The editor checking its socket is still alive (see
-                # app.js's LIVE_HEARTBEAT_MS) - answered to it alone.
+                # The editor or a screen checking its socket is still alive
+                # (see LIVE_HEARTBEAT_MS in app.js and glasses/app.js) -
+                # answered to it alone.
                 await websocket.send_json({"type": "pong"})
                 continue
             if not isinstance(message, dict) or message.get("type") != "update":
@@ -149,6 +150,9 @@ async def live_latest(websocket: WebSocket):
             try:
                 message = json.loads(raw)
             except ValueError:
+                continue
+            if isinstance(message, dict) and message.get("type") == "ping":
+                await websocket.send_json({"type": "pong"})
                 continue
             if _is_command(message) and _latest_channel in _channels:
                 await _broadcast(_channels[_latest_channel]["sockets"], message)
