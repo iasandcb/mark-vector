@@ -166,6 +166,47 @@ function renderLiveCheck(message) {
   liveCheckEl.scrollTop = findings ? scroll : 0;
 }
 
+// The editor sends the whole document up to 5 times a second (see
+// LIVE_SEND_INTERVAL_MS in app.js), and each one used to be rendered in
+// full - Markdown and every formula. On the glasses' processor that takes
+// longer than the gap between updates once a lecture's transcript runs to
+// a few thousand words, so they queued up: the screen fell further and
+// further behind until it stopped. Now an update only marks itself as the
+// latest, and one render runs for whichever is latest once the page is
+// free - those that arrived meanwhile are skipped, not drawn one by one.
+let pendingMessage = null;
+let renderQueued = false;
+
+function scheduleRender(message) {
+  pendingMessage = message;
+  if (renderQueued) return;
+  renderQueued = true;
+  setTimeout(() => {
+    renderQueued = false;
+    const latest = pendingMessage;
+    pendingMessage = null;
+    render(latest);
+  }, 0);
+}
+
+// ...and while the screen follows the bottom (it can only show the last
+// screenful anyway), only the document's last TAIL_CHARS or so are
+// rendered, starting at a paragraph, line or sentence break that isn't
+// inside math. Scrolling up re-renders the whole document (see keydown).
+const TAIL_CHARS = 4000;
+
+function tailOf(content) {
+  if (content.length <= TAIL_CHARS) return content;
+  const from = content.length - TAIL_CHARS;
+  for (const sep of ["\n\n", "\n", ". "]) {
+    for (let cut = content.indexOf(sep, from); cut !== -1 && cut < content.length - TAIL_CHARS / 4; cut = content.indexOf(sep, cut + 1)) {
+      // An even number of $ before the cut: not inside $...$ or $$...$$.
+      if ((content.slice(0, cut).match(/\$/g) || []).length % 2 === 0) return content.slice(cut + sep.length);
+    }
+  }
+  return content;
+}
+
 function render(message) {
   lastMessage = message;
   renderLiveCheck(message);
@@ -186,8 +227,11 @@ function render(message) {
   }
   filenameEl.textContent = message.filename;
 
-  contentEl.innerHTML = (message.content || "").trim()
-    ? renderMarkdown(message.content, message.dialect || "latex")
+  const content = message.content || "";
+  // Following the bottom, only the end is rendered - see tailOf.
+  const shown = followBottom && !isNewDocument ? tailOf(content) : content;
+  contentEl.innerHTML = content.trim()
+    ? (shown.length < content.length ? '<p class="hint">…</p>' : "") + renderMarkdown(shown, message.dialect || "latex")
     : '<p class="hint">(empty)</p>';
 
   if (isNewDocument) {
@@ -272,7 +316,7 @@ function connect() {
       awaitingPong = false;
       return;
     }
-    render(message);
+    scheduleRender(message);
   });
   ws.addEventListener("close", () => {
     if (socket !== ws) return;
@@ -427,6 +471,14 @@ document.addEventListener("keydown", (event) => {
     const math = event.key === "ArrowUp";
     if (sendCommand(math ? "toggleMath" : "lineBreak")) filenameEl.textContent += math ? " · $$" : " · ↵";
     return;
+  }
+  if (event.key === "ArrowUp" && followBottom && lastMessage) {
+    // Only the end was rendered (see tailOf) - the whole document now,
+    // kept at the same distance from the bottom so nothing jumps.
+    const fromBottom = contentEl.scrollHeight - contentEl.scrollTop;
+    followBottom = false;
+    render(lastMessage);
+    contentEl.scrollTop = contentEl.scrollHeight - fromBottom;
   }
   if (event.key === "ArrowDown") {
     contentEl.scrollTop += SCROLL_STEP;
