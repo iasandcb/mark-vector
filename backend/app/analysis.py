@@ -106,6 +106,12 @@ Reply with ONE JSON object and nothing else - no code fence, no text before or a
 LIVE_CONTEXT_CHARS = 3_000
 LIVE_PASSAGE_MAX_CHARS = 8_000
 LIVE_MAX_ISSUES = 300
+# How many earlier findings each step lists as already reported, and how
+# much of each one's problem text goes with it.
+LIVE_REPORTED_LISTED = 30
+LIVE_REPORTED_PROBLEM_CHARS = 120
+# A quote this short is never matched as part of a longer one (_same_quote).
+LIVE_MIN_CONTAINED_CHARS = 6
 
 LIVE_SYSTEM = """You check a lecture for mistakes while it is being given. The lecture is being written down as it goes - dictated by speech recognition, typed live, or a prepared script being edited - and you are shown one new passage at a time, with the text before it for context.
 
@@ -113,7 +119,7 @@ Report only real problems in the NEW passage: a factual claim you are confident 
 
 The speaker may also ask you something in passing - a fact, a number, a definition, a quick check ("한국 인구가 얼마죠?", "what's the derivative of tan x again?"). Answer such a question as an "answer" item: the quote is the question, the problem field holds the answer - direct and short, a sentence or two with the key figure or fact first (say how current a changing figure is). Leave out rhetorical questions put to the audience that the lecture goes on to answer itself.
 
-Stay quiet otherwise. The text may be a speech transcript: ignore filler words, repetition, recognition slips that don't change the meaning, loose grammar, and a sentence cut off at the end of the passage (the speaker is mid-sentence - it will come again, complete, in the next passage). Do not report style, wording or formatting, and do not repeat problems in the context. Most passages have no problems; then return no issues.
+Stay quiet otherwise. The text may be a speech transcript: ignore filler words, repetition, recognition slips that don't change the meaning, loose grammar, and a sentence cut off at the end of the passage (the speaker is mid-sentence - it will come again, complete, in the next passage). Do not report style, wording or formatting, and do not repeat problems in the context or ones listed as already reported. Most passages have no problems; then return no issues.
 
 Math may be written in LaTeX or in AsciiMath (a `<!-- math: asciimath -->` line marks AsciiMath), or spoken out in words.
 
@@ -137,14 +143,27 @@ def live_system_prompt(language: str, dialect: str = "latex", custom_symbols=())
     return LIVE_SYSTEM + _asciimath_guide(dialect, custom_symbols) + _math_line("evaluate", dialect) + _language_line(language)
 
 
-def live_user_message(filename: str, content: str, start: int, end: int) -> str:
+def live_user_message(filename: str, content: str, start: int, end: int, reported: list[dict] | tuple = ()) -> str:
+    """`reported` is what earlier steps already found (the saved record's
+    issues): the newest of them are listed so the model doesn't raise them
+    again - the passage reaches back over text already checked (see
+    changedRegion in analysis.js), and a repeat rarely quotes exactly the
+    same span, so merge_live alone can't catch every one."""
     start = max(0, min(start, len(content)))
     end = max(start, min(end, len(content), start + LIVE_PASSAGE_MAX_CHARS))
     context = content[max(0, start - LIVE_CONTEXT_CHARS) : start]
-    return (
+    message = (
         f'Lecture "{filename}". The text so far, for context:\n<context>\n{context}\n</context>\n\n'
         f"Check this new passage:\n<passage>\n{content[start:end]}\n</passage>"
     )
+    recent = [issue for issue in reported if issue.get("quote")][-LIVE_REPORTED_LISTED:]
+    if recent:
+        lines = "\n".join(f'- "{issue["quote"]}": {issue.get("problem", "")[:LIVE_REPORTED_PROBLEM_CHARS]}' for issue in recent)
+        message += (
+            "\n\nAlready reported - don't report any of these again, even if the passage repeats the text or you'd quote it differently:\n"
+            f"<reported>\n{lines}\n</reported>"
+        )
+    return message
 
 
 def parse_live(text: str) -> list[dict]:
@@ -152,17 +171,37 @@ def parse_live(text: str) -> list[dict]:
     return parse_evaluation(text)["issues"] if _parse_json_object(text) is not None else []
 
 
+_QUOTE_NOISE_RE = re.compile(r"[\s.,!?;:…\"'“”‘’`()\[\]{}·、。，！？「」]+")
+
+
+def _quote_key(quote: str) -> str:
+    return _QUOTE_NOISE_RE.sub("", quote).lower()
+
+
+def _same_quote(a: str, b: str) -> bool:
+    """The same spot, quoted again: equal once spacing, punctuation and case
+    are set aside, or one quote a longer or shorter span of the other - as
+    long as the shorter one is long enough to mean something (a bare "x" or
+    "2" turns up all over a lecture)."""
+    if a == b:
+        return True
+    short, long = sorted((a, b), key=len)
+    return len(short) >= LIVE_MIN_CONTAINED_CHARS and short in long
+
+
 def merge_live(record: dict | None, issues: list[dict], at: str) -> dict:
     """Adds a step's issues to the saved live record - skipping ones already
-    there for the same quote, which a passage re-sent with its sentence
-    finished would otherwise report twice."""
+    there for the same quote (see _same_quote), which a passage re-sent with
+    its sentence finished would otherwise report twice."""
     kept = list((record or {}).get("issues") or [])
-    seen = {issue["quote"] for issue in kept if issue.get("quote")}
+    seen = [key for issue in kept if issue.get("quote") and (key := _quote_key(issue["quote"]))]
     added = []
     for issue in issues:
-        if issue["quote"] and issue["quote"] in seen:
+        key = _quote_key(issue["quote"] or "")
+        if key and any(_same_quote(key, other) for other in seen):
             continue
-        seen.add(issue["quote"])
+        if key:
+            seen.append(key)
         added.append({**issue, "at": at})
     return {"issues": (kept + added)[-LIVE_MAX_ISSUES:], "checks": (record or {}).get("checks", 0) + 1, "added": added}
 

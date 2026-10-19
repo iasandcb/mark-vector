@@ -184,6 +184,25 @@ class TestLive:
         assert [i["quote"] for i in second["issues"]] == ["1543년", "other"]
         assert [i["quote"] for i in second["added"]] == ["other"]
 
+    def test_merge_skips_the_same_spot_quoted_differently(self):
+        issue = {"severity": "error", "quote": "지구는 태양 주위를 1년에 두 번 돈다", "problem": "p", "correction": ""}
+        first = analysis.merge_live(None, [issue], "t1")
+        again = [
+            {**issue, "quote": "지구는 태양 주위를 1년에 두 번 돈다."},  # punctuation
+            {**issue, "quote": "태양 주위를 1년에 두 번"},  # a shorter span of it
+            {**issue, "quote": "그래서 지구는 태양 주위를  1년에 두 번 돈다고"},  # a longer one
+            {**issue, "quote": "2"},  # too short to match inside anything
+        ]
+        second = analysis.merge_live(first, again, "t2")
+        assert [i["quote"] for i in second["added"]] == ["2"]
+
+    def test_already_reported_listed_for_the_model(self):
+        content = "x" * 50 + "NEW"
+        assert "<reported>" not in analysis.live_user_message("f.md", content, 50, len(content))
+        reported = [{"severity": "error", "quote": "1 + 1 = 3", "problem": "It is 2."}]
+        msg = analysis.live_user_message("f.md", content, 50, len(content), reported)
+        assert '<reported>\n- "1 + 1 = 3": It is 2.\n</reported>' in msg
+
     def test_answer_items_kept(self):
         reply = json.dumps({"issues": [{"severity": "answer", "quote": "한국 인구가 얼마죠?", "problem": "약 5,100만 명"}]})
         assert analysis.parse_live(reply)[0]["severity"] == "answer"

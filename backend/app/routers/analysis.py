@@ -63,7 +63,7 @@ async def live_check(project_id: str, conv_id: str, filename: str, req: LiveChec
         raise HTTPException(status_code=400, detail=str(exc))
 
     system_prompt = analysis.live_system_prompt(req.language, req.math_dialect, _custom_symbols())
-    messages = [{"role": "user", "content": analysis.live_user_message(filename, req.content, req.start, req.end)}]
+    messages = [{"role": "user", "content": analysis.live_user_message(filename, req.content, req.start, req.end, (existing or {}).get("issues") or [])}]
     chunks: list[str] = []
     try:
         async for event in provider.stream(messages, req.model, req.reasoning_effort, system_prompt):
