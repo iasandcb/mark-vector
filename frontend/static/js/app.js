@@ -2565,7 +2565,9 @@ let audioFile = null; // { name, url, position, duration, rate } while one is lo
 function pickAudioFile() {
   const input = document.createElement("input");
   input.type = "file";
-  input.accept = "audio/*,video/*";
+  // iOS greys some audio files out of the Files picker under a bare
+  // "audio/*" (an .m4a among them), so the extensions are named as well.
+  input.accept = "audio/*,video/*,.m4a,.mp3,.wav,.aac,.ogg,.opus,.flac,.webm,.mp4,.mov";
   input.hidden = true;
   document.body.appendChild(input);
   input.addEventListener("change", () => {

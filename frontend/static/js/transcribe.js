@@ -46,7 +46,7 @@ export async function openTranscribeDialog({ projectId, sessionId, onDone }) {
       <div class="transcribe-body">
         <p class="transcribe-note" data-note></p>
         <label class="transcribe-drop" data-drop>
-          <input type="file" accept="audio/*,video/mp4,video/webm" hidden data-file>
+          <input type="file" accept="audio/*,video/mp4,video/webm,.m4a,.mp3,.wav,.aac,.ogg,.opus,.flac,.webm,.mp4" hidden data-file>
           <span data-drop-label></span>
         </label>
         <div class="transcribe-or" data-or></div>
