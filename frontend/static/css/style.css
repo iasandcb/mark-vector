@@ -1893,6 +1893,13 @@ kbd.shortcut-key {
 }
 
 .recordings-meta a.icon-btn { text-decoration: none; }
+.recordings-meta a.icon-btn.busy { opacity: 0.4; pointer-events: none; }
+.recordings-progress {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 
 .recordings-item audio {
   width: 100%;

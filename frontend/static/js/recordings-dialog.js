@@ -15,6 +15,39 @@ function startedAt(id) {
   return m ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]) : null;
 }
 
+// The download, fetched here rather than left to the link: the server
+// converts the recording before the first byte goes out (a long one takes
+// a while), and the browser shows nothing meanwhile. `onProgress(text)`
+// says where it's got to; the file is then saved under `name`.
+async function downloadWithProgress(url, name, onProgress) {
+  onProgress(t("recordings.preparing"));
+  const res = await fetch(url);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || `Request failed: ${res.status}`);
+  }
+  const total = Number(res.headers.get("content-length")) || 0;
+  const reader = res.body.getReader();
+  const chunks = [];
+  let received = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.length;
+    const mb = (received / 1024 / 1024).toFixed(1);
+    onProgress(total ? t("recordings.downloadingPercent", { percent: Math.floor((received / total) * 100), mb }) : t("recordings.downloadingMb", { mb }));
+  }
+  const blobUrl = URL.createObjectURL(new Blob(chunks, { type: res.headers.get("content-type") || "audio/mp4" }));
+  const a = document.createElement("a");
+  a.href = blobUrl;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+}
+
 // `onChange()` is called after a delete, so the tree's count can follow.
 // `onTranscribe(name, url)`, when given, gets a recording to play and write
 // down (the editor's audio-file bar); the dialog closes for it.
@@ -77,7 +110,8 @@ export async function openRecordingsDialog({ projectId, sessionId, filename, onC
         <div class="recordings-meta">
           <span>${escapeHtml(when ? when.toLocaleString(getLanguage()) : rec.id)}</span>
           <span class="recordings-size">${rec.size >= 1024 * 1024 ? `${(rec.size / 1024 / 1024).toFixed(1)} MB` : `${Math.ceil(rec.size / 1024)} KB`}</span>
-          <a class="icon-btn" href="${m4a}" download title="${escapeHtml(t("recordings.download"))}">⤓</a>
+          <span class="recordings-progress" data-progress hidden></span>
+          <a class="icon-btn" href="${m4a}" download data-download title="${escapeHtml(t("recordings.download"))}">⤓</a>
           <button class="icon-btn" type="button" data-delete title="${escapeHtml(t("recordings.delete"))}">×</button>
         </div>
         <audio controls preload="none" src="${src}"></audio>
@@ -91,6 +125,27 @@ export async function openRecordingsDialog({ projectId, sessionId, filename, onC
       // No copy to be had (the server couldn't convert) - the original.
       const audio = item.querySelector("audio");
       audio.addEventListener("error", () => (audio.src = url), { once: true });
+      const downloadLink = item.querySelector("[data-download]");
+      const progress = item.querySelector("[data-progress]");
+      let downloading = false;
+      downloadLink.addEventListener("click", async (e) => {
+        e.preventDefault();
+        if (downloading) return;
+        downloading = true;
+        downloadLink.classList.add("busy");
+        progress.hidden = false;
+        try {
+          const base = filename.replace(/\.md$/, "");
+          await downloadWithProgress(m4a, `${base}-${rec.id.replace(/\.[^.]+$/, "")}.m4a`, (text) => (progress.textContent = text));
+          progress.textContent = t("recordings.downloaded");
+          setTimeout(() => (progress.hidden = true), 3000);
+        } catch (err) {
+          progress.textContent = t("recordings.downloadFailed", { message: err.message });
+        } finally {
+          downloading = false;
+          downloadLink.classList.remove("busy");
+        }
+      });
       const transcribeBtn = item.querySelector("[data-transcribe]");
       if (transcribeBtn)
         transcribeBtn.addEventListener("click", () => {
