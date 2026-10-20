@@ -112,13 +112,15 @@ function renderSlides(message, isNewDocument) {
 // While the editor's Evaluate tab runs its live check, each update carries
 // a snapshot of it (message.liveCheck - see analysis.js's liveSnapshot):
 // a status line and the newest findings, labels already in the editor's
-// language. In document view the newest findings take most of the screen,
-// under a strip of the document's newest lines (slides keep theirs, with
-// the findings in a strip below), and the D-pad's right swaps the document
-// for the whole list (left goes back). A finding that's just come in gets
-// the findings' top edge lit for a while.
+// language. In document view the findings, newest first, take most of the
+// screen under a strip of the document's newest lines, and the D-pad's
+// up/down scroll them - the findings are what's read, the document just
+// follows its end. Right swaps the document strip for the findings too
+// (left brings it back). Slides keep their screen, with the newest
+// findings in a strip below. A finding that's just come in gets the
+// findings' top edge lit for a while.
 const FRESH_MS = 8000;
-// How many of the newest findings are shown outside the full list (as many as fit).
+// How many of the newest findings the strip under a slide shows (as many as fit).
 const STRIP_ISSUES = 3;
 let showFindings = false;
 let lastFindingCount = null;
@@ -149,7 +151,7 @@ function renderLiveCheck(message) {
   screenEl.classList.toggle("findings", findings);
   const dialect = message.dialect || "latex";
   const md = (text) => renderMarkdown(text || "", dialect);
-  const shown = findings ? check.issues : check.issues.slice(0, STRIP_ISSUES);
+  const shown = slideMode(message) ? check.issues.slice(0, STRIP_ISSUES) : check.issues;
   const status = `<div class="lc-status">${escapeHtml(check.status)}${check.error ? ` <span class="lc-error">${escapeHtml(check.error)}</span>` : ""}</div>`;
   const items = shown
     .map(
@@ -163,7 +165,8 @@ function renderLiveCheck(message) {
     .join("");
   const scroll = liveCheckEl.scrollTop;
   liveCheckEl.innerHTML = status + items;
-  liveCheckEl.scrollTop = findings ? scroll : 0;
+  // Where it was scrolled to - at the top, that's the newest finding.
+  liveCheckEl.scrollTop = slideMode(message) ? 0 : scroll;
 }
 
 // The editor sends the whole document up to 5 times a second (see
@@ -418,8 +421,8 @@ setInterval(async () => {
 // in slide view left/right step between slides.
 const SCROLL_STEP = 140;
 document.addEventListener("keydown", (event) => {
-  // Document view with a live check running: right shows the findings,
-  // left the document again, and up/down scroll whichever is showing.
+  // Document view with a live check running: up/down scroll the findings,
+  // right gives them the whole screen, left brings the document strip back.
   if (lastMessage && lastMessage.liveCheck && !slideMode(lastMessage)) {
     if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
       event.preventDefault();
@@ -431,7 +434,7 @@ document.addEventListener("keydown", (event) => {
       }
       return;
     }
-    if (showFindings && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+    if (event.key === "ArrowUp" || event.key === "ArrowDown") {
       event.preventDefault();
       liveCheckEl.scrollTop += event.key === "ArrowDown" ? SCROLL_STEP : -SCROLL_STEP;
       return;
