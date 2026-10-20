@@ -12,6 +12,7 @@ from .routers import (
     conversations,
     custom_symbols,
     hermes,
+    ingest,
     live,
     projects,
     providers,
@@ -49,6 +50,7 @@ app.include_router(live.router)
 app.include_router(transcribe.router)
 app.include_router(stt.router)
 app.include_router(recordings.router)
+app.include_router(ingest.router)
 
 
 class NoCacheStaticFiles(StaticFiles):

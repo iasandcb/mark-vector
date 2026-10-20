@@ -42,7 +42,8 @@ STATE_MAX_AGE = 10 * 60  # just long enough to complete the Google redirect roun
 # is what a signed-out visitor gets at the root - main.index decides
 # between it and the app with is_authenticated() below.
 _PUBLIC_EXACT_PATHS = {"/", "/about", "/login", "/glasses"}
-_PUBLIC_PATH_PREFIXES = ("/auth/", "/static/", "/p/", "/api/public/", "/glasses/")
+# /api/ingest/ checks a token of its own instead (see routers/ingest.py).
+_PUBLIC_PATH_PREFIXES = ("/auth/", "/static/", "/p/", "/api/public/", "/glasses/", "/api/ingest/")
 
 
 def _session_secret() -> bytes:

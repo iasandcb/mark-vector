@@ -62,6 +62,10 @@ class Settings:
     # turn auth on (see auth.AuthMiddleware), and both can be configured at
     # once so either grants access.
     app_passcode: str | None = field(default_factory=_load_passcode)
+    # The bearer token a bot uploads audio with (routers/ingest.py) - that
+    # route is off until it's set - and the day its date folders follow.
+    ingest_token: str | None = os.getenv("INGEST_TOKEN") or None
+    ingest_timezone: str = os.getenv("INGEST_TIMEZONE", "Asia/Seoul")
 
 
 settings = Settings()

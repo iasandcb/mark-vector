@@ -76,6 +76,8 @@ FastAPI가 `frontend/` 디렉터리를 함께 서빙하므로 별도의 프론�
 | `ANTHROPIC_API_KEY` | Anthropic API 키 (선택, 미설정 시 해당 프로바이더 비활성) |
 | `OPENAI_API_KEY` | OpenAI API 키 (선택, 미설정 시 해당 프로바이더 비활성) |
 | `XAI_API_KEY` | xAI(Grok) API 키 (선택, 미설정 시 해당 프로바이더 비활성) |
+| `INGEST_TOKEN` | 봇이 오디오를 올리는 `POST /api/ingest/audio`의 Bearer 토큰 (선택, 미설정 시 비활성) |
+| `INGEST_TIMEZONE` | 업로드 날짜 폴더의 기준 시간대 (기본 `Asia/Seoul`) |
 | `DATA_DIR` | 대화 저장 경로 (기본값: `../data`) |
 
 프로바이더는 최소 하나만 설정하면 됩니다. API 키가 없는 프로바이더는 드롭다운에 나오지 않고, 하나도 없으면 툴바에 "설정된 LLM 프로바이더가 없습니다. 서버의 .env에서 API 키를 설정하세요."가 표시됩니다.

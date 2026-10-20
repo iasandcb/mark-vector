@@ -1474,6 +1474,68 @@ def append_recording(project_id: str, conv_id: str, filename: str, recording_id:
     return size + len(data)
 
 
+# ---------- audio dropped in by a bot (routers/ingest.py) ----------
+
+_INGEST_NAME_BAD = re.compile(r"[/\\\x00-\x1f]+")
+
+
+def _find_or_create_project(title: str) -> str:
+    for project in list_projects():
+        if project["title"].strip().lower() == title.strip().lower():
+            return project["id"]
+    return create_project(title)["id"]
+
+
+def _find_or_create_folder(project_id: str, title: str) -> str:
+    for conv in list_conversations(project_id):
+        if conv["parent_id"] is None and conv["title"] == title:
+            return conv["id"]
+    return create_conversation(project_id, title)["id"]
+
+
+def ingest_audio(project_title: str, folder_title: str, name: str, ext: str, src, started: datetime) -> dict:
+    """`src` (a binary file object) becomes the one recording of a new, empty
+    document named after `name`, in the top-level folder `folder_title` of
+    the project `project_title` - each made if missing. A name that's taken
+    gets " (2)", " (3)", ... Nothing is transcribed."""
+    if ext not in RECORDING_EXTS:
+        raise ValueError(f"Unsupported recording type: {ext}")
+    stem = _INGEST_NAME_BAD.sub(" ", name).strip().strip(".") or "audio"
+    project_id = _find_or_create_project(project_title)
+    conv_id = _find_or_create_folder(project_id, folder_title)
+    conv_dir = _conversations_dir(project_id) / conv_id
+    filename = f"{stem}.md"
+    n = 2
+    while (conv_dir / filename).exists() or filename == SYSTEM_FILENAME:
+        filename = f"{stem} ({n}).md"
+        n += 1
+    _validate_filename(filename)
+    (conv_dir / filename).write_text("", encoding="utf-8")
+    try:
+        recording = create_recording(project_id, conv_id, filename, ext, started)
+        path = _recording_path(project_id, conv_id, filename, recording["id"])
+        size = 0
+        with path.open("wb") as out:
+            while chunk := src.read(1024 * 1024):
+                size += len(chunk)
+                if size > RECORDING_MAX_BYTES:
+                    raise ValueError("Recording is too large")
+                out.write(chunk)
+        if size == 0:
+            raise ValueError("The file is empty")
+    except Exception:
+        _move_recordings(conv_dir, filename, None, None)
+        (conv_dir / filename).unlink(missing_ok=True)
+        raise
+    _touch_project(project_id)
+    return {
+        "project_id": project_id,
+        "conv_id": conv_id,
+        "filename": filename,
+        "recording": _recording_info(path),
+    }
+
+
 class RecordingOffsetError(Exception):
     def __init__(self, size: int):
         super().__init__(f"Recording is {size} bytes")
