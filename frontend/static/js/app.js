@@ -2625,24 +2625,30 @@ function pickAudioFile() {
     const file = input.files && input.files[0];
     input.remove();
     if (!file) return;
-    closeAudioFile();
-    audioFile = { name: file.name, url: URL.createObjectURL(file), position: 0, duration: 0, rate: 1 };
-    // Just for its length, before anything plays.
-    const probe = new Audio();
-    probe.preload = "metadata";
-    probe.addEventListener("loadedmetadata", () => {
-      if (audioFile && probe.src === audioFile.url && Number.isFinite(probe.duration)) audioFile.duration = probe.duration;
-      updateAudioFileBar();
-    }, { once: true });
-    probe.src = audioFile.url;
-    updateAudioFileBar();
+    loadAudioFile(file.name, URL.createObjectURL(file), true);
   });
   input.click();
 }
 
+// `owned`: a blob URL made for it, released with it. A recording's URL
+// (see the recordings list's "transcribe while playing") isn't.
+function loadAudioFile(name, url, owned) {
+  closeAudioFile();
+  audioFile = { name, url, owned, position: 0, duration: 0, rate: 1 };
+  // Just for its length, before anything plays.
+  const probe = new Audio();
+  probe.preload = "metadata";
+  probe.addEventListener("loadedmetadata", () => {
+    if (audioFile && audioFile.url === url && Number.isFinite(probe.duration)) audioFile.duration = probe.duration;
+    updateAudioFileBar();
+  }, { once: true });
+  probe.src = url;
+  updateAudioFileBar();
+}
+
 function closeAudioFile() {
   if (dictation && dictation.file) stopDictation();
-  if (audioFile) URL.revokeObjectURL(audioFile.url);
+  if (audioFile && audioFile.owned) URL.revokeObjectURL(audioFile.url);
   audioFile = null;
   updateAudioFileBar();
 }
@@ -5573,6 +5579,15 @@ function showRecordings(projectId, sessionId, filename) {
       await refreshSessionDocs(projectId, sessionId).catch(() => {});
       renderTree();
     },
+    // Into the audio-file bar, on the recording's own document: ▶ there
+    // plays it and writes it down, live check and all.
+    onTranscribe: realtimeSttAvailable
+      ? async (name, url) => {
+          await openInTab(docRef(projectId, sessionId, filename));
+          if (!active || active.projectId !== projectId || active.sessionId !== sessionId || active.filename !== filename) return;
+          loadAudioFile(name, url, false);
+        }
+      : null,
   });
 }
 

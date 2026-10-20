@@ -1903,6 +1903,9 @@ kbd.shortcut-key {
   gap: 8px;
   margin-top: 4px;
 }
+.recordings-skip .recordings-transcribe {
+  margin-left: auto;
+}
 .recordings-skip .secondary-btn {
   padding: 3px 10px;
   font-variant-numeric: tabular-nums;

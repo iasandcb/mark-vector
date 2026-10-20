@@ -16,7 +16,9 @@ function startedAt(id) {
 }
 
 // `onChange()` is called after a delete, so the tree's count can follow.
-export async function openRecordingsDialog({ projectId, sessionId, filename, onChange = () => {} }) {
+// `onTranscribe(name, url)`, when given, gets a recording to play and write
+// down (the editor's audio-file bar); the dialog closes for it.
+export async function openRecordingsDialog({ projectId, sessionId, filename, onChange = () => {}, onTranscribe = null }) {
   const overlay = document.createElement("div");
   overlay.className = "quick-open-overlay";
   overlay.innerHTML = `
@@ -82,12 +84,19 @@ export async function openRecordingsDialog({ projectId, sessionId, filename, onC
         <div class="recordings-skip">
           <button class="secondary-btn" type="button" data-skip="-10" title="${escapeHtml(t("audio.back10"))}">↺10</button>
           <button class="secondary-btn" type="button" data-skip="10" title="${escapeHtml(t("audio.forward10"))}">10↻</button>
+          ${onTranscribe ? `<button class="secondary-btn recordings-transcribe" type="button" data-transcribe title="${escapeHtml(t("recordings.transcribeTitle"))}">🎤 ${escapeHtml(t("recordings.transcribe"))}</button>` : ""}
         </div>`;
       // preload="none": nothing is fetched (or converted) until its own
       // play button is pressed.
       // No copy to be had (the server couldn't convert) - the original.
       const audio = item.querySelector("audio");
       audio.addEventListener("error", () => (audio.src = url), { once: true });
+      const transcribeBtn = item.querySelector("[data-transcribe]");
+      if (transcribeBtn)
+        transcribeBtn.addEventListener("click", () => {
+          close();
+          onTranscribe(when ? when.toLocaleString(getLanguage()) : rec.id, m4a);
+        });
       item.querySelectorAll("[data-skip]").forEach((btn) =>
         btn.addEventListener("click", () => {
           const end = Number.isFinite(audio.duration) ? audio.duration : Infinity;
