@@ -800,6 +800,33 @@ class TestMoveDocument:
         with pytest.raises(FileNotFoundError):
             storage.move_document(pid, source["id"], draft["filename"], "nope")
 
+    def test_moving_to_another_projects_folder_takes_the_turn_and_recording(self, isolated_data_dir, pid):
+        source = storage.create_conversation(pid, "Source")
+        other_pid = storage.create_project("다른 프로젝트")["id"]
+        target = storage.create_conversation(other_pid, "Target")
+        turn = _send_turn(pid, source["id"], "질문", "대답")
+        rec = storage.create_recording(pid, source["id"], turn["file"], "m4a", storage.datetime(2026, 10, 20, 9, 0, 0))
+
+        moved = storage.move_document(pid, source["id"], turn["file"], target["id"], other_pid)
+
+        assert moved["role"] == "exchange"
+        assert turn["file"] not in {d["filename"] for d in storage.list_documents(pid, source["id"])}
+        assert any(t["file"] == turn["file"] for t in storage.get_conversation(other_pid, target["id"])["turns"])
+        assert [r["id"] for r in storage.list_recordings(other_pid, target["id"], turn["file"])] == [rec["id"]]
+
+    def test_copying_to_another_projects_folder(self, isolated_data_dir, pid):
+        source = storage.create_conversation(pid, "Source")
+        other_pid = storage.create_project("다른 프로젝트")["id"]
+        target = storage.create_conversation(other_pid, "Target")
+        draft = storage.create_draft(pid, source["id"])
+        storage.save_document(pid, source["id"], draft["filename"], "내용")
+
+        copied = storage.copy_document(pid, source["id"], draft["filename"], target["id"], other_pid)
+
+        assert copied["content"] == "내용"
+        assert draft["filename"] in {d["filename"] for d in storage.list_documents(pid, source["id"])}
+        assert copied["filename"] in {d["filename"] for d in storage.list_documents(other_pid, target["id"])}
+
 
 class TestCopyDocument:
     """Drag-and-drop copying a document to a different folder - the

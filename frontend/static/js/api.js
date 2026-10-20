@@ -189,19 +189,20 @@ export function renameDocument(projectId, id, filename, newFilename) {
   }).then(asJson);
 }
 
-export function moveDocument(projectId, id, filename, targetConvId) {
+// `targetProjectId`: a folder in another project (this one's if omitted).
+export function moveDocument(projectId, id, filename, targetConvId, targetProjectId = projectId) {
   return fetch(`${BASE}/projects/${projectId}/conversations/${id}/documents/${encodeURIComponent(filename)}/move`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ target_conv_id: targetConvId }),
+    body: JSON.stringify({ target_conv_id: targetConvId, target_project_id: targetProjectId }),
   }).then(asJson);
 }
 
-export function copyDocument(projectId, id, filename, targetConvId) {
+export function copyDocument(projectId, id, filename, targetConvId, targetProjectId = projectId) {
   return fetch(`${BASE}/projects/${projectId}/conversations/${id}/documents/${encodeURIComponent(filename)}/copy`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ target_conv_id: targetConvId }),
+    body: JSON.stringify({ target_conv_id: targetConvId, target_project_id: targetProjectId }),
   }).then(asJson);
 }
 

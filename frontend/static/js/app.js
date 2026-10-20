@@ -4885,9 +4885,11 @@ function isFolderOrDescendant(project, candidateId, ancestorId) {
 // legally land on `targetSessionId` - shared by onRowDragMove (to decide
 // whether to show the drop-target highlight at all) and onRowDragEnd/
 // handleDropOnFolder (to decide whether to actually call the API).
+// A document can go to a folder of any project; a folder stays in its own.
 function canDropOnFolder(projectId, targetSessionId) {
-  if (!dragPayload || dragPayload.projectId !== projectId) return false;
-  if (dragPayload.type === "document") return dragPayload.sessionId !== targetSessionId;
+  if (!dragPayload) return false;
+  if (dragPayload.type === "document") return dragPayload.projectId !== projectId || dragPayload.sessionId !== targetSessionId;
+  if (dragPayload.projectId !== projectId) return false;
   if (dragPayload.type === "folder") {
     if (dragPayload.sessionId === targetSessionId) return false;
     const project = projects.get(projectId);
@@ -4908,10 +4910,12 @@ function isCopyDrag(payload) {
 async function handleDropOnFolder(payload, projectId, targetSessionId) {
   if (!payload || !canDropOnFolder(projectId, targetSessionId)) return;
   if (payload.type === "document") {
+    const from = { projectId: payload.projectId, sessionId: payload.sessionId };
+    const to = { projectId, sessionId: targetSessionId };
     if (isCopyDrag(payload)) {
-      await copyDocumentToFolder(projectId, payload.sessionId, payload.filename, targetSessionId);
+      await copyDocumentToFolder(from, payload.filename, to);
     } else {
-      await moveDocumentToFolder(projectId, payload.sessionId, payload.filename, targetSessionId);
+      await moveDocumentToFolder(from, payload.filename, to);
     }
   } else {
     await moveFolderTo(projectId, payload.sessionId, targetSessionId);
@@ -5082,25 +5086,27 @@ async function onRowDragEnd(e) {
   dragPayload = null;
 }
 
-async function moveDocumentToFolder(projectId, sourceSessionId, filename, targetSessionId) {
+// `from`/`to`: { projectId, sessionId } - the folders may be in different projects.
+async function moveDocumentToFolder(from, filename, to) {
   try {
-    await api.moveDocument(projectId, sourceSessionId, filename, targetSessionId);
-    analysisPanel.forget(projectId, sourceSessionId, filename);
+    await api.moveDocument(from.projectId, from.sessionId, filename, to.sessionId, to.projectId);
+    analysisPanel.forget(from.projectId, from.sessionId, filename);
   } catch (err) {
     alert(t("action.error", { message: err.message }));
     return;
   }
-  await Promise.all([refreshSessionDocs(projectId, sourceSessionId), refreshSessionDocs(projectId, targetSessionId)]);
+  await Promise.all([refreshSessionDocs(from.projectId, from.sessionId), refreshSessionDocs(to.projectId, to.sessionId)]);
   // The moved document is still open in the editor - just under a
   // different folder now, same as renameDocument keeps `active` in sync
   // with a filename change instead of leaving it stale.
   if (
     active &&
-    active.projectId === projectId &&
-    active.sessionId === sourceSessionId &&
+    active.projectId === from.projectId &&
+    active.sessionId === from.sessionId &&
     active.filename === filename
   ) {
-    active.sessionId = targetSessionId;
+    active.projectId = to.projectId;
+    active.sessionId = to.sessionId;
     saveActiveDocRef();
     updateFilenameLabel();
   }
@@ -5111,14 +5117,14 @@ async function moveDocumentToFolder(projectId, sourceSessionId, filename, target
 // document/folder is never touched (see isCopyDrag), so there's nothing to
 // refresh there and no `active` ref to repoint; only the target folder's
 // document list needs to pick up the new draft.
-async function copyDocumentToFolder(projectId, sourceSessionId, filename, targetSessionId) {
+async function copyDocumentToFolder(from, filename, to) {
   try {
-    await api.copyDocument(projectId, sourceSessionId, filename, targetSessionId);
+    await api.copyDocument(from.projectId, from.sessionId, filename, to.sessionId, to.projectId);
   } catch (err) {
     alert(t("action.error", { message: err.message }));
     return;
   }
-  await refreshSessionDocs(projectId, targetSessionId);
+  await refreshSessionDocs(to.projectId, to.sessionId);
   renderTree();
 }
 

@@ -163,7 +163,7 @@ def rename_document(project_id: str, conv_id: str, filename: str, req: RenameDoc
 @router.post("/{conv_id}/documents/{filename}/move")
 def move_document(project_id: str, conv_id: str, filename: str, req: MoveDocumentRequest):
     try:
-        return storage.move_document(project_id, conv_id, filename, req.target_conv_id)
+        return storage.move_document(project_id, conv_id, filename, req.target_conv_id, req.target_project_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except PermissionError as exc:
@@ -175,7 +175,7 @@ def move_document(project_id: str, conv_id: str, filename: str, req: MoveDocumen
 @router.post("/{conv_id}/documents/{filename}/copy")
 def copy_document(project_id: str, conv_id: str, filename: str, req: CopyDocumentRequest):
     try:
-        return storage.copy_document(project_id, conv_id, filename, req.target_conv_id)
+        return storage.copy_document(project_id, conv_id, filename, req.target_conv_id, req.target_project_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except PermissionError as exc:

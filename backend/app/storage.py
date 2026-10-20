@@ -1169,8 +1169,11 @@ def rename_document(project_id: str, conv_id: str, old_filename: str, new_filena
     }
 
 
-def move_document(project_id: str, conv_id: str, filename: str, target_conv_id: str) -> dict:
-    """Drag-and-drop move to a different folder in the same project - the
+def move_document(
+    project_id: str, conv_id: str, filename: str, target_conv_id: str, target_project_id: str | None = None
+) -> dict:
+    """Drag-and-drop move to a different folder - in this project, or in
+    `target_project_id`'s when given. The
     cross-folder analogue of rename_document, which only ever moves a file
     within its own conv_dir. system.md never moves (every folder has its
     own, see _ensure_system_file); moving a registered turn keeps its turn
@@ -1179,12 +1182,13 @@ def move_document(project_id: str, conv_id: str, filename: str, target_conv_id: 
     _validate_filename(filename)
     if filename == SYSTEM_FILENAME:
         raise PermissionError("Cannot move the system prompt document")
-    if conv_id == target_conv_id:
+    target_project_id = target_project_id or project_id
+    if (target_project_id, target_conv_id) == (project_id, conv_id):
         raise ValueError("Source and target folder are the same")
 
-    _read_meta(project_id, target_conv_id)
+    _read_meta(target_project_id, target_conv_id)
     src_dir = _conversations_dir(project_id) / conv_id
-    dst_dir = _conversations_dir(project_id) / target_conv_id
+    dst_dir = _conversations_dir(target_project_id) / target_conv_id
     src_path = src_dir / filename
     dst_path = dst_dir / filename
     if not src_path.exists():
@@ -1209,21 +1213,24 @@ def move_document(project_id: str, conv_id: str, filename: str, target_conv_id: 
         src_meta["updated_at"] = _now()
         _write_meta(project_id, conv_id, src_meta)
 
-        dst_meta = _read_meta(project_id, target_conv_id)
+        dst_meta = _read_meta(target_project_id, target_conv_id)
         if turn:
             dst_meta["turns"].append(turn)
         if choice and not turn:
             _put_draft_choice(dst_meta, filename, choice)
         dst_meta["updated_at"] = _now()
-        _write_meta(project_id, target_conv_id, dst_meta)
+        _write_meta(target_project_id, target_conv_id, dst_meta)
 
     registry = _read_published()
     token = _find_publish_token(registry, project_id, conv_id, filename)
     if token is not None:
+        registry[token]["project_id"] = target_project_id
         registry[token]["conv_id"] = target_conv_id
         _write_published(registry)
 
     _touch_project(project_id)
+    if target_project_id != project_id:
+        _touch_project(target_project_id)
 
     stat = dst_path.stat()
     return {
@@ -1232,12 +1239,14 @@ def move_document(project_id: str, conv_id: str, filename: str, target_conv_id: 
         "turn_id": turn["id"] if turn else None,
         "content": dst_path.read_text(encoding="utf-8"),
         "updated_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
-        "publish_token": _published_tokens_by_filename(project_id, target_conv_id).get(filename),
-        "publish_slides": filename in _published_slides_filenames(project_id, target_conv_id),
+        "publish_token": _published_tokens_by_filename(target_project_id, target_conv_id).get(filename),
+        "publish_slides": filename in _published_slides_filenames(target_project_id, target_conv_id),
     }
 
 
-def copy_document(project_id: str, conv_id: str, filename: str, target_conv_id: str) -> dict:
+def copy_document(
+    project_id: str, conv_id: str, filename: str, target_conv_id: str, target_project_id: str | None = None
+) -> dict:
     """Drag-and-drop copy to a different folder in the same project - the
     non-destructive alternative to move_document, for a document (an
     official conversation turn, most importantly) whose *original* is worth
@@ -1251,19 +1260,20 @@ def copy_document(project_id: str, conv_id: str, filename: str, target_conv_id: 
     _validate_filename(filename)
     if filename == SYSTEM_FILENAME:
         raise PermissionError("Cannot copy the system prompt document")
-    if conv_id == target_conv_id:
+    target_project_id = target_project_id or project_id
+    if (target_project_id, target_conv_id) == (project_id, conv_id):
         raise ValueError("Source and target folder are the same")
 
-    target_meta = _read_meta(project_id, target_conv_id)
+    target_meta = _read_meta(target_project_id, target_conv_id)
     src_path = _conversations_dir(project_id) / conv_id / filename
     if not src_path.exists():
         raise FileNotFoundError(filename)
 
-    target_dir = _conversations_dir(project_id) / target_conv_id
+    target_dir = _conversations_dir(target_project_id) / target_conv_id
     content = src_path.read_text(encoding="utf-8")
     new_filename = f"{_next_document_index(target_meta, target_dir):04d}.md"
     (target_dir / new_filename).write_text(content, encoding="utf-8")
-    _touch_project(project_id)
+    _touch_project(target_project_id)
 
     stat = (target_dir / new_filename).stat()
     return {

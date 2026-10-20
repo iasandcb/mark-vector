@@ -186,10 +186,13 @@ class MoveConversationRequest(BaseModel):
 
 class MoveDocumentRequest(BaseModel):
     target_conv_id: str
+    # Another project's folder; this one's when left out.
+    target_project_id: str | None = None
 
 
 class CopyDocumentRequest(BaseModel):
     target_conv_id: str
+    target_project_id: str | None = None
 
 
 class PublishOptionsRequest(BaseModel):
