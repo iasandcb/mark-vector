@@ -2994,7 +2994,59 @@ function startWebSpeechDictation() {
 // are shown as interim text in arrival order; a completed one becomes final
 // text. Items started before a rebase (see rebaseDictation) are abandoned:
 // their text stays where it was typed and their final version is dropped.
+// iOS (WebKit's Audio Session API): a file is plain playback - no
+// microphone - and "playback" is the session that goes on behind the lock
+// screen and with the browser in the background, as a music player's does.
+// "auto" again afterwards, or the microphone couldn't be opened.
+function setAudioSessionType(type) {
+  try {
+    if (navigator.audioSession) navigator.audioSession.type = type;
+  } catch (err) {
+    // not settable here - the browser's own choice stands
+  }
+}
+
+// The lock screen's and Control Center's player: the file's name, and
+// play/pause/seek that reach the player while the page is hidden.
+function setAudioFileMediaSession(audio, file) {
+  if (!("mediaSession" in navigator)) return;
+  const ms = navigator.mediaSession;
+  try {
+    ms.metadata = new MediaMetadata({ title: file.name, artist: "mark-vector" });
+  } catch (err) {
+    // MediaMetadata missing - the controls work without it
+  }
+  const handlers = {
+    play: () => audio.play().catch(() => {}),
+    pause: () => audio.pause(),
+    seekbackward: (d) => (audio.currentTime = Math.max(0, audio.currentTime - ((d && d.seekOffset) || 10))),
+    seekforward: (d) => (audio.currentTime = Math.min(audio.duration || Infinity, audio.currentTime + ((d && d.seekOffset) || 10))),
+    seekto: (d) => d && Number.isFinite(d.seekTime) && (audio.currentTime = d.seekTime),
+  };
+  for (const [action, handler] of Object.entries(handlers)) {
+    try {
+      ms.setActionHandler(action, handler);
+    } catch (err) {
+      // action not supported
+    }
+  }
+}
+
+function clearAudioFileMediaSession() {
+  if (!("mediaSession" in navigator)) return;
+  const ms = navigator.mediaSession;
+  ms.metadata = null;
+  for (const action of ["play", "pause", "seekbackward", "seekforward", "seekto"]) {
+    try {
+      ms.setActionHandler(action, null);
+    } catch (err) {
+      // action not supported
+    }
+  }
+}
+
 function startRealtimeDictation(file = null) {
+  if (file) setAudioSessionType("playback");
   // Created here, inside the click, for iOS - see realtime-stt.js.
   const audioContext = new (window.AudioContext || window.webkitAudioContext)();
   const session = {
@@ -3043,6 +3095,7 @@ function startRealtimeDictation(file = null) {
       showRemoteStatus(t("editor.audioFileEnded"));
     });
     session.file = { audio };
+    setAudioFileMediaSession(audio, file);
   }
   if (el.editor.selectionEnd > el.editor.selectionStart) {
     replaceEditorRange(el.editor.selectionStart, el.editor.selectionEnd, "");
@@ -3126,6 +3179,10 @@ function startRealtimeDictation(file = null) {
     .catch((err) => {
       if (dictation === session) {
         dictation = null;
+        if (file) {
+          clearAudioFileMediaSession();
+          setAudioSessionType("auto");
+        }
         updateDictationButton();
       }
       setToolStatus("");
@@ -3142,6 +3199,10 @@ function stopDictation() {
   stopDictationRecording(session);
   if (session.file) session.file.audio.pause();
   keepScreenOn(false);
+  if (session.file) {
+    clearAudioFileMediaSession();
+    setAudioSessionType("auto");
+  }
   // Whatever interim text is on screen simply stays as typed.
   try {
     session.stop();
