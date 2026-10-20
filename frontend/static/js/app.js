@@ -67,6 +67,7 @@ const el = {
   newProjectBtn: document.getElementById("new-project-btn"),
   providerSelect: document.getElementById("provider-select"),
   modelSelect: document.getElementById("model-select"),
+  setDefaultModelBtn: document.getElementById("set-default-model-btn"),
   reasoningSelect: document.getElementById("reasoning-select"),
   contextScopeSelect: document.getElementById("context-scope-select"),
   formatSelect: document.getElementById("format-select"),
@@ -315,7 +316,9 @@ const ROLE_TITLE_KEYS = {
 function roleTitle(role) {
   return ROLE_TITLE_KEYS[role] ? t(ROLE_TITLE_KEYS[role]) : role;
 }
-// A document with no saved provider/model of its own starts on OpenAI.
+// A document with no saved provider/model of its own starts on the one set
+// with ☆ in the toolbar (llmDefaults, kept on the server so every device
+// agrees) - or, until one is set or if it's no longer on offer, on OpenAI.
 // The model is that provider's default_model, which the registry sets to
 // gpt-6.1-sol when the live list includes it. If OpenAI isn't configured,
 // the first configured provider is used. A turn, or a draft the user has
@@ -338,6 +341,8 @@ const NON_SENDABLE_ROLES = new Set([
 ]);
 
 let providers = [];
+// The user's default provider/model/reasoning (see /api/providers/defaults).
+let llmDefaults = {};
 // id -> { meta, sessions: Map|null, expanded, systemPromptContent }
 // `sessions` mirrors the old top-level `sessions` Map, just nested one
 // level under its project now. `systemPromptContent` is fetched alongside
@@ -2143,6 +2148,15 @@ function cachedDocument(projectId, sessionId, filename) {
 }
 
 function appDefaultSettings() {
+  const chosen = providers.find((p) => p.id === llmDefaults.provider);
+  if (chosen) {
+    return {
+      provider: chosen.id,
+      model: chosen.models.includes(llmDefaults.model) ? llmDefaults.model : chosen.default_model,
+      reasoningEffort: llmDefaults.reasoning_effort || "off",
+      contextScope: "default",
+    };
+  }
   const fallback = providers.find((p) => p.id === DEFAULT_PROVIDER_ID) || providers[0];
   return {
     provider: fallback ? fallback.id : "",
@@ -2150,6 +2164,39 @@ function appDefaultSettings() {
     reasoningEffort: "off",
     contextScope: "default",
   };
+}
+
+// ★ when the toolbar shows the default; ☆ makes what it shows the default.
+function updateDefaultModelButton() {
+  const btn = el.setDefaultModelBtn;
+  const provider = el.providerSelect.value;
+  const model = el.modelSelect.value;
+  const reasoning = el.reasoningSelect.value || "off";
+  const isDefault =
+    !!provider &&
+    provider === llmDefaults.provider &&
+    model === llmDefaults.model &&
+    reasoning === (llmDefaults.reasoning_effort || "off");
+  btn.textContent = isDefault ? "★" : "☆";
+  btn.classList.toggle("dirty", isDefault);
+  btn.disabled = !provider || !model;
+  btn.title = isDefault ? t("editor.defaultModelIs") : t("editor.defaultModelSet");
+}
+
+async function setDefaultModel() {
+  const provider = el.providerSelect.value;
+  const model = el.modelSelect.value;
+  if (!provider || !model) return;
+  const reasoning = el.reasoningSelect.value || "off";
+  try {
+    llmDefaults = await api.saveLlmDefaults({ provider, model, reasoning_effort: reasoning === "off" ? null : reasoning });
+  } catch (err) {
+    alert(t("editor.defaultModelFailed", { message: err.message }));
+    return;
+  }
+  updateDefaultModelButton();
+  const label = el.providerSelect.selectedOptions[0] ? el.providerSelect.selectedOptions[0].textContent : provider;
+  showRemoteStatus(t("editor.defaultModelSaved", { provider: label, model }));
 }
 
 function settingsForDocument(doc) {
@@ -2193,6 +2240,7 @@ function applyDocumentSettings(doc) {
   } finally {
     applyingDocumentSettings = false;
   }
+  updateDefaultModelButton();
 }
 
 // A draft the user has actually picked a provider/model for. Not called
@@ -2243,6 +2291,7 @@ function updateSendAvailability() {
   updateInlineCompleteButton();
   updateInlineThreadButton();
   updateExportPdfButton();
+  updateDefaultModelButton();
   // The "no provider configured" warning lives in the toolbar row too, and
   // it's this function that shows/hides it - so the row's own visibility has
   // to be re-evaluated here as well, not just when the document changes.
@@ -6831,7 +6880,11 @@ function populateModelOptions() {
 }
 
 async function loadProviders() {
-  providers = await api.getProviders();
+  // Without the defaults the app's own fallback just applies.
+  const [list, defaults] = await Promise.all([api.getProviders(), api.getLlmDefaults().catch(() => ({}))]);
+  providers = list;
+  llmDefaults = defaults || {};
+  const initial = appDefaultSettings().provider;
   el.providerSelect.innerHTML = "";
   for (const provider of providers) {
     const opt = document.createElement("option");
@@ -6842,7 +6895,7 @@ async function loadProviders() {
     const labelKey = `provider.label.${provider.id}`;
     const translated = t(labelKey);
     opt.textContent = translated === labelKey ? provider.label : translated;
-    if (provider.id === DEFAULT_PROVIDER_ID) opt.selected = true;
+    if (provider.id === initial) opt.selected = true;
     el.providerSelect.appendChild(opt);
   }
   populateModelOptions();
@@ -6923,7 +6976,11 @@ el.modelSelect.addEventListener("change", () => {
   updateSendAvailability();
   persistDraftChoice();
 });
-el.reasoningSelect.addEventListener("change", persistDraftChoice);
+el.reasoningSelect.addEventListener("change", () => {
+  updateDefaultModelButton();
+  persistDraftChoice();
+});
+el.setDefaultModelBtn.addEventListener("click", setDefaultModel);
 el.contextScopeSelect.addEventListener("change", persistDraftChoice);
 el.saveBtn.addEventListener("click", saveActive);
 el.publishBtn.addEventListener("click", togglePublish);

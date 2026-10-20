@@ -91,6 +91,38 @@ def save_global_system_prompt(content: str) -> dict:
     return {"content": content, "updated_at": _now()}
 
 
+# ---------- default provider/model ----------
+#
+# What a document with no choice of its own starts on (see
+# appDefaultSettings in app.js) - one for the app, so the phone and the
+# computer agree. Empty until the user sets one: the app's own default
+# (OpenAI) applies then.
+
+LLM_DEFAULTS_FILENAME = "llm-defaults.json"
+_LLM_DEFAULT_KEYS = ("provider", "model", "reasoning_effort")
+
+
+def get_llm_defaults() -> dict:
+    path = Path(settings.data_dir) / LLM_DEFAULTS_FILENAME
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {k: data[k] for k in _LLM_DEFAULT_KEYS if isinstance(data.get(k), str) and data[k]}
+
+
+def save_llm_defaults(defaults: dict) -> dict:
+    data = {k: defaults[k] for k in _LLM_DEFAULT_KEYS if isinstance(defaults.get(k), str) and defaults[k]}
+    path = Path(settings.data_dir)
+    path.mkdir(parents=True, exist_ok=True)
+    tmp = path / (LLM_DEFAULTS_FILENAME + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path / LLM_DEFAULTS_FILENAME)
+    return data
+
+
 # ---------- global (app-wide) custom AsciiMath symbols ----------
 #
 # One shared CSV, always applied - unlike the system prompt tiers, there's

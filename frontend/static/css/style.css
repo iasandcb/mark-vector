@@ -895,6 +895,13 @@ body.row-dragging {
   cursor: pointer;
 }
 
+/* ☆/★ beside the reasoning selector - see updateDefaultModelButton. */
+.set-default-model {
+  font-size: 14px;
+  padding: 3px 8px;
+  line-height: 1;
+}
+
 .dictation-mic {
   font-size: 12px;
   padding: 4px 8px;

@@ -27,6 +27,19 @@ export function getProviders() {
   return fetch(`${BASE}/providers`).then(asJson);
 }
 
+// The provider/model/reasoning a document with no choice of its own starts on.
+export function getLlmDefaults() {
+  return fetch(`${BASE}/providers/defaults`).then(asJson);
+}
+
+export function saveLlmDefaults(defaults) {
+  return fetch(`${BASE}/providers/defaults`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(defaults),
+  }).then(asJson);
+}
+
 // ---------- Hermes agent sessions (read-only) ----------
 // Proxied through the backend (see routers/hermes.py) so the gateway's own
 // API key never reaches the browser.
