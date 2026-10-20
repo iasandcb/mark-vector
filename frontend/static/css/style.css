@@ -1898,6 +1898,16 @@ kbd.shortcut-key {
   width: 100%;
 }
 
+.recordings-skip {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+.recordings-skip .secondary-btn {
+  padding: 3px 10px;
+  font-variant-numeric: tabular-nums;
+}
+
 .transcribe-panel {
   max-height: none;
 }
@@ -2422,6 +2432,10 @@ kbd.shortcut-key {
 }
 .audio-file-bar[hidden] {
   display: none;
+}
+.audio-file-skip {
+  padding: 4px 6px;
+  font-variant-numeric: tabular-nums;
 }
 .audio-file-play {
   min-width: 34px;

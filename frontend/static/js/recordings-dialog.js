@@ -78,12 +78,22 @@ export async function openRecordingsDialog({ projectId, sessionId, filename, onC
           <a class="icon-btn" href="${m4a}" download title="${escapeHtml(t("recordings.download"))}">⤓</a>
           <button class="icon-btn" type="button" data-delete title="${escapeHtml(t("recordings.delete"))}">×</button>
         </div>
-        <audio controls preload="none" src="${src}"></audio>`;
+        <audio controls preload="none" src="${src}"></audio>
+        <div class="recordings-skip">
+          <button class="secondary-btn" type="button" data-skip="-10" title="${escapeHtml(t("audio.back10"))}">↺10</button>
+          <button class="secondary-btn" type="button" data-skip="10" title="${escapeHtml(t("audio.forward10"))}">10↻</button>
+        </div>`;
       // preload="none": nothing is fetched (or converted) until its own
       // play button is pressed.
       // No copy to be had (the server couldn't convert) - the original.
       const audio = item.querySelector("audio");
       audio.addEventListener("error", () => (audio.src = url), { once: true });
+      item.querySelectorAll("[data-skip]").forEach((btn) =>
+        btn.addEventListener("click", () => {
+          const end = Number.isFinite(audio.duration) ? audio.duration : Infinity;
+          audio.currentTime = Math.min(Math.max(0, audio.currentTime + Number(btn.dataset.skip)), end);
+        })
+      );
       item.querySelector("[data-delete]").addEventListener("click", async () => {
         if (!confirm(t("recordings.deleteConfirm"))) return;
         try {

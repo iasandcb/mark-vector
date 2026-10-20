@@ -143,6 +143,8 @@ const el = {
   dictationRecordBtn: document.getElementById("dictation-record-btn"),
   audioFileBar: document.getElementById("audio-file-bar"),
   audioFilePlayBtn: document.getElementById("audio-file-play-btn"),
+  audioFileBackBtn: document.getElementById("audio-file-back-btn"),
+  audioFileForwardBtn: document.getElementById("audio-file-forward-btn"),
   audioFileName: document.getElementById("audio-file-name"),
   audioFileSeek: document.getElementById("audio-file-seek"),
   audioFileTime: document.getElementById("audio-file-time"),
@@ -2686,6 +2688,18 @@ el.audioFileSeek.addEventListener("input", () => {
   if (player) player.currentTime = audioFile.position;
   updateAudioFileBar();
 });
+// ↺10 / 10↻: ten seconds back or ahead - playing or not.
+const AUDIO_FILE_SKIP_S = 10;
+function skipAudioFile(seconds) {
+  if (!audioFile) return;
+  const end = audioFile.duration || Infinity;
+  audioFile.position = Math.min(Math.max(0, audioFile.position + seconds), end);
+  const player = audioFilePlayer();
+  if (player) player.currentTime = audioFile.position;
+  updateAudioFileBar();
+}
+el.audioFileBackBtn.addEventListener("click", () => skipAudioFile(-AUDIO_FILE_SKIP_S));
+el.audioFileForwardBtn.addEventListener("click", () => skipAudioFile(AUDIO_FILE_SKIP_S));
 el.audioFileRateBtn.addEventListener("click", () => {
   if (!audioFile) return;
   audioFile.rate = AUDIO_FILE_RATES[(AUDIO_FILE_RATES.indexOf(audioFile.rate) + 1) % AUDIO_FILE_RATES.length];
