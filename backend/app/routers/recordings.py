@@ -123,6 +123,16 @@ async def _playable(src, dst) -> None:
         tmp.replace(dst)
 
 
+async def prepare_playable(project_id: str, conv_id: str, filename: str, recording_id: str) -> None:
+    """Makes the playable copy ahead of the first request for it; a failure
+    just leaves that request to try again."""
+    try:
+        src, dst = storage.playable_recording_paths(project_id, conv_id, filename, recording_id)
+        await _playable(src, dst)
+    except Exception:
+        pass
+
+
 @router.get("/{recording_id}")
 async def get_recording(project_id: str, conv_id: str, filename: str, recording_id: str, format: str | None = None):
     """The recording as recorded - or, with `format=m4a`, as the mono AAC

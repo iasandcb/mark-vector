@@ -19,10 +19,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import PurePath
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Request, UploadFile
 
 from .. import storage
 from ..config import settings
+from .recordings import prepare_playable
 
 router = APIRouter(prefix="/api/ingest", tags=["ingest"])
 
@@ -49,6 +50,7 @@ def _now_local() -> datetime:
 @router.post("/audio")
 async def ingest_audio(
     request: Request,
+    background: BackgroundTasks,
     file: UploadFile = File(...),
     project: str = Form(DEFAULT_PROJECT),
     date: str = Form(""),
@@ -76,6 +78,9 @@ async def ingest_audio(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    # The playable copy is made now, not on the first ▶ - for an hour's
+    # audio that takes a minute or more.
+    background.add_task(prepare_playable, result["project_id"], result["conv_id"], result["filename"], result["recording"]["id"])
     base = str(request.base_url).rstrip("/")
     result["url"] = f"{base}/?project={result['project_id']}&session={result['conv_id']}&file={result['filename']}"
     return result

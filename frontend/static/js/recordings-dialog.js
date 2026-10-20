@@ -128,6 +128,16 @@ export async function openRecordingsDialog({ projectId, sessionId, filename, onC
       const downloadLink = item.querySelector("[data-download]");
       const progress = item.querySelector("[data-progress]");
       let downloading = false;
+      // The first play waits on the server's copy (see downloadWithProgress) -
+      // said beside ⤓ like a download's progress, until it plays.
+      const preparing = (text) => {
+        if (downloading) return;
+        progress.hidden = !text;
+        progress.textContent = text || "";
+      };
+      audio.addEventListener("play", () => audio.readyState < 3 && preparing(t(audio.readyState ? "recordings.buffering" : "recordings.preparing")));
+      audio.addEventListener("waiting", () => preparing(t(audio.readyState ? "recordings.buffering" : "recordings.preparing")));
+      for (const type of ["playing", "pause", "error"]) audio.addEventListener(type, () => preparing(null));
       downloadLink.addEventListener("click", async (e) => {
         e.preventDefault();
         if (downloading) return;

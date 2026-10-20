@@ -2634,13 +2634,23 @@ function pickAudioFile() {
 // (see the recordings list's "transcribe while playing") isn't.
 function loadAudioFile(name, url, owned) {
   closeAudioFile();
-  audioFile = { name, url, owned, position: 0, duration: 0, rate: 1 };
+  // `loading`: the length isn't known yet - for a recording, the server is
+  // still making its playable copy (a long one takes a while), so the bar
+  // says so. `buffering`: playing, but waiting on data.
+  audioFile = { name, url, owned, position: 0, duration: 0, rate: 1, loading: true, buffering: false, error: null };
+  const current = audioFile;
   // Just for its length, before anything plays.
   const probe = new Audio();
   probe.preload = "metadata";
   probe.addEventListener("loadedmetadata", () => {
-    if (audioFile && audioFile.url === url && Number.isFinite(probe.duration)) audioFile.duration = probe.duration;
-    updateAudioFileBar();
+    current.loading = false;
+    if (Number.isFinite(probe.duration)) current.duration = probe.duration;
+    if (audioFile === current) updateAudioFileBar();
+  }, { once: true });
+  probe.addEventListener("error", () => {
+    current.loading = false;
+    current.error = t("editor.audioFileLoadFailed");
+    if (audioFile === current) updateAudioFileBar();
   }, { once: true });
   probe.src = url;
   updateAudioFileBar();
@@ -2669,7 +2679,14 @@ function updateAudioFileBar() {
   el.audioFileSeek.max = String(audioFile.duration || 0);
   el.audioFileSeek.value = String(audioFile.position);
   el.audioFileSeek.disabled = !audioFile.duration;
-  el.audioFileTime.textContent = `${formatClock(audioFile.position * 1000)} / ${audioFile.duration ? formatClock(audioFile.duration * 1000) : "--:--"}`;
+  const clock = `${formatClock(audioFile.position * 1000)} / ${audioFile.duration ? formatClock(audioFile.duration * 1000) : "--:--"}`;
+  el.audioFileTime.textContent = audioFile.error
+    ? audioFile.error
+    : audioFile.loading
+      ? t("recordings.preparing")
+      : audioFile.buffering
+        ? `${clock} · ${t("editor.audioFileBuffering")}`
+        : clock;
   el.audioFileRateBtn.textContent = `${audioFile.rate}×`;
 }
 
@@ -3150,7 +3167,18 @@ function startRealtimeDictation(file = null) {
       updateAudioFileBar();
     });
     audio.addEventListener("play", updateAudioFileBar);
-    audio.addEventListener("pause", updateAudioFileBar);
+    audio.addEventListener("pause", () => {
+      file.buffering = false;
+      updateAudioFileBar();
+    });
+    audio.addEventListener("waiting", () => {
+      file.buffering = true;
+      updateAudioFileBar();
+    });
+    audio.addEventListener("playing", () => {
+      file.buffering = false;
+      updateAudioFileBar();
+    });
     audio.addEventListener("ended", () => {
       if (dictation !== session) return;
       session.commit();
