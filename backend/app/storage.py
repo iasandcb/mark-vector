@@ -1402,9 +1402,24 @@ def delete_analysis(project_id: str, conv_id: str, filename: str, kind: str) -> 
 # records MP4). Follows its document like the analyses do.
 
 RECORDINGS_DIRNAME = ".recordings"
-RECORDING_EXTS = {"webm": "audio/webm", "m4a": "audio/mp4", "ogg": "audio/ogg"}
+# What a recording file may be. Dictation only writes webm/m4a/ogg; an
+# upload from the recordings list (and ingest, which shares this table)
+# also accepts the common audio files a person already has.
+RECORDING_EXTS = {
+    "webm": "audio/webm",
+    "m4a": "audio/mp4",
+    "mp4": "audio/mp4",
+    "mp3": "audio/mpeg",
+    "wav": "audio/wav",
+    "ogg": "audio/ogg",
+    "opus": "audio/ogg",
+    "aac": "audio/aac",
+    "flac": "audio/flac",
+}
 RECORDING_MAX_BYTES = 1024 * 1024 * 1024
-_RECORDING_ID_RE = re.compile(r"^\d{8}-\d{6}-[0-9a-f]{4}\.(webm|m4a|ogg)$")
+_RECORDING_ID_RE = re.compile(
+    r"^\d{8}-\d{6}-[0-9a-f]{4}\.(" + "|".join(sorted(RECORDING_EXTS, key=len, reverse=True)) + r")$"
+)
 
 
 def _recordings_dir(conv_dir: Path, filename: str) -> Path:
@@ -1510,6 +1525,33 @@ def _find_or_create_folder(project_id: str, title: str) -> str:
     return create_conversation(project_id, title)["id"]
 
 
+def _copy_into_recording(path: Path, src) -> None:
+    """Replace `path` with the bytes of `src`. Empty or oversized leaves
+    nothing behind."""
+    size = 0
+    try:
+        with path.open("wb") as out:
+            while chunk := src.read(1024 * 1024):
+                size += len(chunk)
+                if size > RECORDING_MAX_BYTES:
+                    raise ValueError("Recording is too large")
+                out.write(chunk)
+        if size == 0:
+            raise ValueError("The file is empty")
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
+
+
+def add_recording_bytes(project_id: str, conv_id: str, filename: str, ext: str, src, started: datetime) -> dict:
+    """A finished audio file becomes one recording of a document that
+    already exists. The same write ingest uses, without making a document."""
+    recording = create_recording(project_id, conv_id, filename, ext, started)
+    path = _recording_path(project_id, conv_id, filename, recording["id"])
+    _copy_into_recording(path, src)
+    return _recording_info(path)
+
+
 def ingest_audio(project_title: str, folder_title: str, name: str, ext: str, src, started: datetime) -> dict:
     """`src` (a binary file object) becomes the one recording of a new, empty
     document named after `name`, in the top-level folder `folder_title` of
@@ -1529,21 +1571,12 @@ def ingest_audio(project_title: str, folder_title: str, name: str, ext: str, src
     _validate_filename(filename)
     (conv_dir / filename).write_text("", encoding="utf-8")
     try:
-        recording = create_recording(project_id, conv_id, filename, ext, started)
-        path = _recording_path(project_id, conv_id, filename, recording["id"])
-        size = 0
-        with path.open("wb") as out:
-            while chunk := src.read(1024 * 1024):
-                size += len(chunk)
-                if size > RECORDING_MAX_BYTES:
-                    raise ValueError("Recording is too large")
-                out.write(chunk)
-        if size == 0:
-            raise ValueError("The file is empty")
+        recording = add_recording_bytes(project_id, conv_id, filename, ext, src, started)
     except Exception:
         _move_recordings(conv_dir, filename, None, None)
         (conv_dir / filename).unlink(missing_ok=True)
         raise
+    path = _recording_path(project_id, conv_id, filename, recording["id"])
     _touch_project(project_id)
     return {
         "project_id": project_id,

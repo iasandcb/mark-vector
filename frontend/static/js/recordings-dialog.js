@@ -9,6 +9,45 @@ function escapeHtml(text) {
   return String(text).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
 
+// What the recordings-list upload accepts. Kept in step with
+// storage.RECORDING_EXTS (plus "wave", stored as wav).
+const UPLOAD_EXTS = new Set(["m4a", "mp3", "wav", "wave", "webm", "ogg", "opus", "aac", "flac", "mp4"]);
+const UPLOAD_ACCEPT = "audio/*,.m4a,.mp3,.wav,.aac,.ogg,.opus,.flac,.webm,.mp4";
+
+function fileExt(name) {
+  const dot = String(name || "").lastIndexOf(".");
+  return dot >= 0 ? name.slice(dot + 1).toLowerCase() : "";
+}
+
+function localStamp(date) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+// Length when the browser can see it, otherwise null. A file the player
+// can't sniff still uploads; the queue just won't know the duration.
+function fileDuration(file) {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const audio = document.createElement("audio");
+    const finish = (value) => {
+      URL.revokeObjectURL(url);
+      resolve(value);
+    };
+    const timer = setTimeout(() => finish(null), 2000);
+    audio.preload = "metadata";
+    audio.onloadedmetadata = () => {
+      clearTimeout(timer);
+      finish(Number.isFinite(audio.duration) ? audio.duration : null);
+    };
+    audio.onerror = () => {
+      clearTimeout(timer);
+      finish(null);
+    };
+    audio.src = url;
+  });
+}
+
 // "20261018-193012-ab12.m4a" -> a Date for 2026-10-18 19:30:12 local.
 function startedAt(id) {
   const m = id.match(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})/);
@@ -83,6 +122,62 @@ export async function openRecordingsDialog({ projectId, sessionId, filename, onC
   });
   $("[data-close]").addEventListener("click", close);
 
+  // Always there, including when the list is empty: the empty state is
+  // how a file gets onto a document that has no recording yet.
+  function mountUpload(parent) {
+    const bar = document.createElement("div");
+    bar.className = "recordings-upload";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "secondary-btn";
+    button.textContent = t("recordings.upload");
+    button.title = t("recordings.uploadType");
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = UPLOAD_ACCEPT;
+    input.hidden = true;
+    const progress = document.createElement("span");
+    progress.className = "recordings-progress";
+    progress.hidden = true;
+    button.addEventListener("click", () => input.click());
+    input.addEventListener("change", () => {
+      const file = input.files && input.files[0];
+      input.value = "";
+      if (file) send(file);
+    });
+
+    async function send(file) {
+      progress.hidden = false;
+      progress.classList.remove("error");
+      if (!UPLOAD_EXTS.has(fileExt(file.name))) {
+        progress.textContent = t("recordings.uploadFailed", { message: t("recordings.uploadType") });
+        return;
+      }
+      button.disabled = true;
+      progress.textContent = t("recordings.uploading");
+      try {
+        const duration = await fileDuration(file);
+        await api.uploadRecording(projectId, sessionId, filename, file, {
+          started: localStamp(new Date()),
+          durationSec: duration,
+          onProgress: (ratio) => {
+            progress.textContent = t("recordings.uploadingPercent", { percent: Math.floor(ratio * 100) });
+          },
+        });
+      } catch (err) {
+        progress.classList.add("error");
+        progress.textContent = t("recordings.uploadFailed", { message: err.message });
+        button.disabled = false;
+        return;
+      }
+      await onChange();
+      render();
+    }
+
+    bar.append(button, input, progress);
+    parent.appendChild(bar);
+  }
+
   async function render() {
     let recordings;
     try {
@@ -91,11 +186,15 @@ export async function openRecordingsDialog({ projectId, sessionId, filename, onC
       body.innerHTML = `<p class="recordings-empty error">${escapeHtml(err.message)}</p>`;
       return;
     }
+    body.innerHTML = "";
+    mountUpload(body);
     if (!recordings.length) {
-      body.innerHTML = `<p class="recordings-empty">${escapeHtml(t("recordings.none"))}</p>`;
+      const empty = document.createElement("p");
+      empty.className = "recordings-empty";
+      empty.textContent = t("recordings.none");
+      body.appendChild(empty);
       return;
     }
-    body.innerHTML = "";
     for (const rec of [...recordings].reverse()) {
       const url = api.recordingsUrl(projectId, sessionId, filename, rec.id);
       // Played and downloaded as the server's mono AAC copy: it plays

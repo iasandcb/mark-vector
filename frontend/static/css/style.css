@@ -1872,6 +1872,15 @@ kbd.shortcut-key {
   gap: 14px;
 }
 
+.recordings-upload {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.recordings-upload .secondary-btn { padding: 3px 10px; }
+.recordings-upload .recordings-progress.error { color: #b91c1c; }
+
 .recordings-empty {
   color: var(--muted);
   margin: 8px 0;

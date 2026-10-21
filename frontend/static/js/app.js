@@ -4045,9 +4045,11 @@ function buildDocumentRow(projectId, sessionId, doc) {
         ? [{ icon: "↩", label: t("doc.revertToDraft"), onSelect: () => revertDocumentToDraft(projectId, sessionId, doc.filename) }]
         : []),
       { icon: "⧉", label: t("doc.copyLink"), onSelect: () => copyDocumentLink(feedbackEl, sessionId, doc.filename, firstH1Heading(doc.content)) },
-      ...(doc.recordings
-        ? [{ icon: "⏺", label: t("doc.recordings", { count: doc.recordings }), onSelect: () => showRecordings(projectId, sessionId, doc.filename) }]
-        : []),
+      {
+        icon: "⏺",
+        label: doc.recordings ? t("doc.recordings", { count: doc.recordings }) : t("doc.recordingsNone"),
+        onSelect: () => showRecordings(projectId, sessionId, doc.filename),
+      },
       "-",
       { icon: "↗", label: t("doc.openInNewTab"), onSelect: () => window.open(documentUrl(projectId, sessionId, doc.filename), "_blank", "noopener") },
       // Same as ⌘/Ctrl-clicking the row (see the click handler below),
