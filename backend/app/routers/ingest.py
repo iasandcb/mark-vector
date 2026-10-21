@@ -6,8 +6,10 @@ else's tool extracted - attached to a new document, ready to transcribe.
 
 makes "talk.md" in the folder named for today (INGEST_TIMEZONE's day, e.g.
 "2026-10-20") of the "youtube" project, both made if missing, with the file
-as its recording. Optional form fields: `project`, `date` (YYYY-MM-DD) and
-`title` (instead of the file's own name).
+as its recording. Optional form fields: `project`, `date` (YYYY-MM-DD),
+`title` (instead of the file's own name) and `enqueue` (`false`/`0`/`no`/
+`off` keeps it out of the YouTube queue; anything else, including omitting
+it, queues the new recording for the worker).
 
 Not behind the sign-in (auth.AuthMiddleware lets /api/ingest/ through): a
 bot has no session. INGEST_TOKEN is the key instead, and without it set the
@@ -21,7 +23,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Request, UploadFile
 
-from .. import storage
+from .. import storage, video_jobs
 from ..config import settings
 from .recordings import prepare_playable
 
@@ -37,6 +39,12 @@ def _check_token(request: Request) -> None:
     scheme, _, token = request.headers.get("authorization", "").partition(" ")
     if scheme.lower() != "bearer" or not hmac.compare_digest(token.strip().encode(), settings.ingest_token.encode()):
         raise HTTPException(status_code=401, detail="Invalid token")
+
+
+def _wants_queue(raw: str) -> bool:
+    """Form field `enqueue`. Absent or anything but an explicit no means
+    the new recording joins the YouTube queue."""
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
 
 
 def _now_local() -> datetime:
@@ -55,6 +63,7 @@ async def ingest_audio(
     project: str = Form(DEFAULT_PROJECT),
     date: str = Form(""),
     title: str = Form(""),
+    enqueue: str = Form(""),
 ):
     _check_token(request)
     name = PurePath(file.filename or "audio").name
@@ -83,4 +92,15 @@ async def ingest_audio(
     background.add_task(prepare_playable, result["project_id"], result["conv_id"], result["filename"], result["recording"]["id"])
     base = str(request.base_url).rstrip("/")
     result["url"] = f"{base}/?project={result['project_id']}&session={result['conv_id']}&file={result['filename']}"
+    # The file is complete (unlike a dictation recording, which is still
+    # growing until the browser finishes uploading). Existing recordings
+    # are not backfilled; only this new one is offered to the worker.
+    result["video_job"] = None
+    if _wants_queue(enqueue):
+        try:
+            result["video_job"] = video_jobs.set_enqueued(
+                result["project_id"], result["conv_id"], result["filename"], result["recording"]["id"], True
+            )
+        except video_jobs.VideoJobError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail)
     return result

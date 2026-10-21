@@ -1918,6 +1918,30 @@ kbd.shortcut-key {
   font-variant-numeric: tabular-nums;
 }
 
+.recordings-video {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 13px;
+}
+.recordings-video .secondary-btn { padding: 3px 10px; }
+.recordings-video a { color: var(--accent); }
+.recordings-video-error { color: #b91c1c; }
+.recordings-video-transcript {
+  flex-basis: 100%;
+  margin: 0;
+}
+.recordings-video-transcript pre {
+  margin: 4px 0 0;
+  max-height: 8em;
+  overflow: auto;
+  white-space: pre-wrap;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .transcribe-panel {
   max-height: none;
 }

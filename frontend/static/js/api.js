@@ -515,3 +515,13 @@ export async function appendRecording(projectId, id, filename, recordingId, offs
 export function deleteRecording(projectId, id, filename, recordingId) {
   return fetch(recordingsUrl(projectId, id, filename, recordingId), { method: "DELETE" }).then(asJson);
 }
+
+// Opt a recording into or out of the YouTube queue. `{video}` is the job
+// summary, or null when it was never queued and this call opts out.
+export function setRecordingVideo(projectId, id, filename, recordingId, body) {
+  return fetch(`${recordingsUrl(projectId, id, filename, recordingId)}/video`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }).then(asJson);
+}
