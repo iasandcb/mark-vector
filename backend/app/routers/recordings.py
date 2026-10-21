@@ -1,13 +1,16 @@
 import asyncio
 import re
 import shutil
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from pathlib import PurePath
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from .. import storage, video_jobs
+from ..config import settings
 
 router = APIRouter(prefix="/api/projects/{project_id}/conversations/{conv_id}/documents/{filename}/recordings", tags=["recordings"])
 
@@ -63,6 +66,78 @@ def set_recording_video(project_id: str, conv_id: str, filename: str, recording_
     except video_jobs.VideoJobError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail)
     return {"video": video}
+
+
+def _upload_started(raw: str) -> datetime:
+    """The recorder's clock for the id. A zoned stamp is read in that zone;
+    a bare one is the sender's local time, same as a dictation recording.
+    Omitted means now in INGEST_TIMEZONE, same as ingest."""
+    if not raw.strip():
+        try:
+            tz = ZoneInfo(settings.ingest_timezone)
+        except (ZoneInfoNotFoundError, ValueError):
+            tz = timezone(timedelta(hours=9))
+        return datetime.now(tz).replace(tzinfo=None)
+    try:
+        started = datetime.fromisoformat(raw.strip())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="started must be an ISO timestamp")
+    if started.tzinfo is not None:
+        try:
+            tz = ZoneInfo(settings.ingest_timezone)
+        except (ZoneInfoNotFoundError, ValueError):
+            tz = timezone(timedelta(hours=9))
+        started = started.astimezone(tz).replace(tzinfo=None)
+    return started
+
+
+def _upload_ext(name: str) -> str:
+    ext = PurePath(name or "").suffix.lower().lstrip(".")
+    if ext == "wave":
+        ext = "wav"
+    if ext not in storage.RECORDING_EXTS:
+        allowed = ", ".join(sorted(storage.RECORDING_EXTS))
+        raise HTTPException(status_code=400, detail=f"Unsupported file type: .{ext or '?'} ({allowed})")
+    return ext
+
+
+@router.post("/upload")
+def upload_recording(
+    project_id: str,
+    conv_id: str,
+    filename: str,
+    background: BackgroundTasks,
+    file: UploadFile = File(...),
+    started: str = Form(""),
+    duration_sec: str = Form(""),
+    enqueue: str = Form(""),
+):
+    """A whole audio file, from the recordings list, becomes one recording
+    of this document. Same bytes as ingest, and queued for the YouTube
+    worker the same way unless `enqueue` is false/0/no/off. Session auth,
+    not INGEST_TOKEN."""
+    ext = _upload_ext(file.filename or "")
+    when = _upload_started(started)
+    duration = None
+    if duration_sec.strip():
+        try:
+            duration = float(duration_sec)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="duration_sec must be a number")
+    try:
+        info = storage.add_recording_bytes(project_id, conv_id, filename, ext, file.file, when)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except FileNotFoundError as exc:
+        raise _not_found(exc)
+    info["video"] = None
+    if video_jobs.wants_queue(enqueue):
+        try:
+            info["video"] = video_jobs.set_enqueued(project_id, conv_id, filename, info["id"], True, duration)
+        except video_jobs.VideoJobError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+    background.add_task(prepare_playable, project_id, conv_id, filename, info["id"])
+    return info
 
 
 @router.post("")

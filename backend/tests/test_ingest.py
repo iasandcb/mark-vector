@@ -63,7 +63,7 @@ def test_off_without_a_token_configured(client, monkeypatch):
 
 
 def test_rejects_other_types_and_empty_files(client):
-    assert _post(client, name="talk.mp3").status_code == 400
+    assert _post(client, name="talk.txt").status_code == 400
     assert _post(client, data=b"").status_code == 400
     folder_docs = [
         d

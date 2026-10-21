@@ -516,6 +516,39 @@ export function deleteRecording(projectId, id, filename, recordingId) {
   return fetch(recordingsUrl(projectId, id, filename, recordingId), { method: "DELETE" }).then(asJson);
 }
 
+// A finished audio file dropped on the recordings list. XHR, like
+// transcribeAudio, because fetch has no upload-progress event.
+// `enqueue: false` keeps it out of the YouTube queue (same words as ingest).
+export function uploadRecording(projectId, id, filename, file, { started, durationSec, enqueue, onProgress } = {}) {
+  return new Promise((resolve, reject) => {
+    const form = new FormData();
+    form.append("file", file, file.name);
+    if (started) form.append("started", started);
+    if (durationSec != null) form.append("duration_sec", String(durationSec));
+    if (enqueue === false) form.append("enqueue", "false");
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${recordingsUrl(projectId, id, filename)}/upload`);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total);
+    };
+    xhr.onload = () => {
+      if (redirectToLoginIfUnauthorized(xhr)) return;
+      let body = {};
+      try {
+        body = JSON.parse(xhr.responseText);
+      } catch {}
+      if (xhr.status < 200 || xhr.status >= 300) {
+        const detail = body.detail;
+        reject(new Error(typeof detail === "string" ? detail : `Request failed: ${xhr.status}`));
+        return;
+      }
+      resolve(body);
+    };
+    xhr.onerror = () => reject(new Error("Network error"));
+    xhr.send(form);
+  });
+}
+
 // Opt a recording into or out of the YouTube queue. `{video}` is the job
 // summary, or null when it was never queued and this call opts out.
 export function setRecordingVideo(projectId, id, filename, recordingId, body) {

@@ -41,12 +41,6 @@ def _check_token(request: Request) -> None:
         raise HTTPException(status_code=401, detail="Invalid token")
 
 
-def _wants_queue(raw: str) -> bool:
-    """Form field `enqueue`. Absent or anything but an explicit no means
-    the new recording joins the YouTube queue."""
-    return raw.strip().lower() not in {"0", "false", "no", "off"}
-
-
 def _now_local() -> datetime:
     try:
         tz = ZoneInfo(settings.ingest_timezone)
@@ -72,7 +66,8 @@ async def ingest_audio(
         stem, ext = ext, ""
     ext = ext.lower()
     if ext not in storage.RECORDING_EXTS:
-        raise HTTPException(status_code=400, detail=f"Unsupported file type: .{ext} (m4a, webm or ogg)")
+        allowed = ", ".join(sorted(storage.RECORDING_EXTS))
+        raise HTTPException(status_code=400, detail=f"Unsupported file type: .{ext} ({allowed})")
     if date and not _DATE_RE.match(date):
         raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD")
     now = _now_local()
@@ -96,7 +91,7 @@ async def ingest_audio(
     # growing until the browser finishes uploading). Existing recordings
     # are not backfilled; only this new one is offered to the worker.
     result["video_job"] = None
-    if _wants_queue(enqueue):
+    if video_jobs.wants_queue(enqueue):
         try:
             result["video_job"] = video_jobs.set_enqueued(
                 result["project_id"], result["conv_id"], result["filename"], result["recording"]["id"], True

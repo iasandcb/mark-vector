@@ -50,6 +50,13 @@ _URL_RE = re.compile(r"^https?://\S{1,480}$")
 _thread_lock = threading.Lock()
 
 
+def wants_queue(raw: str | None) -> bool:
+    """Form field `enqueue`. Absent, or anything but an explicit no, means
+    the recording joins the YouTube queue. Shared by ingest and the
+    recordings-list upload."""
+    return (raw or "").strip().lower() not in {"0", "false", "no", "off"}
+
+
 class VideoJobError(Exception):
     def __init__(self, status_code: int, detail: str):
         super().__init__(detail)

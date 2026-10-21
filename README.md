@@ -386,6 +386,7 @@ LLM이 직접 AsciiMath를 생성하면 품질이 떨어지는 경우가 많습�
 **이미 디스크에 있는 녹음은 넣지 않습니다.** 이 기능 이후의 새 녹음만, 그리고 사용자가 직접 넣은 녹음만 대기합니다.
 
 - 받아쓰기 녹음은 업로드가 끝난 뒤에 앱이 큐에 넣습니다. 녹음 도중 탭이 죽거나 업로드를 포기한 부분 파일은 들어가지 않습니다.
+- 문서 ⋯ → 녹음(녹음이 하나도 없어도 열림)에서 **음성 파일 올리기**로 m4a, mp3, wav, webm, ogg, opus, aac, flac, mp4를 그 문서의 녹음으로 올립니다. 로그인 세션이고, 기본으로 큐에 넣습니다. `enqueue=false`면 ingest와 같이 넣지 않습니다.
 - `POST /api/ingest/audio`는 파일이 통째로 있으므로 기본으로 큐에 넣습니다. 폼 필드 `enqueue`가 `false` / `0` / `no` / `off`이면 넣지 않습니다.
 - 문서의 녹음 목록(트리에서 문서 ⋯ → 녹음)에서 **YouTube 대기열에 넣기** / **대기열에서 빼기** / **다시 시도**를 누를 수 있습니다. 같은 동작이 로그인 세션의 API입니다.
 
@@ -610,6 +611,7 @@ fly secrets set WORKER_TOKEN="$(openssl rand -hex 32)"
 | GET | `/api/transcribe/config` | 전사 사용 가능 여부 `{available, model}` |
 | POST | `/api/convert-to-asciimath` | 문서 전체를 지금 바로 AsciiMath2로 변환 `{content, hybrid?}` → `{content}`. `hybrid`를 켜면 `$`/`$$` 수식만 변환합니다. |
 | PUT | `/api/projects/{id}/conversations/{cid}/documents/{filename}/recordings/{recording_id}/video` | 그 녹음을 YouTube 큐에 넣거나 뺌 `{enqueue, duration_sec?}`. 로그인 세션. 자세한 계약은 [YouTube 영상 작업 큐](#youtube-영상-작업-큐) |
+| POST | `…/recordings/upload` | 음성 파일 multipart `file`, 선택 `started`, `duration_sec`, `enqueue`. 그 문서의 녹음이 되고 기본으로 큐에 들어갑니다. 로그인 세션 |
 | GET, POST | `/api/worker/jobs` … | 워커용 큐. `Authorization: Bearer $WORKER_TOKEN`. 목록·claim·오디오·progress·complete·fail·retry. 위 절의 JSON이 계약입니다. |
 | GET | `/api/system-prompt` | 공통(전역) 시스템 프롬프트 조회 `{content}` |
 | PUT | `/api/system-prompt` | 공통 시스템 프롬프트 저장 `{content}` |
