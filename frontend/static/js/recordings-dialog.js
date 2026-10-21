@@ -119,7 +119,8 @@ export async function openRecordingsDialog({ projectId, sessionId, filename, onC
           <button class="secondary-btn" type="button" data-skip="-10" title="${escapeHtml(t("audio.back10"))}">↺10</button>
           <button class="secondary-btn" type="button" data-skip="10" title="${escapeHtml(t("audio.forward10"))}">10↻</button>
           ${onTranscribe ? `<button class="secondary-btn recordings-transcribe" type="button" data-transcribe title="${escapeHtml(t("recordings.transcribeTitle"))}">🎤 ${escapeHtml(t("recordings.transcribe"))}</button>` : ""}
-        </div>`;
+        </div>
+        <div class="recordings-video" data-video></div>`;
       // preload="none": nothing is fetched (or converted) until its own
       // play button is pressed.
       // No copy to be had (the server couldn't convert) - the original.
@@ -179,8 +180,90 @@ export async function openRecordingsDialog({ projectId, sessionId, filename, onC
         onChange();
         render();
       });
+      fillVideoRow(item.querySelector("[data-video]"), rec);
       body.appendChild(item);
     }
   }
+  // YouTube queue: new recordings are opted in when the upload finishes
+  // (recording.js). This row is how an older one is added, or a queued
+  // one is taken back, and where the worker's progress shows up.
+  function fillVideoRow(row, rec) {
+    const video = rec.video;
+    const status = video && video.status;
+
+    const span = (text, className) => {
+      const el = document.createElement("span");
+      if (className) el.className = className;
+      el.textContent = text;
+      return el;
+    };
+    const button = (label, title) => {
+      const el = document.createElement("button");
+      el.type = "button";
+      el.className = "secondary-btn";
+      el.textContent = label;
+      if (title) el.title = title;
+      return el;
+    };
+    async function setEnqueue(enqueue) {
+      try {
+        await api.setRecordingVideo(projectId, sessionId, filename, rec.id, { enqueue });
+      } catch (err) {
+        alert(err.message);
+        return;
+      }
+      render();
+    }
+
+    if (!video || status === "cancelled") {
+      const btn = button(t("recordings.videoQueue"), t("recordings.videoQueueTitle"));
+      btn.addEventListener("click", () => setEnqueue(true));
+      row.appendChild(btn);
+      return;
+    }
+    if (video.attempt > 0 && (status === "queued" || status === "failed")) {
+      row.appendChild(span(t("recordings.videoAttempt", { attempt: video.attempt }), "recordings-size"));
+    }
+    if (status === "queued") {
+      row.appendChild(span(t("recordings.videoQueued")));
+      const btn = button(t("recordings.videoRemove"));
+      btn.addEventListener("click", () => setEnqueue(false));
+      row.appendChild(btn);
+    } else if (status === "claimed") {
+      const prog = video.progress;
+      const text =
+        prog && prog.percent != null
+          ? t("recordings.videoWorkingPercent", { percent: prog.percent })
+          : prog && prog.message
+            ? t("recordings.videoWorkingDetail", { message: prog.message })
+            : t("recordings.videoWorking");
+      row.appendChild(span(text));
+    } else if (status === "succeeded") {
+      const link = document.createElement("a");
+      link.href = video.youtube_url || `https://www.youtube.com/watch?v=${encodeURIComponent(video.youtube_video_id || "")}`;
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.textContent = t("recordings.videoDone");
+      row.appendChild(link);
+    } else if (status === "failed") {
+      row.appendChild(span(t("recordings.videoFailed", { message: video.error || "" }), "recordings-video-error"));
+      const again = button(t("recordings.videoRetry"));
+      again.addEventListener("click", () => setEnqueue(true));
+      const drop = button(t("recordings.videoRemove"));
+      drop.addEventListener("click", () => setEnqueue(false));
+      row.append(again, drop);
+    }
+    if (video.transcript) {
+      const details = document.createElement("details");
+      details.className = "recordings-video-transcript";
+      const summary = document.createElement("summary");
+      summary.textContent = t("recordings.videoTranscript");
+      const pre = document.createElement("pre");
+      pre.textContent = video.transcript;
+      details.append(summary, pre);
+      row.appendChild(details);
+    }
+  }
+
   render();
 }

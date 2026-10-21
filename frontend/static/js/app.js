@@ -2792,9 +2792,15 @@ function stopDictationRecording(session) {
   const recording = session.recording;
   if (!recording) return;
   session.recording = null;
-  recording.handle.stop().then(async () => {
+  recording.handle.stop().then(async (result) => {
     if (recording.ownsStream) recording.stream.getTracks().forEach((track) => track.stop());
-    showRemoteStatus(t("editor.recordingSaved"));
+    showRemoteStatus(
+      result && result.videoError
+        ? t("editor.recordingVideoQueueFailed", { message: result.videoError })
+        : result && result.queued
+          ? t("editor.recordingQueued")
+          : t("editor.recordingSaved")
+    );
     const { projectId, sessionId } = recording.doc;
     await refreshSessionDocs(projectId, sessionId).catch(() => {});
     renderTree();

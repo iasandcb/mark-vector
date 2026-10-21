@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from .. import storage
+from .. import storage, video_jobs
 
 router = APIRouter(prefix="/api/projects/{project_id}/conversations/{conv_id}/documents/{filename}/recordings", tags=["recordings"])
 
@@ -28,11 +28,41 @@ def _not_found(exc: FileNotFoundError) -> HTTPException:
 @router.get("")
 def list_recordings(project_id: str, conv_id: str, filename: str):
     try:
-        return storage.list_recordings(project_id, conv_id, filename)
+        recordings = storage.list_recordings(project_id, conv_id, filename)
+        videos = video_jobs.videos_for_document(project_id, conv_id, filename)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except FileNotFoundError as exc:
         raise _not_found(exc)
+    except video_jobs.VideoJobError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+    for recording in recordings:
+        recording["video"] = videos.get(recording["id"])
+    return recordings
+
+
+class VideoEnqueue(BaseModel):
+    enqueue: bool
+    # Seconds, when the client knows them (the recorder's own clock).
+    duration_sec: float | None = None
+
+
+@router.put("/{recording_id}/video")
+def set_recording_video(project_id: str, conv_id: str, filename: str, recording_id: str, body: VideoEnqueue):
+    """Opt this recording into or out of the YouTube queue. New dictation
+    recordings are opted in by the app once the upload finishes; this is
+    how an older recording is added, or a queued one is taken back."""
+    try:
+        video = video_jobs.set_enqueued(
+            project_id, conv_id, filename, recording_id, body.enqueue, body.duration_sec
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except FileNotFoundError as exc:
+        raise _not_found(exc)
+    except video_jobs.VideoJobError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+    return {"video": video}
 
 
 @router.post("")

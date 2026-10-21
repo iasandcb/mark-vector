@@ -325,6 +325,7 @@ def delete_project(project_id: str) -> None:
     if not project_dir.exists():
         raise FileNotFoundError(project_id)
     shutil.rmtree(project_dir)
+    _forget_video_jobs(project_id=project_id)
 
 
 def _ensure_system_file(dir_path: Path) -> None:
@@ -548,9 +549,11 @@ def delete_conversation(project_id: str, conv_id: str) -> None:
     no containment order to worry about."""
     if not (_conversations_dir(project_id) / conv_id).exists():
         raise FileNotFoundError(conv_id)
-    for folder_id in _descendant_folder_ids(project_id, conv_id):
+    folder_ids = _descendant_folder_ids(project_id, conv_id)
+    for folder_id in folder_ids:
         shutil.rmtree(_conversations_dir(project_id) / folder_id)
     _touch_project(project_id)
+    _forget_video_jobs(project_id=project_id, conv_ids=folder_ids)
 
 
 def _build_user_only_content(user_content: str, language: str) -> str:
@@ -1156,6 +1159,7 @@ def rename_document(project_id: str, conv_id: str, old_filename: str, new_filena
         _write_meta(project_id, conv_id, meta)
 
     _repoint_publish(project_id, conv_id, old_filename, new_filename)
+    _retarget_video_jobs(project_id, conv_id, old_filename, project_id, conv_id, new_filename)
 
     stat = new_path.stat()
     return {
@@ -1227,6 +1231,8 @@ def move_document(
         registry[token]["project_id"] = target_project_id
         registry[token]["conv_id"] = target_conv_id
         _write_published(registry)
+
+    _retarget_video_jobs(project_id, conv_id, filename, target_project_id, target_conv_id, filename)
 
     _touch_project(project_id)
     if target_project_id != project_id:
@@ -1319,6 +1325,7 @@ def delete_document(project_id: str, conv_id: str, filename: str) -> None:
     _move_analyses(path.parent, filename, None, None)
     _move_recordings(path.parent, filename, None, None)
     unpublish_document(project_id, conv_id, filename)
+    _forget_video_jobs(project_id=project_id, conv_id=conv_id, filename=filename)
 
 
 # ---------- analyses (the preview pane's Evaluate / Formalize tabs) ----------
@@ -1577,6 +1584,29 @@ def playable_recording_paths(project_id: str, conv_id: str, filename: str, recor
     return path, path.parent / PLAYABLE_DIRNAME / f"{recording_id}{PLAYABLE_SUFFIX}"
 
 
+def _retarget_video_jobs(
+    project_id: str, conv_id: str, filename: str, project_id_to: str, conv_id_to: str, filename_to: str
+) -> None:
+    """A renamed or moved document takes its YouTube jobs with it. Imported
+    lazily: video_jobs imports this module."""
+    from . import video_jobs
+
+    video_jobs.retarget(
+        project_id,
+        conv_id,
+        filename,
+        project_id_to=project_id_to,
+        conv_id_to=conv_id_to,
+        filename_to=filename_to,
+    )
+
+
+def _forget_video_jobs(**kwargs) -> None:
+    from . import video_jobs
+
+    video_jobs.forget(**kwargs)
+
+
 def delete_recording(project_id: str, conv_id: str, filename: str, recording_id: str) -> None:
     path = _recording_path(project_id, conv_id, filename, recording_id)
     if not path.exists():
@@ -1584,6 +1614,7 @@ def delete_recording(project_id: str, conv_id: str, filename: str, recording_id:
     path.unlink()
     for copy in (path.parent / PLAYABLE_DIRNAME).glob(f"{recording_id}.*"):
         copy.unlink(missing_ok=True)
+    _forget_video_jobs(project_id=project_id, conv_id=conv_id, filename=filename, recording_id=recording_id)
 
 
 # ---------- publishing (public read-only share links) ----------

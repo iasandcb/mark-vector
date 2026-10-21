@@ -66,6 +66,10 @@ class Settings:
     # route is off until it's set - and the day its date folders follow.
     ingest_token: str | None = os.getenv("INGEST_TOKEN") or None
     ingest_timezone: str = os.getenv("INGEST_TIMEZONE", "Asia/Seoul")
+    # A different secret for the machine that pulls recordings and uploads
+    # them to YouTube (routers/worker.py). Not the ingest token: that one
+    # only grants the ability to drop a file in. Unset, the worker API is off.
+    worker_token: str | None = os.getenv("WORKER_TOKEN") or None
 
 
 settings = Settings()

@@ -61,6 +61,7 @@ export async function startRecording(stream, doc, onChange = () => {}) {
   let error = null;
   let retryDelay = RETRY_MIN_MS;
   let stopped = false;
+  let settled = false;
   let finish = null;
   const finished = new Promise((resolve) => (finish = resolve));
 
@@ -99,9 +100,27 @@ export async function startRecording(stream, doc, onChange = () => {}) {
     }
     uploading = false;
     report();
-    if (stopped && (!queue.length || retryDelay >= RETRY_MAX_MS)) {
+    if (stopped && !settled && (!queue.length || retryDelay >= RETRY_MAX_MS)) {
+      settled = true;
       clearInterval(timer);
-      finish();
+      // Only a finished upload is a video. A tab that died mid-lecture, or
+      // an upload that was given up on, leaves a partial file the user can
+      // still opt in by hand — it is not offered to the worker on its own.
+      const uploaded = queue.length === 0 && offset > 0;
+      let queued = false;
+      let videoError = null;
+      if (uploaded) {
+        try {
+          await api.setRecordingVideo(doc.projectId, doc.sessionId, doc.filename, id, {
+            enqueue: true,
+            duration_sec: (Date.now() - startedAt) / 1000,
+          });
+          queued = true;
+        } catch (err) {
+          videoError = err.message;
+        }
+      }
+      finish({ queued, videoError });
     }
   }
 
