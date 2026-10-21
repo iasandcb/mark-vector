@@ -20,12 +20,16 @@ const TICK_MS = 100;
 // starts dictation - iOS only lets an AudioContext run if it was created or
 // resumed inside a user gesture, and getUserMedia's await ends the gesture.
 // `onEvent(event)` gets every Realtime event from the data channel.
-// `onIdle()` is called once nothing has been heard for `idleMs`.
+// `onIdle()` is called once nothing has been heard for `idleMs` (omit it
+// for a file: silence in the recording is not a reason to hang up).
 // `audio` - getUserMedia's audio constraints, for a caller that also
 // records the stream. `stream` - transcribe this instead of opening the
 // microphone (an audio file being played - see "audio file" in app.js);
-// stop() ends its tracks too. Resolves to { stop(), commit(), stream } once the
-// session is live.
+// stop() ends its tracks too. Resolves to { stop(), commit(), clear(),
+// setStream(), stream } once the session is live. `commit()` does nothing
+// when no audio has arrived since the previous commit - an empty commit
+// errors and the buffer can stop taking audio after that. `clear()` drops
+// whatever the gap since then appended, so the next words are a new phrase.
 export async function startRealtimeTranscription({ language, audioContext, onEvent, onIdle, idleMs, audio, stream: source }) {
   const constraints = audio || { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
   let stream = source;
@@ -40,11 +44,12 @@ export async function startRealtimeTranscription({ language, audioContext, onEve
   const pc = new RTCPeerConnection();
   let stopped = false;
   let timer = null;
+  let current = stream;
   const stop = () => {
     if (stopped) return;
     stopped = true;
     clearInterval(timer);
-    stream.getTracks().forEach((track) => track.stop());
+    current.getTracks().forEach((track) => track.stop());
     try {
       pc.close();
     } catch (err) {
@@ -87,22 +92,47 @@ export async function startRealtimeTranscription({ language, audioContext, onEve
     await opened;
 
     let lastCommit = performance.now();
+    let heardSinceCommit = false;
     const commit = () => {
-      if (channel.readyState !== "open") return;
+      if (!heardSinceCommit || channel.readyState !== "open") return;
       channel.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
       lastCommit = performance.now();
       textSinceCommit = false;
+      heardSinceCommit = false;
+    };
+    const clear = () => {
+      if (channel.readyState !== "open") return;
+      channel.send(JSON.stringify({ type: "input_audio_buffer.clear" }));
+      heardSinceCommit = false;
     };
 
-    // Volume gate on the microphone for pause detection.
+    // Volume gate on the microphone (or the file stream) for pause detection.
     if (audioContext.state === "suspended") audioContext.resume().catch(() => {});
     const analyser = audioContext.createAnalyser();
     analyser.fftSize = 1024;
-    audioContext.createMediaStreamSource(stream).connect(analyser);
+    let analyserSource = audioContext.createMediaStreamSource(current);
+    analyserSource.connect(analyser);
     const samples = new Float32Array(analyser.fftSize);
     let speaking = false;
     let lastVoice = performance.now();
     let lastHeard = performance.now();
+    // A pause can leave the capture track muted while the element itself
+    // still plays. The caller builds a fresh stream and hands it here.
+    const setStream = async (next) => {
+      const track = next.getAudioTracks()[0];
+      if (!track) return;
+      const sender = pc.getSenders().find((item) => !item.track || item.track.kind === "audio");
+      if (sender) await sender.replaceTrack(track);
+      try {
+        analyserSource.disconnect();
+      } catch (err) {
+        // already disconnected
+      }
+      analyserSource = audioContext.createMediaStreamSource(next);
+      analyserSource.connect(analyser);
+      if (current !== next) current.getTracks().forEach((old) => old !== track && old.stop());
+      current = next;
+    };
     timer = setInterval(() => {
       const now = performance.now();
       analyser.getFloatTimeDomainData(samples);
@@ -113,6 +143,7 @@ export async function startRealtimeTranscription({ language, audioContext, onEve
         speaking = true;
         lastVoice = now;
         lastHeard = now;
+        heardSinceCommit = true;
       } else if (speaking && now - lastVoice > PAUSE_MS) {
         speaking = false;
         commit();
@@ -125,7 +156,7 @@ export async function startRealtimeTranscription({ language, audioContext, onEve
       if (idleMs && now - lastHeard > idleMs) onIdle();
     }, TICK_MS);
 
-    return { stop, commit, stream };
+    return { stop, commit, clear, setStream, get stream() { return current; } };
   } catch (err) {
     stop();
     throw err;
