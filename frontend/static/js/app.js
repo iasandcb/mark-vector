@@ -22,6 +22,7 @@ import { startSonioxTranscription } from "./soniox-stt.js";
 import { effectiveDictationEngine, enginesOffered, normalizeStoredEngine, resolveDictationEngine } from "./dictation-engine.mjs";
 import { consumeSonioxTranscript, limitContextTerms, spokenPhrasesFromCsv } from "./soniox-session.mjs";
 import { bufferSteps, captureInterrupted, sessionStops, transcriptDestination, uplinkNeedsRebuild } from "./file-dictation.mjs";
+import { formatPlaybackClock, parsePlaybackTime, playbackJump, PLAYBACK_JUMP_MESSAGE } from "./audio-time.mjs";
 import { recordingSupported, startRecording, RECORDING_AUDIO } from "./recording.js";
 import { parseEditBlocks, applyEditBlock, collapseEditBlocks } from "./doc-edits.js";
 import { createAnalysisPanel } from "./analysis.js";
@@ -152,6 +153,9 @@ const el = {
   audioFileName: document.getElementById("audio-file-name"),
   audioFileSeek: document.getElementById("audio-file-seek"),
   audioFileTime: document.getElementById("audio-file-time"),
+  audioFileGotoForm: document.getElementById("audio-file-goto-form"),
+  audioFileGoto: document.getElementById("audio-file-goto"),
+  audioFileGotoError: document.getElementById("audio-file-goto-error"),
   audioFileRateBtn: document.getElementById("audio-file-rate-btn"),
   audioFileCloseBtn: document.getElementById("audio-file-close-btn"),
   dictationMicBtn: document.getElementById("dictation-mic-btn"),
@@ -2729,6 +2733,9 @@ const AUDIO_FILE_RATES = [1, 1.25, 1.5];
 // Once the file ends, how long the last phrase gets to come back written.
 const AUDIO_FILE_TAIL_MS = 4000;
 let audioFile = null; // { name, url, position, duration, rate } while one is loaded
+// A typed time submitted before the file's length is known. Applied once
+// the probe learns the duration, still through seekFileTo.
+let audioGotoPending = null;
 
 function pickAudioFile() {
   const input = document.createElement("input");
@@ -2762,12 +2769,26 @@ function loadAudioFile(name, url, owned) {
   probe.addEventListener("loadedmetadata", () => {
     current.loading = false;
     if (Number.isFinite(probe.duration)) current.duration = probe.duration;
-    if (audioFile === current) updateAudioFileBar();
+    if (audioFile !== current) return;
+    updateAudioFileBar();
+    // A "go to" typed before the length arrived jumps now, through the
+    // same seek as the slider.
+    if (audioGotoPending == null) return;
+    const pending = audioGotoPending;
+    audioGotoPending = null;
+    finishAudioFileGoto(pending);
   }, { once: true });
   probe.addEventListener("error", () => {
     current.loading = false;
     current.error = t("editor.audioFileLoadFailed");
-    if (audioFile === current) updateAudioFileBar();
+    const waiting = audioGotoPending != null;
+    audioGotoPending = null;
+    if (audioFile !== current) return;
+    updateAudioFileBar();
+    if (!waiting) return;
+    el.audioFileGotoError.hidden = false;
+    el.audioFileGotoError.textContent = current.error;
+    el.audioFileGoto.setAttribute("aria-invalid", "true");
   }, { once: true });
   probe.src = url;
   updateAudioFileBar();
@@ -2777,6 +2798,9 @@ function closeAudioFile() {
   if (dictation && dictation.file) stopDictation();
   if (audioFile && audioFile.owned) URL.revokeObjectURL(audioFile.url);
   audioFile = null;
+  audioGotoPending = null;
+  el.audioFileGoto.value = "";
+  clearAudioGotoError();
   updateAudioFileBar();
 }
 
@@ -2796,7 +2820,8 @@ function updateAudioFileBar() {
   el.audioFileSeek.max = String(audioFile.duration || 0);
   el.audioFileSeek.value = String(audioFile.position);
   el.audioFileSeek.disabled = !audioFile.duration;
-  const clock = `${formatClock(audioFile.position * 1000)} / ${audioFile.duration ? formatClock(audioFile.duration * 1000) : "--:--"}`;
+  const clock = `${formatPlaybackClock(audioFile.position)} / ${audioFile.duration ? formatPlaybackClock(audioFile.duration) : "--:--"}`;
+  el.audioFileGoto.setAttribute("aria-label", t("audio.gotoTitle"));
   el.audioFileTime.textContent = audioFile.error
     ? audioFile.error
     : audioFile.loading
@@ -2835,6 +2860,56 @@ function skipAudioFile(seconds) {
 }
 el.audioFileBackBtn.addEventListener("click", () => skipAudioFile(-AUDIO_FILE_SKIP_S));
 el.audioFileForwardBtn.addEventListener("click", () => skipAudioFile(AUDIO_FILE_SKIP_S));
+// Typed time. Same seekFileTo as the slider and the 10-second skips, so a
+// transcription in progress commits the phrase and does not write the gap.
+function clearAudioGotoError() {
+  el.audioFileGotoError.hidden = true;
+  el.audioFileGotoError.textContent = "";
+  el.audioFileGotoError.classList.remove("waiting");
+  el.audioFileGoto.removeAttribute("aria-invalid");
+}
+function showAudioGotoError(reason) {
+  el.audioFileGotoError.hidden = false;
+  el.audioFileGotoError.textContent = t(PLAYBACK_JUMP_MESSAGE[reason] || PLAYBACK_JUMP_MESSAGE.invalid);
+  const waiting = reason === "loading";
+  el.audioFileGotoError.classList.toggle("waiting", waiting);
+  if (waiting) el.audioFileGoto.removeAttribute("aria-invalid");
+  else el.audioFileGoto.setAttribute("aria-invalid", "true");
+}
+function finishAudioFileGoto(seconds) {
+  if (!audioFile) return;
+  if (audioFile.error) {
+    el.audioFileGotoError.hidden = false;
+    el.audioFileGotoError.textContent = audioFile.error;
+    el.audioFileGoto.setAttribute("aria-invalid", "true");
+    return;
+  }
+  const duration = audioFile.duration > 0 ? audioFile.duration : null;
+  const jump = playbackJump(seconds, duration);
+  if (!jump.ok) {
+    audioGotoPending = jump.reason === "loading" ? seconds : null;
+    showAudioGotoError(jump.reason);
+    return;
+  }
+  audioGotoPending = null;
+  clearAudioGotoError();
+  seekFileTo(jump.seconds);
+  el.audioFileGoto.blur();
+}
+el.audioFileGoto.addEventListener("input", () => {
+  audioGotoPending = null;
+  clearAudioGotoError();
+});
+el.audioFileGotoForm.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const parsed = parsePlaybackTime(el.audioFileGoto.value);
+  if (parsed == null) {
+    audioGotoPending = null;
+    showAudioGotoError("invalid");
+    return;
+  }
+  finishAudioFileGoto(parsed);
+});
 el.audioFileRateBtn.addEventListener("click", () => {
   if (!audioFile) return;
   audioFile.rate = AUDIO_FILE_RATES[(AUDIO_FILE_RATES.indexOf(audioFile.rate) + 1) % AUDIO_FILE_RATES.length];
@@ -2855,10 +2930,7 @@ function restoreDictationRecord() {
 }
 
 function formatClock(ms) {
-  const s = Math.floor(ms / 1000);
-  const mm = String(Math.floor(s / 60) % 60).padStart(2, "0");
-  const ss = String(s % 60).padStart(2, "0");
-  return s >= 3600 ? `${Math.floor(s / 3600)}:${mm}:${ss}` : `${mm}:${ss}`;
+  return formatPlaybackClock(ms / 1000);
 }
 
 function updateRecordButton(progress) {
@@ -3471,6 +3543,8 @@ function resumeFilePlayback(session) {
   });
 }
 
+// Slider, 10-second skips, lock-screen seek, and the typed time all come
+// through here. A running transcription commits once and drops the gap.
 function seekFileTo(position) {
   if (!audioFile) return;
   const end = audioFile.duration || Infinity;

@@ -214,7 +214,12 @@
         <button id="audio-file-forward-btn" class="secondary-btn audio-file-skip" type="button" data-i18n-title="audio.forward10">10↻</button>
         <span id="audio-file-name" class="audio-file-name"></span>
         <input id="audio-file-seek" class="audio-file-seek" type="range" min="0" max="0" step="1" value="0" data-i18n-title="editor.audioFileSeek">
-        <span id="audio-file-time" class="audio-file-time"></span>
+        <span id="audio-file-time" class="audio-file-time" data-i18n-title="audio.clock"></span>
+        <form id="audio-file-goto-form" class="audio-goto">
+          <input id="audio-file-goto" type="text" inputmode="text" enterkeyhint="go" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="1:23" data-i18n-placeholder="audio.gotoPlaceholder" data-i18n-title="audio.gotoTitle" aria-describedby="audio-file-goto-error">
+          <button id="audio-file-goto-btn" class="secondary-btn" type="submit" data-i18n="audio.goto" data-i18n-title="audio.gotoTitle">Go</button>
+        </form>
+        <p id="audio-file-goto-error" class="audio-goto-error" role="alert" hidden></p>
         <button id="audio-file-rate-btn" class="secondary-btn audio-file-rate" type="button" data-i18n-title="editor.audioFileRate">1×</button>
         <button id="audio-file-close-btn" class="icon-btn audio-file-close" type="button" data-i18n-title="editor.audioFileClose">✕</button>
       </div>

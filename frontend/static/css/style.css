@@ -1916,6 +1916,7 @@ kbd.shortcut-key {
 
 .recordings-skip {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 4px;
 }
@@ -1925,6 +1926,19 @@ kbd.shortcut-key {
 .recordings-skip .secondary-btn {
   padding: 3px 10px;
   font-variant-numeric: tabular-nums;
+}
+.recordings-goto {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.recordings-clock {
+  font-variant-numeric: tabular-nums;
+  font-size: 14px;
+  min-width: 9em;
+  white-space: nowrap;
 }
 
 .recordings-video {
@@ -2500,11 +2514,64 @@ kbd.shortcut-key {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+.audio-goto {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+.audio-goto input {
+  width: 6.2em;
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  touch-action: manipulation;
+}
+.audio-goto input[aria-invalid="true"] {
+  border-color: #b91c1c;
+}
+.audio-goto .secondary-btn {
+  touch-action: manipulation;
+  min-height: 36px;
+}
+.audio-goto-error {
+  flex: 1 0 100%;
+  margin: 0;
+  color: #b91c1c;
+  font-size: 12px;
+}
+.audio-goto-error.waiting {
+  color: var(--muted);
+}
 .audio-file-rate {
   padding: 4px 6px;
+}
+@media (pointer: coarse) {
+  .audio-file-skip,
+  .audio-file-play,
+  .audio-goto input,
+  .audio-goto .secondary-btn,
+  .recordings-skip .secondary-btn {
+    min-height: 44px;
+  }
+  .audio-goto .secondary-btn,
+  .recordings-skip .secondary-btn {
+    min-width: 44px;
+  }
+  .audio-file-time,
+  .recordings-clock {
+    font-size: 15px;
+  }
 }
 @media (max-width: 700px) {
   .audio-file-name {
     display: none;
+  }
+  .audio-file-seek {
+    flex: 1 1 140px;
   }
 }
