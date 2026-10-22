@@ -852,12 +852,9 @@ body.row-dragging {
   border-bottom-right-radius: 0;
 }
 
-/* Phone: the editor header's icon buttons need tighter padding than the
-   12px/16px tap-target rule further down. The compact gap cannot live
-   here: .editor-actions { gap: 8px } is declared later and would override
-   it, and that extra gap is what drops the ⚙ onto a second line once the
-   🗣 button is in the row. The gap, nowrap, and scroll live in the phone
-   block after .editor-actions. */
+/* Phone: tighter than the 12px/16px tap-target padding below. The row
+   itself is one line at every width (see .editor-actions); a narrow
+   column tightens the gap again in the editor-column container query. */
 @media (max-width: 700px) {
   .editor-column > .pane-header {
     padding-left: 8px;
@@ -1153,22 +1150,45 @@ body.row-dragging {
   flex-shrink: 1;
 }
 
-/* Wraps rather than overflowing: a draft can show four buttons at once
-   (save / publish / inline complete / send) plus the "live" checkbox, which
-   is more than a phone-width header fits on one line. */
-/* Shrinkable (min-width: 0), so that when the buttons don't fit - a phone,
-   or a narrow split pane - flex-wrap actually wraps them onto a second line.
-   With flex-shrink: 0 the row stayed one line wider than the pane and ran
-   off-screen, taking the ⚙ (and with it the Live/Slides checkboxes in the
-   row it opens) out of reach on an iPhone. The title group still gives way
-   first: its flex-basis is 0, so it never holds any of the row's width. */
+/* One row at every width and pane combination. Wrapping used to drop ◫
+   and ⚙ onto a second line once the editor column got narrow (tree and
+   preview both open, or split view). The icons scroll inside
+   .editor-actions-scroll; the ⚙ stays outside that scroller so it is never
+   covered and never widens the page. The spacer keeps the icons against
+   the gear when they fit. */
 .editor-actions {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 8px;
   min-width: 0;
+}
+
+.editor-actions-scroll {
+  display: flex;
+  align-items: center;
+  gap: inherit;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  flex-wrap: nowrap;
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
+}
+
+.editor-actions-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.editor-actions-scroll::before {
+  content: "";
+  flex: 1 0 0px;
+}
+
+.editor-actions-scroll > *,
+.editor-actions > :not(.editor-actions-scroll) {
+  flex-shrink: 0;
 }
 
 .preview-actions {
@@ -1567,38 +1587,10 @@ body.row-dragging {
     padding: 12px 16px;
   }
 
-  /* Keep the ⚙ on the header's one row. This comes after the base
-     .editor-actions rule (gap 8px, flex-wrap), which otherwise wins and
-     drops the gear under the 🗣 on a 375–430px screen. Icons stay full size
-     and slide inside this bar when a thread or remote button is open too.
-     The spacer eats leftover space so the cluster still sits on the right
-     when it fits, and the gear sticks to the right edge while the rest
-     scrolls. Overflow stays inside the bar: the page does not. */
+  /* Full-width phone editor (the column is the viewport). Narrower
+     columns get the same gap from the editor-column container query. */
   .editor-actions {
     gap: 3px;
-    flex-wrap: nowrap;
-    justify-content: flex-start;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-
-  .editor-actions::-webkit-scrollbar {
-    display: none;
-  }
-
-  .editor-actions::before {
-    content: "";
-    flex: 1 0 0px;
-  }
-
-  .editor-actions > * {
-    flex-shrink: 0;
-  }
-
-  #toolbar-toggle-btn {
-    position: sticky;
-    right: 0;
-    z-index: 2;
   }
 
   .pane-filename {
@@ -2658,6 +2650,35 @@ kbd.shortcut-key {
   min-width: 0;
   min-height: 0;
   position: relative;
+  container: editor-column / inline-size;
+}
+
+/* Desktop spacing needs about 530px for the icon row. Below that (1280px
+   with tree and preview, 1024px, split view) use the phone gap and padding
+   so the row still fits; the bar scrolls only if it still does not. */
+@container editor-column (max-width: 640px) {
+  .editor-actions {
+    gap: 3px;
+  }
+  .editor-actions .secondary-btn,
+  .editor-actions .primary-btn {
+    padding: 6px 5px;
+  }
+  .editor-actions .dictation-lang {
+    padding: 0 2px;
+  }
+}
+
+/* 1024px with both side panes, and split view, are tighter still.
+   390px stays on the 3px tier above (that column is the full viewport). */
+@container editor-column (max-width: 384px) {
+  .editor-actions {
+    gap: 2px;
+  }
+  .editor-actions .secondary-btn,
+  .editor-actions .primary-btn {
+    padding: 6px 3px;
+  }
 }
 
 .discuss-pane {
