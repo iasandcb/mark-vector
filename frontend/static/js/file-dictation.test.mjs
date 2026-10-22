@@ -1,6 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { bufferSteps, captureInterrupted, sessionStops, transcriptDestination, uplinkNeedsRebuild } from "./file-dictation.mjs";
+import {
+  FILE_RECONNECT_CAP,
+  audioContextNeedsResume,
+  bufferSteps,
+  captureInterrupted,
+  fileContextAction,
+  filePauseKind,
+  fileProviderFailureAction,
+  fileResumeAction,
+  sessionStops,
+  shouldReconnectFileSession,
+  transcriptDestination,
+  uplinkNeedsRebuild,
+} from "./file-dictation.mjs";
 
 const same = (a, b) => a && b && a.id === b.id;
 const tabs = [{ ref: { id: "original" } }, { ref: { id: "other" } }];
@@ -96,5 +109,110 @@ test("pause then resume appends the next phrase without repeating the first", ()
   assert.equal(
     doc.text,
     "Alpha sentence about the harbor. Bravo sentence about the mountain. Alpha sentence about the harbor.",
+  );
+});
+
+test("an interrupted or suspended audio graph needs resume; a running one does not", () => {
+  assert.equal(audioContextNeedsResume("interrupted"), true);
+  assert.equal(audioContextNeedsResume("suspended"), true);
+  assert.equal(audioContextNeedsResume("running"), false);
+  assert.equal(audioContextNeedsResume("closed"), false);
+  assert.equal(audioContextNeedsResume(""), false);
+  assert.equal(audioContextNeedsResume(null), false);
+});
+
+test("a file provider timeout reconnects; a bad key does not", () => {
+  assert.equal(shouldReconnectFileSession({ error_message: "Request timeout" }), true);
+  assert.equal(shouldReconnectFileSession("Request timeout"), true);
+  assert.equal(shouldReconnectFileSession({ error_message: "connection closed" }), true);
+  assert.equal(shouldReconnectFileSession("timed out connecting"), true);
+  assert.equal(shouldReconnectFileSession("invalid api key"), false);
+  assert.equal(shouldReconnectFileSession("session failed (401)"), false);
+  assert.equal(shouldReconnectFileSession("session failed (403)"), false);
+  assert.equal(shouldReconnectFileSession("buffer is empty"), false);
+  assert.equal(shouldReconnectFileSession(""), false);
+});
+
+test("iOS interruption pauses the clock and holds the socket; a user pause is not one", () => {
+  assert.equal(filePauseKind(true), "user");
+  assert.equal(filePauseKind(false), "interrupted");
+  const stolen = fileContextAction("interrupted", { started: true, audioPaused: false });
+  assert.equal(stolen.pauseMedia, true);
+  assert.equal(stolen.hold, true);
+  assert.equal(stolen.commit, true);
+  assert.equal(stolen.resumeContext, true);
+  const suspended = fileContextAction("suspended", { started: true });
+  assert.equal(suspended.resumeContext, true);
+  assert.equal(suspended.pauseMedia, false);
+  assert.equal(suspended.commit, false);
+  assert.deepEqual(fileContextAction("running", { started: true }), {
+    resumeContext: false,
+    pauseMedia: false,
+    hold: false,
+    commit: false,
+  });
+  assert.equal(fileContextAction("interrupted", { started: true, userPaused: true }).pauseMedia, false);
+  assert.equal(fileContextAction("suspended", { started: false }).resumeContext, true);
+  assert.equal(fileContextAction("interrupted", { started: false }).pauseMedia, false);
+});
+
+test("Request timeout during playback reconnects; after the cap it alerts; it does not write the phrase twice", () => {
+  assert.equal(
+    fileProviderFailureAction({ message: { error_message: "Request timeout" }, reconnects: 0 }),
+    "reconnect",
+  );
+  // The error is delivered when the page wakes, while the element is still
+  // paused. Opening a socket then would time out again, so wait for play.
+  assert.equal(
+    fileProviderFailureAction({
+      message: { error_message: "Request timeout" },
+      audioPaused: true,
+      reconnects: 0,
+    }),
+    "wait",
+  );
+  assert.equal(
+    fileProviderFailureAction({ message: "Request timeout", hidden: true, reconnects: 0 }),
+    "wait",
+  );
+  assert.equal(
+    fileProviderFailureAction({ message: "Request timeout", reconnects: FILE_RECONNECT_CAP }),
+    "popup",
+  );
+  assert.equal(fileProviderFailureAction({ message: "invalid api key" }), "popup");
+  assert.equal(fileProviderFailureAction({ message: "buffer is empty" }), "status");
+  assert.equal(fileProviderFailureAction({ message: "Request timeout", reconnecting: true }), "ignore");
+
+  const resume = fileResumeAction({
+    contextState: "interrupted",
+    interrupted: true,
+    started: true,
+    sttOpen: false,
+    reconnects: 0,
+  });
+  assert.equal(resume.resumeContext, true);
+  assert.equal(resume.reconnect, true);
+  assert.equal(resume.popup, false);
+  assert.equal(resume.clearBuffer, true);
+  assert.equal(bufferSteps("resume").includes("commit"), false);
+  assert.deepEqual(bufferSteps("pause"), ["commit"]);
+
+  const userResume = fileResumeAction({
+    contextState: "running",
+    userPaused: true,
+    started: true,
+    sttOpen: true,
+  });
+  assert.equal(userResume.reconnect, false);
+  assert.equal(userResume.clearBuffer, true);
+  assert.equal(
+    fileResumeAction({
+      contextState: "interrupted",
+      interrupted: true,
+      started: true,
+      sttOpen: false,
+      reconnects: FILE_RECONNECT_CAP,
+    }).popup,
+    true,
   );
 });

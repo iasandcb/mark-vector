@@ -11,6 +11,14 @@
 // quiet for longer, and the file's length bounds the cost. A browser that
 // takes the microphone away while hidden is resumed when the page shows
 // again (see captureInterrupted), not treated as the user pressing stop.
+//
+// iOS takes the audio session when another app plays sound. WebKit then
+// sets AudioContext.state to "interrupted" (sometimes "suspended"). The
+// media element clock can keep moving while that graph is silent, so the
+// provider hears nothing and closes with "Request timeout". That is not
+// the user pressing stop: the next play resumes the graph, and a file
+// session that died is opened again from the current position. A user
+// pause keeps the socket and asks it to wait (keepalive).
 
 // What to send around a gap so the phrase already heard is finalized once
 // and audio after the gap starts a new phrase. `commit` with nothing new
@@ -52,6 +60,104 @@ export function captureInterrupted(hidden) {
 // Which open document receives the next phrase. `same(a, b)` compares refs.
 // Missing tab → stop. On screen → the editor. Anywhere else → that tab's
 // stashed text, never the document the user just opened.
+// How many fresh sessions a file may open after the provider drops it
+// before the stop alert is actually shown.
+export const FILE_RECONNECT_CAP = 3;
+
+// "running" plays. "closed" is gone. Everything else — including WebKit's
+// non-standard "interrupted" — is silent until resume() inside a gesture.
+export function audioContextNeedsResume(state) {
+  return !!state && state !== "running" && state !== "closed";
+}
+
+export function fileErrorText(message) {
+  if (message == null) return "";
+  if (typeof message === "string") return message;
+  return String(message.error_message || message.error_type || message.message || "");
+}
+
+// "fatal" needs the user (a bad key). "recoverable" is a socket that died
+// because audio stopped flowing. Anything else is shown and left alone.
+export function fileErrorClass(message) {
+  const text = fileErrorText(message).toLowerCase();
+  if (!text) return "status";
+  if (/invalid api key|api[_ ]key|unauthorized|permission denied|not allowed|forbidden|\b401\b|\b403\b/.test(text)) return "fatal";
+  if (/request timeout|connection closed|timed out|timeout|network|socket|disconnect|websocket|idle/.test(text)) return "recoverable";
+  return "status";
+}
+
+export function shouldReconnectFileSession(message) {
+  return fileErrorClass(message) === "recoverable";
+}
+
+// The pause button sets userPaused before the element pauses. Any other
+// pause (iOS stealing the audio session) is an interruption.
+export function filePauseKind(userPaused) {
+  return userPaused ? "user" : "interrupted";
+}
+
+// What a context that just left "running" should do to a file session.
+export function fileContextAction(state, { userPaused = false, audioEnded = false, started = false, audioPaused = false } = {}) {
+  if (!audioContextNeedsResume(state) || userPaused || audioEnded) {
+    return { resumeContext: false, pauseMedia: false, hold: false, commit: false };
+  }
+  // Before the first play, a desktop suspend is just resumed. Nothing has
+  // been heard, so there is nothing to commit, and the setup pause must
+  // not be treated as an interruption.
+  if (!started) {
+    return { resumeContext: state !== "interrupted", pauseMedia: false, hold: false, commit: false };
+  }
+  // Interrupted output is silence. Stop the clock with it and hold the
+  // socket. resume() is still attempted; WebKit often ignores it until the
+  // play gesture, which tries again. A plain suspend (a desktop tab) just
+  // tries resume(), without cutting the sentence.
+  if (state === "interrupted") {
+    return { resumeContext: true, pauseMedia: !audioPaused, hold: true, commit: true };
+  }
+  return { resumeContext: true, pauseMedia: false, hold: false, commit: false };
+}
+
+// "reconnect" opens a new session now. "wait" remembers the drop until the
+// user plays again (a socket opened while the graph is paused dies the
+// same way). "popup" is the alert. "status" leaves playback up.
+export function fileProviderFailureAction({
+  message,
+  hidden = false,
+  userPaused = false,
+  audioPaused = false,
+  reconnects = 0,
+  reconnecting = false,
+} = {}) {
+  if (reconnecting) return "ignore";
+  const kind = fileErrorClass(message);
+  if (kind === "status") return "status";
+  if (kind === "fatal") return "popup";
+  if (reconnects >= FILE_RECONNECT_CAP) return "popup";
+  if (hidden || userPaused || audioPaused) return "wait";
+  return "reconnect";
+}
+
+// The play button, and coming back to a file the user did not pause.
+// clearBuffer is the resume half of bufferSteps: the phrase was committed
+// when the gap started, so it must not be committed again.
+export function fileResumeAction({
+  contextState = "running",
+  userPaused = false,
+  interrupted = false,
+  sttOpen = true,
+  reconnects = 0,
+  reconnecting = false,
+  started = false,
+} = {}) {
+  const dead = !sttOpen;
+  return {
+    resumeContext: audioContextNeedsResume(contextState),
+    clearBuffer: !!(started && (userPaused || interrupted)),
+    reconnect: dead && !reconnecting && reconnects < FILE_RECONNECT_CAP,
+    popup: dead && !reconnecting && reconnects >= FILE_RECONNECT_CAP,
+  };
+}
+
 export function transcriptDestination({ tabs, activeRef, targetRef, same }) {
   const index = tabs.findIndex((tab) => same(tab.ref, targetRef));
   if (index < 0) return { stop: true, where: null, index: -1 };

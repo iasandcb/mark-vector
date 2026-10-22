@@ -5,14 +5,19 @@
 // ["soniox-api-key", key] (browsers cannot set an Authorization header).
 // https://soniox.com/docs/guides/websocket-authentication
 //
-// Resolves to the same { stop, commit, clear, setStream, stream } shape as
-// realtime-stt.js. commit() sends {type:"finalize"} when something was
-// heard since the last one. clear() is a no-op on the wire: Soniox has no
-// input buffer to drop, and finalize already closed the phrase. A file
+// Resolves to the same { stop, commit, clear, setStream, hold, alive, stream }
+// shape as realtime-stt.js. commit() sends {type:"finalize"} when something
+// was heard since the last one. clear() is a no-op on the wire: Soniox has
+// no input buffer to drop, and finalize already closed the phrase. hold()
+// sends keepalive immediately, without finalizing — a page about to freeze
+// in the background cannot wait for the interval, and hiding a desktop tab
+// must not cut the sentence. A file
 // passes idleMs null. A microphone passes the three-minute cost guard.
 // Keepalive covers a stretch where no audio frame goes out — Soniox closes
-// a socket that is idle for about 40s.
+// a socket that is idle for about 40s. stop({ keepContext: true }) leaves
+// the AudioContext up so a file can open a fresh socket on the same graph.
 
+import { audioContextNeedsResume } from "./file-dictation.mjs";
 import { applyDiscreteChannels, blockRms, captureAudio, downmixChannels, startChannelPump, trackChannelCount } from "./mic-capture.mjs";
 import { floatToPcm16, sonioxStartConfig, SONIOX_WS_URL } from "./soniox-session.mjs";
 
@@ -154,7 +159,7 @@ export async function startSonioxTranscription({ language, audioContext, onToken
   let capture = null;
   let captureSource = null;
   let pump = null;
-  const stop = () => {
+  const stop = ({ keepContext = false } = {}) => {
     if (stopped) return;
     stopped = true;
     clearInterval(timer);
@@ -187,7 +192,9 @@ export async function startSonioxTranscription({ language, audioContext, onToken
     } catch (err) {
       // already closed
     }
-    audioContext.close().catch(() => {});
+    // A file reconnects on this same context. Closing it would destroy the
+    // MediaElementSource, which cannot be created again for that element.
+    if (!keepContext) audioContext.close().catch(() => {});
   };
   const fail = (message) => {
     if (stopped || failed) return;
@@ -231,7 +238,15 @@ export async function startSonioxTranscription({ language, audioContext, onToken
     });
     if (stopped) {
       stop();
-      return { stop, commit: () => {}, clear: () => {}, setStream: async () => {}, get stream() { return stream; } };
+      return {
+        stop,
+        commit: () => {},
+        clear: () => {},
+        setStream: async () => {},
+        hold: () => {},
+        alive: () => false,
+        get stream() { return stream; },
+      };
     }
 
     let lastSend = performance.now();
@@ -242,7 +257,7 @@ export async function startSonioxTranscription({ language, audioContext, onToken
     };
     // A bad temporary key still fires open, then an error frame.
     ws.addEventListener("message", (event) => {
-      if (typeof event.data !== "string") return;
+      if (stopped || typeof event.data !== "string") return;
       let message;
       try {
         message = JSON.parse(event.data);
@@ -255,7 +270,10 @@ export async function startSonioxTranscription({ language, audioContext, onToken
       }
       if (message.tokens && message.tokens.length) onTokens(message);
     });
-    ws.addEventListener("close", () => fail({ error_message: "connection closed" }));
+    ws.addEventListener("close", () => {
+      if (stopped) return;
+      fail({ error_message: "connection closed" });
+    });
     sendJson(sonioxStartConfig({ language, terms: termList, sampleRate: 16000 }));
 
     let heardSinceCommit = false;
@@ -271,6 +289,13 @@ export async function startSonioxTranscription({ language, audioContext, onToken
     const clear = () => {
       heardSinceCommit = false;
     };
+    // Poke the socket so a pause — or the moment before iOS freezes timers —
+    // is not an idle timeout. Finalizing is the caller's job: a hidden
+    // desktop tab keeps playing and must not cut the phrase here.
+    const hold = () => {
+      sendJson({ type: "keepalive" });
+    };
+    const alive = () => !stopped && !failed && !!ws && ws.readyState === WebSocket.OPEN;
     const noteText = () => {
       textSinceCommit = true;
       heardSinceCommit = true;
@@ -281,7 +306,7 @@ export async function startSonioxTranscription({ language, audioContext, onToken
       previousOnTokens(message);
     };
 
-    if (audioContext.state === "suspended") audioContext.resume().catch(() => {});
+    if (audioContextNeedsResume(audioContext.state)) audioContext.resume().catch(() => {});
     const analyser = audioContext.createAnalyser();
     analyser.fftSize = 1024;
     const samples = new Float32Array(analyser.fftSize);
@@ -389,7 +414,7 @@ export async function startSonioxTranscription({ language, audioContext, onToken
       sendJson({ type: "keepalive" });
     }, KEEPALIVE_MS);
 
-    return { stop, commit, clear, setStream, get stream() { return stream; } };
+    return { stop, commit, clear, setStream, hold, alive, get stream() { return stream; } };
   } catch (err) {
     stop();
     throw err;

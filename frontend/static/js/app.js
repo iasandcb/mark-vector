@@ -21,7 +21,21 @@ import { startRealtimeTranscription } from "./realtime-stt.js";
 import { startSonioxTranscription } from "./soniox-stt.js";
 import { effectiveDictationEngine, enginesOffered, normalizeStoredEngine, resolveDictationEngine } from "./dictation-engine.mjs";
 import { consumeSonioxTranscript, limitContextTerms, spokenPhrasesFromCsv } from "./soniox-session.mjs";
-import { bufferSteps, captureInterrupted, sessionStops, transcriptDestination, uplinkNeedsRebuild } from "./file-dictation.mjs";
+import {
+  FILE_RECONNECT_CAP,
+  audioContextNeedsResume,
+  bufferSteps,
+  captureInterrupted,
+  fileContextAction,
+  fileErrorText,
+  filePauseKind,
+  fileProviderFailureAction,
+  fileResumeAction,
+  sessionStops,
+  shouldReconnectFileSession,
+  transcriptDestination,
+  uplinkNeedsRebuild,
+} from "./file-dictation.mjs";
 import { formatPlaybackClock, parsePlaybackTime, playbackJump, PLAYBACK_JUMP_MESSAGE } from "./audio-time.mjs";
 import { captureAudio } from "./mic-capture.mjs";
 import { createWebSpeechTranscript, webSpeechAfterEnd, webSpeechAfterStartError } from "./web-speech-session.mjs";
@@ -2841,6 +2855,14 @@ el.audioFilePlayBtn.addEventListener("click", () => {
   if (!audioFile) return;
   const player = audioFilePlayer();
   if (player) {
+    const ctx = dictation && dictation.audioContext;
+    // Playing, but the graph is still interrupted: this tap is the gesture
+    // that makes sound come back. Pausing would leave it silent.
+    if (!player.paused && ctx && audioContextNeedsResume(ctx.state)) {
+      ctx.resume().catch(() => {});
+      ensureSpeakerLink(dictation);
+      return;
+    }
     if (player.paused) resumeFilePlayback(dictation);
     else pauseFilePlayback(dictation);
     return;
@@ -3585,31 +3607,247 @@ function applyBufferSteps(session, kind) {
 
 // The user pressed pause (or the lock-screen pause). The phrase heard so
 // far is finalized by the pause listener, once, because this sets userPaused
-// before the element actually pauses.
+// before the element actually pauses. userPaused is how that listener tells
+// a button press from iOS pausing the element for us.
 function pauseFilePlayback(session) {
   if (!session || !session.file) return;
   session.file.userPaused = true;
   const audio = session.file.audio;
   if (!audio.paused) audio.pause();
-  else if (session.file.started) applyBufferSteps(session, "pause");
+  else if (session.file.started) {
+    applyBufferSteps(session, "pause");
+    if (typeof session.hold === "function") session.hold();
+  }
   updateAudioFileBar();
 }
 
-// ▶ again, or the lock-screen play. The first play after connect does not
-// clear: nothing has been committed yet. A play after a user pause clears
-// the silent gap so the next words are a new phrase instead of a second
-// copy of the one just finalized.
-function resumeFilePlayback(session) {
+// One link to the speakers. Some browsers accept a second connect() to the
+// same destination, which would stack the file louder on every resume.
+function ensureSpeakerLink(session) {
+  const file = session && session.file;
+  const ctx = session && session.audioContext;
+  if (!file || !file.source || !ctx || ctx.state === "closed") return;
+  try {
+    file.source.disconnect(ctx.destination);
+  } catch (err) {
+    // not connected
+  }
+  file.source.connect(ctx.destination);
+}
+
+// iOS paused the element, or the audio graph went silent. Finalize once and
+// tell the provider to wait. Resume clears instead of committing again.
+function noteFileInterrupted(session) {
+  if (!session || !session.file || session.file.userPaused || !session.file.started) return;
+  if (!session.file.interrupted) {
+    session.file.interrupted = true;
+    applyBufferSteps(session, "pause");
+  }
+  if (typeof session.hold === "function") session.hold();
+}
+
+// Keep the words already on screen, and aim the next phrase after them.
+// The socket that was about to confirm them is about to be replaced.
+function sealFileTranscript(session) {
+  if (!session) return;
+  try {
+    if (session.commit) session.commit();
+  } catch (err) {
+    // the socket is already gone
+  }
+  if (session.interim) {
+    session.from += session.interim.length;
+    session.interim = "";
+  }
+  if (session.items) {
+    for (const id of session.items.keys()) session.abandoned.add(id);
+    session.items.clear();
+  }
+}
+
+function adoptTranscriptionHandle(session, handle) {
+  session.stop = handle.stop;
+  session.commit = handle.commit;
+  session.clear = handle.clear;
+  session.setStream = handle.setStream;
+  session.hold = typeof handle.hold === "function" ? handle.hold : () => {};
+  session.alive = typeof handle.alive === "function" ? handle.alive : () => true;
+  session.stream = handle.stream;
+  if (!session.file) return;
+  session.file.reconnecting = false;
+  session.file.sttDropped = false;
+  const track = handle.stream && handle.stream.getAudioTracks()[0];
+  if (track) watchFileTrack(session, track);
+}
+
+// The provider closed the file session (Request timeout, a dead socket).
+// Open another one on the same AudioContext, from the current position.
+async function reconnectFileTranscription(session, reasonText) {
+  if (dictation !== session || !session.file || session.file.reconnecting) return;
+  if (typeof session.openEngine !== "function") return;
+  const reconnects = session.file.reconnects || 0;
+  if (reconnects >= FILE_RECONNECT_CAP) {
+    const text = reasonText || session.file.dropReason || "error";
+    stopDictation();
+    alert(t("editor.dictationFailed", { message: text }));
+    return;
+  }
+  session.file.reconnecting = true;
+  session.file.reconnects = reconnects + 1;
+  session.file.sttDropped = false;
+  sealFileTranscript(session);
+  session.sttEpoch = (session.sttEpoch || 0) + 1;
+  const ctx = session.audioContext;
+  try {
+    session.stop({ keepContext: true });
+  } catch (err) {
+    // already ended
+  }
+  if (ctx && audioContextNeedsResume(ctx.state)) ctx.resume().catch(() => {});
+  let stream = null;
+  try {
+    ensureSpeakerLink(session);
+    const dest = ctx.createMediaStreamDestination();
+    try {
+      session.file.source.disconnect(session.file.dest);
+    } catch (err) {
+      // already disconnected
+    }
+    session.file.source.connect(dest);
+    session.file.dest = dest;
+    stream = dest.stream;
+  } catch (err) {
+    session.file.reconnecting = false;
+    session.file.sttDropped = true;
+    session.file.dropReason = (err && err.message) || reasonText || "error";
+    if (session.file.reconnects >= FILE_RECONNECT_CAP || !shouldReconnectFileSession(session.file.dropReason)) {
+      stopDictation();
+      alert(t("editor.dictationFailed", { message: session.file.dropReason }));
+    }
+    return;
+  }
+  showRemoteStatus(t("editor.dictationReconnecting"), { sticky: true });
+  try {
+    const handle = await session.openEngine(stream);
+    if (dictation !== session) {
+      try {
+        handle.stop();
+      } catch (err) {
+        // already ended
+      }
+      return;
+    }
+    adoptTranscriptionHandle(session, handle);
+    if (!session.alive()) {
+      try {
+        session.stop({ keepContext: true });
+      } catch (err) {
+        // already ended
+      }
+      throw new Error(session.file.dropReason || reasonText || "connection closed");
+    }
+    session.file.reconnecting = false;
+    session.file.sttDropped = false;
+    if (!session.file.userPaused && session.file.audio.paused && !session.file.audio.ended) {
+      session.file.audio.play().catch(() => {});
+    }
+    showRemoteStatus(t("editor.dictationListening"));
+  } catch (err) {
+    if (dictation !== session) return;
+    const text = (err && err.message) || reasonText || "error";
+    session.file.reconnecting = false;
+    session.file.sttDropped = true;
+    session.file.dropReason = text;
+    if (!shouldReconnectFileSession(text) || session.file.reconnects >= FILE_RECONNECT_CAP) {
+      stopDictation();
+      alert(t("editor.dictationFailed", { message: text }));
+      return;
+    }
+    if (!session.file.userPaused && !session.file.audio.paused && !document.hidden) {
+      reconnectFileTranscription(session, text);
+      return;
+    }
+    showRemoteStatus(t("editor.dictationReconnecting"), { sticky: true });
+  }
+}
+
+// Soniox "Request timeout" lands here, and so does a file peer that died.
+function handleProviderError(session, message) {
+  if (dictation !== session) return;
+  const text = fileErrorText(message) || "error";
+  if (!session.file) {
+    stopDictation();
+    alert(t("editor.dictationFailed", { message: text }));
+    return;
+  }
+  const action = fileProviderFailureAction({
+    message,
+    hidden: document.hidden,
+    userPaused: session.file.userPaused,
+    audioPaused: session.file.audio.paused,
+    reconnects: session.file.reconnects || 0,
+    reconnecting: session.file.reconnecting,
+  });
+  if (action === "ignore") {
+    session.file.sttDropped = true;
+    session.file.dropReason = text;
+    return;
+  }
+  if (action === "status") {
+    showRemoteStatus(t("editor.dictationFailed", { message: text }));
+    return;
+  }
+  if (action === "popup") {
+    stopDictation();
+    alert(t("editor.dictationFailed", { message: text }));
+    return;
+  }
+  session.file.sttDropped = true;
+  session.file.dropReason = text;
+  if (action === "wait") {
+    showRemoteStatus(t("editor.dictationReconnecting"), { sticky: true });
+    noteFileInterrupted(session);
+    return;
+  }
+  reconnectFileTranscription(session, text);
+}
+
+// ▶ again, or the lock-screen play. Called synchronously from that click so
+// resume() still counts as the gesture. The first play after connect does
+// not clear: nothing has been committed yet. A play after a pause or an
+// interruption clears the silent gap so the next words are a new phrase.
+function resumeFilePlayback(session, { announce = true } = {}) {
   if (!session || !session.file) return;
   const audio = session.file.audio;
   const ctx = session.audioContext;
-  if (ctx && ctx.state === "suspended") ctx.resume().catch(() => {});
-  if (session.file.userPaused) applyBufferSteps(session, "resume");
+  const sttOpen = !session.file.sttDropped && (typeof session.alive !== "function" || session.alive());
+  const action = fileResumeAction({
+    contextState: ctx ? ctx.state : "closed",
+    userPaused: session.file.userPaused,
+    interrupted: session.file.interrupted,
+    sttOpen,
+    reconnects: session.file.reconnects || 0,
+    reconnecting: session.file.reconnecting,
+    started: session.file.started,
+  });
+  // resume() has to be invoked before any await. "interrupted" is not
+  // "suspended", and leaving it there is why the clock moved with no sound.
+  if (ctx && ctx.state !== "closed" && action.resumeContext) ctx.resume().catch(() => {});
+  ensureSpeakerLink(session);
+  if (action.popup) {
+    const text = session.file.dropReason || "error";
+    stopDictation();
+    alert(t("editor.dictationFailed", { message: text }));
+    return;
+  }
+  if (action.clearBuffer) applyBufferSteps(session, "resume");
   session.file.userPaused = false;
+  session.file.interrupted = false;
   session.file.started = true;
-  ensureFileUplink(session);
+  if (action.reconnect) reconnectFileTranscription(session, session.file.dropReason);
+  else if (!session.file.reconnecting) ensureFileUplink(session);
   audio.play().catch((err) => {
-    if (dictation === session) showRemoteStatus(t("editor.dictationFailed", { message: err.message }));
+    if (announce && dictation === session) showRemoteStatus(t("editor.dictationFailed", { message: err.message }));
   });
 }
 
@@ -3637,7 +3875,7 @@ function seekFileTo(position) {
 // while the element itself still plays. A fresh destination is a live track.
 function ensureFileUplink(session) {
   const file = session && session.file;
-  if (!file || !session.setStream || !file.source || file.rebuilding) return;
+  if (!file || !session.setStream || !file.source || file.rebuilding || file.reconnecting) return;
   if (file.rebuiltAt && performance.now() - file.rebuiltAt < 500) return;
   const track = session.stream && session.stream.getAudioTracks()[0];
   if (!uplinkNeedsRebuild(track)) return;
@@ -3669,7 +3907,7 @@ function ensureFileUplink(session) {
 
 function watchFileTrack(session, track) {
   const rebuild = () => {
-    if (dictation !== session || !session.file || session.file.audio.paused) return;
+    if (dictation !== session || !session.file || session.file.reconnecting || session.file.audio.paused) return;
     const current = session.stream && session.stream.getAudioTracks()[0];
     if (current && current !== track) return;
     ensureFileUplink(session);
@@ -3753,10 +3991,15 @@ function startBilledDictation(file, engine) {
     items: new Map(), // item_id -> text so far, in arrival order (OpenAI)
     abandoned: new Set(),
     dropPendingFinals: false,
-    stop: () => audioContext.close().catch(() => {}),
+    stop: ({ keepContext = false } = {}) => {
+      if (!keepContext) audioContext.close().catch(() => {});
+    },
     commit: () => {},
     clear: () => {},
     setStream: null,
+    hold: () => {},
+    alive: () => true,
+    sttEpoch: 1,
     micSuspended: false,
   };
   dictation = session;
@@ -3783,10 +4026,18 @@ function startBilledDictation(file, engine) {
     audio.addEventListener("play", updateAudioFileBar);
     audio.addEventListener("pause", () => {
       file.buffering = false;
-      // A pause the user asked for finalizes the phrase. A pause the
-      // browser inserts while the tab is hidden does not - playback is
-      // supposed to keep going, and committing here would cut the sentence.
-      if (dictation === session && session.file.userPaused) applyBufferSteps(session, "pause");
+      if (dictation !== session || !session.file) {
+        updateAudioFileBar();
+        return;
+      }
+      // The button sets userPaused first. Any other pause is the OS taking
+      // the audio session: finalize once and hold the socket, but don't stop.
+      if (filePauseKind(session.file.userPaused) === "user") {
+        applyBufferSteps(session, "pause");
+        if (typeof session.hold === "function") session.hold();
+      } else if (session.file.started && !audio.ended) {
+        noteFileInterrupted(session);
+      }
       updateAudioFileBar();
     });
     audio.addEventListener("waiting", () => {
@@ -3809,10 +4060,31 @@ function startBilledDictation(file, engine) {
       }, AUDIO_FILE_TAIL_MS);
       showRemoteStatus(t("editor.audioFileEnded"));
     });
-    session.file = { audio, source, dest: out, started: false, userPaused: false, seekedAt: 0, rebuilding: false };
+    session.file = {
+      audio,
+      source,
+      dest: out,
+      started: false,
+      userPaused: false,
+      interrupted: false,
+      seekedAt: 0,
+      rebuilding: false,
+      reconnects: 0,
+      reconnecting: false,
+      sttDropped: false,
+      dropReason: "",
+    };
     audioContext.addEventListener("statechange", () => {
-      if (dictation !== session || session.file.userPaused) return;
-      if (audioContext.state === "suspended") audioContext.resume().catch(() => {});
+      if (dictation !== session || !session.file) return;
+      const action = fileContextAction(audioContext.state, {
+        userPaused: session.file.userPaused,
+        audioEnded: audio.ended,
+        started: session.file.started,
+        audioPaused: audio.paused,
+      });
+      if (action.commit || action.hold) noteFileInterrupted(session);
+      if (action.pauseMedia && !audio.paused && !audio.ended) audio.pause();
+      if (action.resumeContext) audioContext.resume().catch(() => {});
     });
     setAudioFileMediaSession(file);
   }
@@ -3833,65 +4105,71 @@ function startBilledDictation(file, engine) {
     stopDictation();
     showRemoteStatus(t("editor.dictationIdleStopped"));
   };
-  const connect = engine === "soniox"
-    ? startSonioxTranscription({
+  // Each socket captures the epoch it was opened with. A reconnect bumps
+  // the epoch first, so a late "Request timeout" from the old socket cannot
+  // write the phrase again or pop the stop alert.
+  const openEngine = (stream) => {
+    const epochAtStart = session.sttEpoch || 1;
+    const still = () => dictation === session && session.sttEpoch === epochAtStart;
+    if (engine === "soniox") {
+      return startSonioxTranscription({
         language,
         audioContext,
         audio: micAudio,
-        stream: fileStream,
+        stream,
         idleMs,
         onIdle,
         terms: spokenMathTerms,
         onTokens: (message) => {
-          if (!dictationStillRunning(session)) return;
+          if (!still() || !dictationStillRunning(session)) return;
           const taken = consumeSonioxTranscript(message.tokens, session.dropPendingFinals);
           session.dropPendingFinals = taken.dropPendingFinals;
           if (!taken.finals && !taken.interim) return;
+          if (session.file) session.file.reconnects = 0;
           writeDictation(taken.finals, taken.interim);
         },
         onError: (message) => {
-          if (dictation !== session) return;
-          const text = (message && (message.error_message || message.error_type)) || "error";
-          stopDictation();
-          alert(t("editor.dictationFailed", { message: text }));
-        },
-      })
-    : startRealtimeTranscription({
-        language,
-        audioContext,
-        audio: micAudio,
-        stream: fileStream,
-        idleMs,
-        onIdle,
-        onEvent: (event) => {
-          if (!dictationStillRunning(session)) return;
-          if (event.type === "conversation.item.input_audio_transcription.delta") {
-            if (session.abandoned.has(event.item_id)) return;
-            session.items.set(event.item_id, (session.items.get(event.item_id) || "") + (event.delta || ""));
-            writeDictation("", pendingText());
-          } else if (event.type === "conversation.item.input_audio_transcription.completed") {
-            if (session.abandoned.delete(event.item_id)) return;
-            session.items.delete(event.item_id);
-            writeDictation(event.transcript || "", pendingText());
-          } else if (event.type === "error") {
-            showRemoteStatus(t("editor.dictationFailed", { message: (event.error && event.error.message) || "error" }));
-          }
+          if (!still()) return;
+          handleProviderError(session, message);
         },
       });
-  connect
+    }
+    return startRealtimeTranscription({
+      language,
+      audioContext,
+      audio: micAudio,
+      stream,
+      idleMs,
+      onIdle,
+      onEvent: (event) => {
+        if (!still() || !dictationStillRunning(session)) return;
+        if (event.type === "conversation.item.input_audio_transcription.delta") {
+          if (session.abandoned.has(event.item_id)) return;
+          session.items.set(event.item_id, (session.items.get(event.item_id) || "") + (event.delta || ""));
+          if (session.file) session.file.reconnects = 0;
+          writeDictation("", pendingText());
+        } else if (event.type === "conversation.item.input_audio_transcription.completed") {
+          if (session.abandoned.delete(event.item_id)) return;
+          session.items.delete(event.item_id);
+          if (session.file && event.transcript) session.file.reconnects = 0;
+          writeDictation(event.transcript || "", pendingText());
+        } else if (event.type === "error") {
+          const text = (event.error && event.error.message) || "error";
+          if (session.file) handleProviderError(session, text);
+          else showRemoteStatus(t("editor.dictationFailed", { message: text }));
+        }
+      },
+    });
+  };
+  session.openEngine = openEngine;
+  openEngine(fileStream)
     .then((handle) => {
       if (dictation !== session) {
         handle.stop();
         return;
       }
-      session.stop = handle.stop;
-      session.commit = handle.commit;
-      session.clear = handle.clear;
-      session.setStream = handle.setStream;
-      session.stream = handle.stream;
+      adoptTranscriptionHandle(session, handle);
       if (file) {
-        const track = handle.stream.getAudioTracks()[0];
-        if (track) watchFileTrack(session, track);
         const audio = session.file.audio;
         const seek = () => (audio.currentTime = file.position);
         if (audio.readyState >= 1) seek();
@@ -3975,20 +4253,41 @@ function rebaseDictation(edit) {
   session.from = el.editor.selectionStart;
 }
 
+function recoverVisibleFileSession() {
+  const session = dictation;
+  if (!session || !session.file || document.hidden) return;
+  const file = session.file;
+  const ctx = session.audioContext;
+  if (file.userPaused) {
+    if (ctx && audioContextNeedsResume(ctx.state)) ctx.resume().catch(() => {});
+    ensureSpeakerLink(session);
+    return;
+  }
+  const needsGraph = ctx && audioContextNeedsResume(ctx.state);
+  const paused = file.started && file.audio.paused && !file.audio.ended;
+  const dropped = file.sttDropped || (typeof session.alive === "function" && !session.alive());
+  if (file.interrupted || paused || dropped || needsGraph) {
+    // Not a tap. A rejected play() must not look like the provider stopping.
+    resumeFilePlayback(session, { announce: false });
+    return;
+  }
+  ensureFileUplink(session);
+}
+
 // Hiding the page does not stop dictation. The browser drops a wake lock
-// whenever the page is hidden, and it may also suspend the microphone,
-// the speech recognizer, or the file's audio graph - those are started
-// again here. A file the user paused stays paused.
+// whenever the page is hidden, and iOS may also freeze timers, so a file
+// sends keepalive once on the way out. The graph is resumed when the page
+// is visible again. A file the user paused stays paused.
 document.addEventListener("visibilitychange", () => {
-  if (document.hidden || !dictation) return;
+  if (document.hidden) {
+    if (dictation && dictation.file && typeof dictation.hold === "function") dictation.hold();
+    return;
+  }
+  if (!dictation) return;
   keepScreenOn(true);
   const session = dictation;
   if (session.file) {
-    if (!session.file.userPaused) {
-      if (session.audioContext && session.audioContext.state === "suspended") session.audioContext.resume().catch(() => {});
-      ensureFileUplink(session);
-      if (session.file.started && session.file.audio.paused) session.file.audio.play().catch(() => {});
-    }
+    recoverVisibleFileSession();
     return;
   }
   if (session.engine === "webspeech") {
@@ -4011,6 +4310,20 @@ document.addEventListener("visibilitychange", () => {
       }
     }, 1000);
   }
+});
+// bfcache restore and coming back to the window. visibilitychange does not
+// fire for every one of these, and resume() needs another try after iOS
+// interrupted the audio session.
+window.addEventListener("pageshow", () => recoverVisibleFileSession());
+// Focus is also the play button's gesture, so this only wakes the graph.
+// Starting playback here would race that click and pause it again.
+window.addEventListener("focus", () => {
+  const session = dictation;
+  if (!session || document.hidden) return;
+  const ctx = session.audioContext;
+  if (!ctx || !audioContextNeedsResume(ctx.state)) return;
+  ctx.resume().catch(() => {});
+  if (session.file) ensureSpeakerLink(session);
 });
 el.dictationRecordBtn.addEventListener("click", () => {
   recordWithDictation = !recordWithDictation;
