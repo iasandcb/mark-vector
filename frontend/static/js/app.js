@@ -19,7 +19,7 @@ import { createGamepadRemote } from "./remote.js";
 import { splitSlides, lastSlideStart } from "./slides.js";
 import { startRealtimeTranscription } from "./realtime-stt.js";
 import { startSonioxTranscription } from "./soniox-stt.js";
-import { enginesOffered, normalizeStoredEngine, resolveDictationEngine } from "./dictation-engine.mjs";
+import { effectiveDictationEngine, enginesOffered, normalizeStoredEngine, resolveDictationEngine } from "./dictation-engine.mjs";
 import { consumeSonioxTranscript, limitContextTerms, spokenPhrasesFromCsv } from "./soniox-session.mjs";
 import { bufferSteps, captureInterrupted, sessionStops, transcriptDestination, uplinkNeedsRebuild } from "./file-dictation.mjs";
 import { recordingSupported, startRecording, RECORDING_AUDIO } from "./recording.js";
@@ -2428,12 +2428,16 @@ function updateInlineCompleteButton() {
 //     audio goes to the browser vendor's recognizer, not to this app.
 //     This stays the default. It only hears the microphone, so a file
 //     never uses it.
-//   - OpenAI realtime (realtime-stt.js, gpt-live-transcribe) where Web
-//     Speech doesn't work, and wherever the engine select says so.
-//     Needs OPENAI_API_KEY. About $0.017 per minute streamed.
-//   - Soniox realtime (soniox-stt.js, stt-rt-v5) when SONIOX_API_KEY is
-//     set and the select says so. About $0.12 per hour. The long-lived
-//     key stays on the server; the page gets a temporary one.
+//   - Soniox realtime (soniox-stt.js, stt-rt-v5) when Web Speech does not
+//     work, when a file is played with the built-in choice, and whenever
+//     the select says so. Needs SONIOX_API_KEY. About $0.12 per hour.
+//     The long-lived key stays on the server; the page gets a temporary one.
+//   - OpenAI realtime (realtime-stt.js, gpt-live-transcribe) when the
+//     select says so, and when Soniox is not configured. About $0.017
+//     per minute streamed. Needs OPENAI_API_KEY.
+// The icon shows the engine that will actually run, which can differ from
+// the remembered choice (built-in on a browser without Web Speech shows
+// Soniox). While a file is being transcribed, the icon is that file's engine.
 // A quiet microphone hangs up after REALTIME_IDLE_MS on either billed
 // engine. Hiding the tab does not: if the browser itself suspends the
 // capture, it is opened again when the page is visible. A played file is
@@ -2458,6 +2462,9 @@ let sonioxSttAvailable = false;
 // stay in the select. Hiding an engine before we know it exists would
 // rewrite the value and the next save would forget it.
 let sttConfigLoaded = false;
+// Remembered choice. The select's value is the engine actually in use,
+// which is not always this (a built-in choice with no Web Speech shows Soniox).
+let dictationEnginePreference = "builtin";
 // Realtime *microphone* dictation stops itself after this long without
 // hearing anything - the cost guard. A file being played does not use it.
 const REALTIME_IDLE_MS = 3 * 60 * 1000;
@@ -2468,7 +2475,7 @@ function dictationSupported() {
 
 function dictationEngineArgs(kind) {
   return {
-    stored: el.dictationEngine.value,
+    stored: dictationEnginePreference,
     webSpeech: WEB_SPEECH_USABLE,
     openai: realtimeSttAvailable,
     soniox: sonioxSttAvailable,
@@ -2476,10 +2483,27 @@ function dictationEngineArgs(kind) {
   };
 }
 
-// Microphone: the select, with Web Speech as the default. A file never
-// uses Web Speech — builtin still means OpenAI when that key exists.
+// Microphone: the remembered choice, with Web Speech as the default where
+// it works. A file never uses Web Speech — a built-in choice uses Soniox
+// when that key exists, and OpenAI otherwise.
 function chosenEngine(kind = "mic") {
   return resolveDictationEngine(dictationEngineArgs(kind));
+}
+
+function effectiveEngine() {
+  return effectiveDictationEngine({
+    stored: dictationEnginePreference,
+    webSpeech: WEB_SPEECH_USABLE,
+    openai: realtimeSttAvailable,
+    soniox: sonioxSttAvailable,
+    fileRunning: !!(dictation && dictation.file),
+  });
+}
+
+function engineHintKey(engine, button) {
+  if (engine === "soniox") return button ? "editor.dictationSonioxTitle" : "editor.dictationEngineSoniox";
+  if (engine === "openai") return button ? "editor.dictationRealtimeTitle" : "editor.dictationEngineRealtime";
+  return button ? "editor.dictationTitle" : "editor.dictationEngineBuiltin";
 }
 
 function fileDictationAvailable() {
@@ -2487,10 +2511,7 @@ function fileDictationAvailable() {
 }
 
 function dictationTitleKey() {
-  const engine = chosenEngine("mic");
-  if (engine === "soniox") return "editor.dictationSonioxTitle";
-  if (engine === "openai") return "editor.dictationRealtimeTitle";
-  return "editor.dictationTitle";
+  return engineHintKey(effectiveEngine(), true);
 }
 
 // Hide engines whose key (or Web Speech) is missing. A remembered Soniox
@@ -2507,10 +2528,9 @@ function syncDictationEngineOptions() {
     opt.hidden = !on;
     opt.disabled = !on;
   }
-  if (!offered.includes(normalizeStoredEngine(el.dictationEngine.value))) {
-    const fallback = chosenEngine("mic");
-    if (fallback) el.dictationEngine.value = fallback;
-  }
+  const shown = effectiveEngine();
+  if (shown && offered.includes(shown)) el.dictationEngine.value = shown;
+  el.dictationEngine.title = t(shown ? engineHintKey(shown, false) : "editor.dictationEngineTitle");
   el.dictationEngine.hidden = offered.length < 2;
 }
 
@@ -2569,12 +2589,12 @@ function restoreDictationEngine() {
   } catch (err) {
     stored = null;
   }
-  el.dictationEngine.value = normalizeStoredEngine(stored);
+  dictationEnginePreference = normalizeStoredEngine(stored);
 }
 
 function saveDictationEngine() {
   try {
-    localStorage.setItem(DICTATION_ENGINE_KEY, el.dictationEngine.value);
+    localStorage.setItem(DICTATION_ENGINE_KEY, dictationEnginePreference);
   } catch (err) {
     // localStorage unavailable - the choice just won't persist across reloads
   }
@@ -7574,6 +7594,7 @@ restoreDictationLang();
 restoreDictationEngine();
 el.dictationBtn.addEventListener("click", toggleDictation);
 el.dictationEngine.addEventListener("change", () => {
+  dictationEnginePreference = normalizeStoredEngine(el.dictationEngine.value);
   saveDictationEngine();
   updateDictationButton();
   if (!dictation) return;

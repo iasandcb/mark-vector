@@ -90,8 +90,9 @@
               <option value="en-US">EN</option>
               <option value="ja-JP">JA</option>
             </select>
-            <!-- Shown when more than one engine is available. Web Speech is
-                 the default; a played file never uses it. "realtime" in
+            <!-- Shown when more than one engine is available. The closed
+                 select shows the engine actually in use (a built-in choice
+                 without Web Speech shows Soniox). "realtime" in
                  localStorage is the old name for OpenAI. -->
             <select id="dictation-engine" class="dictation-lang" hidden data-i18n-title="editor.dictationEngineTitle">
               <option value="builtin" data-i18n-title="editor.dictationEngineBuiltin">🌐</option>
