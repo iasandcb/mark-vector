@@ -1937,7 +1937,8 @@ kbd.shortcut-key {
 .recordings-clock {
   font-variant-numeric: tabular-nums;
   font-size: 14px;
-  min-width: 9em;
+  min-width: 0;
+  max-width: 100%;
   white-space: nowrap;
 }
 
@@ -2477,15 +2478,20 @@ kbd.shortcut-key {
   overflow-x: auto;
 }
 
-/* An audio file being transcribed as it plays (see "audio file" in app.js). */
+/* An audio file being transcribed as it plays (see "audio file" in app.js).
+   Wraps on a phone: a single nowrap row of the clock, the time field, and
+   이동 is wider than a 375px screen and was scrolling the editor sideways. */
 .audio-file-bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   padding: 4px 10px;
   border-bottom: 1px solid var(--border);
   font-size: 12px;
   min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 .audio-file-bar[hidden] {
   display: none;
@@ -2495,7 +2501,7 @@ kbd.shortcut-key {
   font-variant-numeric: tabular-nums;
 }
 .audio-file-play {
-  min-width: 34px;
+  min-width: 44px;
   padding: 4px 8px;
 }
 .audio-file-name {
@@ -2508,20 +2514,31 @@ kbd.shortcut-key {
 }
 .audio-file-seek {
   flex: 1 1 80px;
-  min-width: 60px;
+  min-width: 0;
+  max-width: 100%;
 }
 .audio-file-time {
+  flex: 0 1 auto;
+  min-width: 0;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
 }
 .audio-goto {
   display: flex;
   align-items: center;
   gap: 6px;
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
 }
 .audio-goto input {
+  flex: 0 1 6.2em;
   width: 6.2em;
+  min-width: 0;
+  max-width: 100%;
   font-size: 16px;
   font-variant-numeric: tabular-nums;
   padding: 6px 8px;
@@ -2530,6 +2547,7 @@ kbd.shortcut-key {
   background: var(--panel);
   color: var(--text);
   touch-action: manipulation;
+  box-sizing: border-box;
 }
 .audio-goto input[aria-invalid="true"] {
   border-color: #b91c1c;
@@ -2539,10 +2557,13 @@ kbd.shortcut-key {
   min-height: 36px;
 }
 .audio-goto-error {
-  flex: 1 0 100%;
+  flex: 1 1 100%;
+  max-width: 100%;
+  min-width: 0;
   margin: 0;
   color: #b91c1c;
   font-size: 12px;
+  overflow-wrap: anywhere;
 }
 .audio-goto-error.waiting {
   color: var(--muted);
@@ -2553,11 +2574,17 @@ kbd.shortcut-key {
 @media (pointer: coarse) {
   .audio-file-skip,
   .audio-file-play,
+  .audio-file-rate,
+  .audio-file-close,
   .audio-goto input,
   .audio-goto .secondary-btn,
   .recordings-skip .secondary-btn {
     min-height: 44px;
   }
+  .audio-file-skip,
+  .audio-file-play,
+  .audio-file-rate,
+  .audio-file-close,
   .audio-goto .secondary-btn,
   .recordings-skip .secondary-btn {
     min-width: 44px;
@@ -2571,7 +2598,19 @@ kbd.shortcut-key {
   .audio-file-name {
     display: none;
   }
+  /* The scrubber takes a row of its own so the clock and the time field
+     wrap under the transport buttons instead of running off the screen. */
   .audio-file-seek {
-    flex: 1 1 140px;
+    flex: 1 1 100%;
+    min-width: 0;
+    max-width: 100%;
+    height: 44px;
+  }
+  .audio-file-bar .secondary-btn,
+  .audio-file-bar .icon-btn {
+    box-sizing: border-box;
+    min-height: 44px;
+    min-width: 44px;
+    padding: 8px 10px;
   }
 }
