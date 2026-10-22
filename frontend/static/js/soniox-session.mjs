@@ -12,16 +12,22 @@ export const SONIOX_SAMPLE_RATE = 16000;
 // Stay under Soniox's context cap (~10k characters / ~8k tokens).
 export const SONIOX_TERMS_CHAR_LIMIT = 8000;
 const LANGUAGE_HINTS = new Set(["ko", "en", "ja"]);
+// Stream markers, not speech. `<end>` is endpoint detection and `<fin>`
+// is manual finalization. They sometimes arrive glued to a word.
+export function stripSonioxControlTokens(text) {
+  if (typeof text !== "string" || text === "") return "";
+  return text.replace(/<(?:fin|end)>/gi, "");
+}
 
 export function renderSonioxMessage(tokens) {
   let finals = "";
   let interim = "";
   for (const token of tokens || []) {
-    if (!token || typeof token.text !== "string" || token.text === "") continue;
-    // Endpoint marker some responses include. It is not speech.
-    if (token.text === "<end>") continue;
-    if (token.is_final) finals += token.text;
-    else interim += token.text;
+    if (!token || typeof token.text !== "string") continue;
+    const text = stripSonioxControlTokens(token.text);
+    if (text === "") continue;
+    if (token.is_final) finals += text;
+    else interim += text;
   }
   return { finals, interim };
 }

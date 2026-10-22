@@ -7,6 +7,7 @@ import {
   renderSonioxMessage,
   sonioxStartConfig,
   spokenPhrasesFromCsv,
+  stripSonioxControlTokens,
 } from "./soniox-session.mjs";
 
 // The evolution from Soniox's realtime docs for "How are you doing?".
@@ -65,10 +66,24 @@ test("final tokens append once and non-final tokens replace the interim", () => 
   assert.equal(second.interim, "How are");
 });
 
-test("an endpoint marker is not written, and empty text is skipped", () => {
-  assert.deepEqual(renderSonioxMessage([{ text: "<end>", is_final: true }, { text: "", is_final: true }, { text: "가", is_final: true }]), {
-    finals: "가",
-    interim: "",
+test("endpoint and finalization markers never reach the document", () => {
+  assert.equal(stripSonioxControlTokens("<fin>"), "");
+  assert.equal(stripSonioxControlTokens("안녕<fin>"), "안녕");
+  assert.equal(stripSonioxControlTokens("amen.<END>"), "amen.");
+  assert.deepEqual(
+    renderSonioxMessage([
+      { text: "<end>", is_final: true },
+      { text: "<fin>", is_final: true },
+      { text: "<FIN>", is_final: false },
+      { text: "", is_final: true },
+      { text: "가", is_final: true },
+      { text: "<end>", is_final: false },
+    ]),
+    { finals: "가", interim: "" },
+  );
+  assert.deepEqual(renderSonioxMessage([{ text: "안녕<fin>", is_final: true }, { text: "요<end>", is_final: false }]), {
+    finals: "안녕",
+    interim: "요",
   });
 });
 
