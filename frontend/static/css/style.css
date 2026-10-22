@@ -857,7 +857,7 @@ body.row-dragging {
    on a 390px screen - tighter padding and gaps keep them on one, down to
    360px. */
 @media (max-width: 700px) {
-  .editor-pane > .pane-header {
+  .editor-column > .pane-header {
     padding-left: 8px;
     padding-right: 8px;
   }
@@ -2612,5 +2612,193 @@ kbd.shortcut-key {
     min-height: 44px;
     min-width: 44px;
     padding: 8px 10px;
+  }
+}
+
+/* Voice discussion. The editor's own column is what used to be the pane's
+   direct children, so the conversation can sit beside it without retuning
+   the outer grid. */
+.editor-column {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+}
+
+.discuss-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg);
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.editor-pane.discuss-open {
+  display: grid;
+  grid-template-columns: minmax(260px, 380px) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.editor-pane.discuss-open > .discuss-pane {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.editor-pane.discuss-open > .editor-column {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.discuss-tabs {
+  display: none;
+}
+
+.discuss-bar,
+.discuss-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  min-width: 0;
+}
+
+.discuss-meta {
+  padding-top: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.discuss-silence-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.discuss-silence {
+  font-size: 16px;
+  width: 4.5rem;
+  min-height: 44px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+}
+
+.discuss-status,
+.discuss-partial,
+.discuss-empty {
+  margin: 0;
+  padding: 0 10px 8px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.discuss-partial {
+  color: var(--text);
+  font-size: 15px;
+}
+
+.discuss-log {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 0 10px 12px;
+}
+
+.discuss-bubble {
+  margin: 0 0 10px;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.discuss-bubble p {
+  margin: 2px 0 0;
+  white-space: pre-wrap;
+}
+
+.discuss-who {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+
+.discuss-user .discuss-who {
+  color: var(--accent);
+}
+
+.discuss-markers,
+.discuss-meter {
+  overflow-wrap: anywhere;
+}
+
+.editor-column.discuss-flash .cm-editor {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+@media (max-width: 700px) {
+  body[data-mobile-view="editor"] .editor-pane.discuss-open {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .editor-pane.discuss-open > .discuss-pane,
+  .editor-pane.discuss-open > .editor-column {
+    max-width: 100%;
+  }
+
+  .discuss-tabs {
+    display: flex;
+    flex: 0 0 auto;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .discuss-tab {
+    flex: 1;
+    min-height: 44px;
+    border: none;
+    background: none;
+    color: var(--muted);
+    font-size: 16px;
+    font-weight: 600;
+  }
+
+  .discuss-tab[aria-selected="true"] {
+    color: var(--accent);
+    box-shadow: inset 0 -2px 0 var(--accent);
+  }
+
+  .discuss-bar .primary-btn,
+  .discuss-bar .secondary-btn {
+    min-height: 44px;
+    min-width: 44px;
+    font-size: 16px;
+  }
+
+  .editor-pane.discuss-open:not(.discuss-show-doc) > .editor-column {
+    display: none;
+  }
+
+  .editor-pane.discuss-open.discuss-show-doc .discuss-bar,
+  .editor-pane.discuss-open.discuss-show-doc .discuss-meta,
+  .editor-pane.discuss-open.discuss-show-doc .discuss-status,
+  .editor-pane.discuss-open.discuss-show-doc .discuss-log,
+  .editor-pane.discuss-open.discuss-show-doc .discuss-partial {
+    display: none;
+  }
+
+  .editor-pane.discuss-open:not(.discuss-show-doc) > .discuss-pane,
+  .editor-pane.discuss-open.discuss-show-doc > .editor-column {
+    flex: 1;
+    min-height: 0;
   }
 }

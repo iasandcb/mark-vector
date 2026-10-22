@@ -43,6 +43,7 @@ import { recordingSupported, startRecording, RECORDING_AUDIO } from "./recording
 import { parseEditBlocks, applyEditBlock, collapseEditBlocks } from "./doc-edits.js";
 import { createAnalysisPanel } from "./analysis.js";
 import { punctuateSpeech } from "./punctuation.js";
+import { mountDiscussion } from "./discussion-pane.js";
 
 // Inline-thread markers. Declared up here, away from the rest of the
 // inline-thread code further down, because `el` below builds the editor,
@@ -2590,6 +2591,14 @@ const DICTATION_RECORD_KEY = "mark-vector:dictation-record";
 // switching documents (a new `active`) stops it rather than typing into
 // whatever document happens to be open next.
 let dictation = null;
+let discussionPane = null;
+let discussAwake = false;
+
+function setDiscussAwake(on) {
+  discussAwake = on;
+  if (on) keepScreenOn(true);
+  else if (!dictation) keepScreenOn(false);
+}
 
 function restoreDictationLang() {
   let stored = null;
@@ -3026,11 +3035,11 @@ async function keepScreenOn(on) {
     if (lock) lock.release().catch(() => {});
     return;
   }
-  if (wakeLock || !navigator.wakeLock) return;
+    if (wakeLock || !navigator.wakeLock) return;
   try {
     wakeLock = await navigator.wakeLock.request("screen");
     wakeLock.addEventListener("release", () => (wakeLock = null));
-    if (!dictation) keepScreenOn(false);
+    if (!dictation && !discussAwake) keepScreenOn(false);
   } catch (err) {
     // not allowed right now (page hidden, low battery) - tried again on return
   }
@@ -3344,6 +3353,7 @@ function writeDictationText(finalText, interimText, buf) {
 
 function startDictation() {
   if (dictation || !dictationUsable() || !dictationSupported()) return;
+  if (discussionPane && discussionPane.listening()) discussionPane.stop();
   // Picks up math vocabulary saved from another browser since this page
   // loaded - in the background, the first phrase won't wait for it.
   api.getSpokenMath().then(({ content }) => setSpokenMathVocabulary(parseSpokenMathCsv(content))).catch(() => {});
@@ -8482,6 +8492,42 @@ async function loadAuthInfo() {
     // non-critical - leave el.authInfo hidden
   }
 }
+
+discussionPane = mountDiscussion({
+  t,
+  getLanguage,
+  stopDictation,
+  documentTarget() {
+    if (!active || !active.projectId || !active.sessionId || active.role === "hermes-session") return null;
+    return { projectId: active.projectId, sessionId: active.sessionId, filename: active.filename };
+  },
+  modelChoice() {
+    return {
+      provider: el.providerSelect.value,
+      model: el.modelSelect.value,
+      reasoningEffort: el.reasoningSelect.value,
+    };
+  },
+  readContent: () => el.editor.value,
+  applyRange: (from, to, text) => el.editor.replaceRange(from, to, text),
+  selectRange: (start, end) => {
+    el.editor.setSelectionRange(start, end);
+    if (typeof el.editor.revealRange === "function") el.editor.revealRange(start, end);
+  },
+  restoreContent: (text) => {
+    el.editor.value = text;
+  },
+  save: () => saveActive(),
+  sonioxReady: () => sonioxSttAvailable,
+  dictationLanguage: () => (el.dictationLang.value || "ko-KR").split("-")[0],
+  spokenTerms: spokenMathTerms,
+  setAwake: setDiscussAwake,
+  setAudioSession: setAudioSessionType,
+  onDocumentEdited() {
+    updateFilenameLabel();
+    renderPreview();
+  },
+});
 
 (async function init() {
   // Captured before clearEditor() below, which would otherwise wipe this

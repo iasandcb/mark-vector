@@ -48,6 +48,36 @@
     <div id="tree-resizer" class="pane-resizer" data-i18n-title="ui.dragToResize"></div>
 
     <main id="editor-pane" class="editor-pane">
+      <!-- Voice discussion: spoken turns on the left, this document on the
+           right. Hidden until 🗣. On a phone the two tabs below pick one. -->
+      <aside id="discuss-pane" class="discuss-pane" hidden>
+        <div class="discuss-tabs" role="tablist">
+          <button id="discuss-tab-talk" class="discuss-tab" type="button" role="tab" aria-selected="true" data-i18n="discuss.talk"></button>
+          <button id="discuss-tab-doc" class="discuss-tab" type="button" role="tab" aria-selected="false" data-i18n="discuss.doc"></button>
+        </div>
+        <div class="discuss-bar">
+          <button id="discuss-start" class="primary-btn" type="button" data-i18n="discuss.start"></button>
+          <button id="discuss-stop" class="secondary-btn" type="button" hidden data-i18n="discuss.stop"></button>
+          <button id="discuss-mute" class="secondary-btn" type="button" aria-pressed="false" data-i18n="discuss.mute"></button>
+          <button id="discuss-ptt" class="secondary-btn" type="button" aria-pressed="false" data-i18n="discuss.ptt" data-i18n-title="discuss.pttTitle"></button>
+          <button id="discuss-send" class="secondary-btn" type="button" data-i18n="discuss.send"></button>
+          <button id="discuss-undo" class="secondary-btn" type="button" disabled data-i18n="discuss.undo"></button>
+        </div>
+        <div class="discuss-meta">
+          <label class="discuss-silence-label">
+            <span data-i18n="discuss.silenceLabel"></span>
+            <input id="discuss-silence" class="discuss-silence" type="number" min="0.4" max="8" step="0.1" value="1.5" inputmode="decimal">
+          </label>
+          <span id="discuss-meter" class="discuss-meter"></span>
+          <span id="discuss-markers" class="discuss-markers"></span>
+        </div>
+        <p id="discuss-status" class="discuss-status" role="status"></p>
+        <div id="discuss-log" class="discuss-log" aria-live="polite">
+          <p id="discuss-empty" class="discuss-empty" data-i18n="discuss.empty"></p>
+        </div>
+        <p id="discuss-partial" class="discuss-partial" hidden></p>
+      </aside>
+      <div id="editor-column" class="editor-column">
       <!-- Open documents as tabs (see the tabs section in app.js) - shown
            once there's more than one. -->
       <div id="tab-strip" class="tab-strip" role="tablist" hidden></div>
@@ -141,6 +171,10 @@
                only indicator that it's open on a screen too narrow to show
                the second pane at all (a phone, or a tablet - hidden there
                entirely, see the max-width: 900px block in style.css). -->
+          <button id="discuss-toggle-btn" class="secondary-btn" type="button" aria-pressed="false" data-i18n-title="discuss.toggleTitle">
+            <span class="btn-icon" aria-hidden="true">🗣</span>
+            <span class="btn-label" data-i18n="discuss.toggle"></span>
+          </button>
           <button id="split-toggle-btn" class="secondary-btn" type="button" aria-pressed="false" data-i18n-title="editor.splitView">
             <span class="btn-icon" aria-hidden="true">◫</span>
             <span class="btn-label" data-i18n="editor.splitView"></span>
@@ -235,6 +269,7 @@
       <div class="scroll-nav">
         <button id="editor-scroll-top-btn" class="icon-btn scroll-nav-btn" type="button" data-i18n-title="ui.scrollToTop">↑</button>
         <button id="editor-scroll-bottom-btn" class="icon-btn scroll-nav-btn" type="button" data-i18n-title="ui.scrollToBottom">↓</button>
+      </div>
       </div>
     </main>
 

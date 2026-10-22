@@ -43,7 +43,7 @@ export function consumeSonioxTranscript(tokens, dropPendingFinals) {
   return { finals: rendered.finals, interim: rendered.interim, dropPendingFinals: !!dropPendingFinals };
 }
 
-export function sonioxStartConfig({ language, terms, sampleRate = SONIOX_SAMPLE_RATE } = {}) {
+export function sonioxStartConfig({ language, terms, sampleRate = SONIOX_SAMPLE_RATE, maxEndpointDelayMs } = {}) {
   const hint = LANGUAGE_HINTS.has(language) ? language : "ko";
   const config = {
     model: SONIOX_MODEL,
@@ -53,6 +53,9 @@ export function sonioxStartConfig({ language, terms, sampleRate = SONIOX_SAMPLE_
     language_hints: [hint],
     enable_endpoint_detection: true,
   };
+  // Dictation leaves Soniox's default (2000ms). A discussion can ask for a
+  // shorter cap so `<end>` usually arrives before the silence fallback.
+  if (maxEndpointDelayMs) config.max_endpoint_delay_ms = maxEndpointDelayMs;
   if (terms && terms.length) config.context = { terms };
   return config;
 }

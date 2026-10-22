@@ -12,6 +12,7 @@ from ..models import (
     CopyDocumentRequest,
     CreateConversationRequest,
     CreateMessageRequest,
+    DiscussRequest,
     InlineCompleteRequest,
     MoveConversationRequest,
     MoveDocumentRequest,
@@ -470,5 +471,80 @@ async def inline_complete(project_id: str, conv_id: str, req: InlineCompleteRequ
             config = build_config(storage.get_global_custom_symbols())
             full_text, _ = await asyncio.to_thread(convert_math_to_asciimath, full_text, config, req.hybrid_math)
         yield json.dumps({"type": "done", "text": full_text}) + "\n"
+
+    return StreamingResponse(event_stream(), media_type="application/x-ndjson")
+
+
+_DISCUSSION_LANGUAGE = {"ko": "Korean", "en": "English", "ja": "Japanese"}
+
+
+def _discussion_preamble(language: str) -> str:
+    name = _DISCUSSION_LANGUAGE.get(language, "Korean")
+    return (
+        "You are a thoughtful discussion partner about the document open beside this conversation. "
+        f"The app language is {name}. Reply in that language unless the user writes or speaks another one; then follow the user. "
+        "Keep each reply short — a few sentences — because the user reads it while talking. "
+        "Edit the document only when the user clearly asks you to change, add, or delete something. "
+        "A question, a disagreement, or a request to explain is not an edit. "
+        "When you do edit, use the edit blocks below and then confirm in one short sentence what changed."
+    )
+
+
+def _discussion_summary(summary: str) -> str:
+    summary = (summary or "").strip()
+    if not summary:
+        return ""
+    return "Earlier in this voice discussion, condensed so the recent turns can stay in full:\n" + summary
+
+
+@router.post("/{conv_id}/discuss")
+async def discuss_document(project_id: str, conv_id: str, req: DiscussRequest):
+    """The voice-discussion pane: Soniox turns into text, and the model the
+    toolbar already selected answers. Reuses the edit-block prompt from
+    send_message. Unlike that route, no exchange file is written — the pane
+    holds the transcript, and the browser saves the document itself."""
+    if not req.content.strip():
+        raise HTTPException(status_code=400, detail="A spoken turn is required")
+    try:
+        storage.get_conversation(project_id, conv_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    try:
+        provider = get_provider(req.provider)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    global_prompt = storage.get_global_system_prompt().strip()
+    project_prompt = storage.get_project_system_prompt(project_id).strip()
+    folder_chain = storage.get_system_prompt_chain(project_id, conv_id)
+    system_prompt = "\n\n".join(
+        p
+        for p in (
+            _discussion_preamble(req.language),
+            _discussion_summary(req.summary),
+            global_prompt,
+            project_prompt,
+            *folder_chain,
+            _target_document_prompt(req.target_document.filename, req.target_document.content),
+        )
+        if p
+    )
+
+    async def event_stream():
+        chunks: list[str] = []
+        try:
+            messages = [*(m.model_dump() for m in req.history), {"role": "user", "content": req.content}]
+            async for event in provider.stream(messages, req.model, req.reasoning_effort, system_prompt):
+                if event["type"] == "text":
+                    chunks.append(event["text"])
+                    yield json.dumps({"type": "delta", "text": event["text"]}) + "\n"
+                elif event["type"] == "tool_status":
+                    yield json.dumps(event) + "\n"
+        except Exception as exc:
+            yield json.dumps({"type": "error", "message": str(exc)}) + "\n"
+            return
+        # No math conversion: an edit block has to match the document
+        # character for character, and this reply is shown as text.
+        yield json.dumps({"type": "done", "text": "".join(chunks)}) + "\n"
 
     return StreamingResponse(event_stream(), media_type="application/x-ndjson")

@@ -28,6 +28,7 @@ class RecordingProvider:
     async def stream(self, messages, model, reasoning_effort=None, system_prompt=None):
         self.received_messages = messages
         self.received_system_prompt = system_prompt
+        self.received_model = model
         yield {"type": "text", "text": self._text}
 
     async def list_models(self):
@@ -364,3 +365,57 @@ def test_inline_context_keeps_the_part_nearest_the_question(monkeypatch):
     monkeypatch.setattr(conversations_router, "INLINE_CONTEXT_MAX_CHARS", 10)
     section = conversations_router._inline_document_context("0123456789ABCDEFGHIJ")
     assert "<document>\n…ABCDEFGHIJ\n</document>" in section
+
+
+def test_discuss_reuses_the_edit_protocol_and_writes_nothing(isolated_data_dir, client, recording_provider):
+    pid = storage.create_project("p")["id"]
+    conv_id = storage.create_conversation(pid)["id"]
+    before = [(d["filename"], d["content"]) for d in storage.list_documents(pid, conv_id)]
+    resp = client.post(
+        f"/api/projects/{pid}/conversations/{conv_id}/discuss",
+        json={
+            "content": "이 문장을 더 짧게 고쳐 줘",
+            "history": [{"role": "user", "content": "이전 말"}, {"role": "assistant", "content": "이전 답"}],
+            "summary": "User: 아주 이전 말",
+            "target_document": {"filename": "노트.md", "content": "Outline:\n- 제목\n\n본문입니다."},
+            "provider": "openai",
+            "model": "the-selected-model",
+            "language": "ko",
+        },
+    )
+    assert resp.status_code == 200
+    assert recording_provider.received_model == "the-selected-model"
+    assert recording_provider.received_messages == [
+        {"role": "user", "content": "이전 말"},
+        {"role": "assistant", "content": "이전 답"},
+        {"role": "user", "content": "이 문장을 더 짧게 고쳐 줘"},
+    ]
+    prompt = recording_provider.received_system_prompt
+    assert "discussion partner" in prompt
+    assert "Korean" in prompt
+    assert "아주 이전 말" in prompt
+    assert '"노트.md"' in prompt
+    assert "````edit" in prompt and "<<<<<<< SEARCH" in prompt
+    assert "본문입니다." in prompt
+    assert [(d["filename"], d["content"]) for d in storage.list_documents(pid, conv_id)] == before
+
+
+def test_discuss_rejects_an_empty_turn_and_an_unknown_provider(isolated_data_dir, client, monkeypatch):
+    pid = storage.create_project("p")["id"]
+    conv_id = storage.create_conversation(pid)["id"]
+    body = {
+        "content": "   ",
+        "target_document": {"filename": "a.md", "content": ""},
+        "provider": "openai",
+        "model": "gpt-test",
+    }
+    assert client.post(f"/api/projects/{pid}/conversations/{conv_id}/discuss", json=body).status_code == 400
+
+    def boom(provider_id):
+        raise ValueError(f"unknown provider: {provider_id}")
+
+    monkeypatch.setattr(conversations_router, "get_provider", boom)
+    body["content"] = "안녕"
+    resp = client.post(f"/api/projects/{pid}/conversations/{conv_id}/discuss", json=body)
+    assert resp.status_code == 400
+    assert "unknown provider" in resp.json()["detail"]

@@ -121,6 +121,23 @@ class AnalysisRequest(BaseModel):
     math_dialect: str = "latex"
 
 
+class DiscussRequest(BaseModel):
+    """One spoken turn of the voice-discussion pane. The client keeps the
+    transcript and sends a bounded history plus, for a long document, an
+    excerpt rather than the whole file. Nothing in this request is stored;
+    document edits are applied and saved by the browser."""
+
+    content: str
+    history: list[InlineMessage] = []
+    summary: str = ""
+    target_document: TargetDocument
+    provider: str
+    model: str
+    reasoning_effort: str | None = None
+    # The app language. The reply follows the speaker when they use another.
+    language: str = "ko"
+
+
 class InlineCompleteRequest(BaseModel):
     """An unrecorded LLM completion for app.js's inline-thread mode (see
     routers/conversations.py's inline_complete). Unlike CreateMessageRequest
