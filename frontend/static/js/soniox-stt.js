@@ -13,6 +13,7 @@
 // Keepalive covers a stretch where no audio frame goes out — Soniox closes
 // a socket that is idle for about 40s.
 
+import { blockRms, CAPTURE_AUDIO, downmixChannels } from "./mic-capture.mjs";
 import { floatToPcm16, sonioxStartConfig, SONIOX_WS_URL } from "./soniox-session.mjs";
 
 const SPEECH_RMS = 0.012;
@@ -21,7 +22,10 @@ const MAX_STRETCH_MS = 15000;
 const TICK_MS = 100;
 const KEEPALIVE_MS = 15000;
 
+// downmixChannels is inlined so the audio thread mixes every channel.
+// Channel 0 alone is often empty on a 16-channel BlackHole.
 const WORKLET = `
+${downmixChannels.toString()}
 class PcmCapture extends AudioWorkletProcessor {
   constructor() {
     super();
@@ -29,11 +33,11 @@ class PcmCapture extends AudioWorkletProcessor {
     this.target = Math.round(sampleRate / 10);
   }
   process(inputs) {
-    const channel = inputs[0] && inputs[0][0];
-    if (!channel || !channel.length) return true;
-    const next = new Float32Array(this.pending.length + channel.length);
+    const mixed = downmixChannels(inputs[0] || []);
+    if (!mixed.length) return true;
+    const next = new Float32Array(this.pending.length + mixed.length);
     next.set(this.pending);
-    next.set(channel, this.pending.length);
+    next.set(mixed, this.pending.length);
     if (next.length >= this.target) {
       this.port.postMessage(next);
       this.pending = new Float32Array(0);
@@ -58,6 +62,10 @@ async function openCapture(audioContext, onSamples) {
       URL.revokeObjectURL(url);
     }
     const node = new AudioWorkletNode(audioContext, "pcm-capture");
+    // "explicit" 2-channel (the default) would drop every channel past the
+    // first pair before process() runs. Take the device's own channels.
+    node.channelCountMode = "max";
+    node.channelInterpretation = "discrete";
     node.port.onmessage = (event) => onSamples(event.data);
     node.connect(sink);
     return {
@@ -78,8 +86,26 @@ async function openCapture(audioContext, onSamples) {
       },
     };
   } catch (err) {
-    const node = audioContext.createScriptProcessor(4096, 1, 1);
-    node.onaudioprocess = (event) => onSamples(event.inputBuffer.getChannelData(0));
+    let node = null;
+    for (const inputs of [16, 2, 1]) {
+      try {
+        node = audioContext.createScriptProcessor(4096, inputs, 1);
+        break;
+      } catch (error) {
+        node = null;
+      }
+    }
+    if (!node) node = audioContext.createScriptProcessor(4096, 1, 1);
+    try {
+      node.channelInterpretation = "discrete";
+    } catch (error) {
+      // this node won't take a discrete interpretation
+    }
+    node.onaudioprocess = (event) => {
+      const channels = [];
+      for (let i = 0; i < event.inputBuffer.numberOfChannels; i++) channels.push(event.inputBuffer.getChannelData(i));
+      onSamples(downmixChannels(channels));
+    };
     node.connect(sink);
     return {
       connect(source) {
@@ -105,6 +131,9 @@ async function openMicrophone(constraints) {
   try {
     return await navigator.mediaDevices.getUserMedia({ audio: constraints });
   } catch (err) {
+    // Only a device id the browser rejected is dropped. A BlackHole open
+    // that succeeds is kept — silence from that open was the processor,
+    // not the wrong device. Processing flags stay off on the retry.
     if (!constraints.deviceId || !["OverconstrainedError", "NotFoundError", "NotReadableError"].includes(err.name)) throw err;
     const { deviceId, ...rest } = constraints;
     return navigator.mediaDevices.getUserMedia({ audio: rest });
@@ -112,7 +141,7 @@ async function openMicrophone(constraints) {
 }
 
 export async function startSonioxTranscription({ language, audioContext, onTokens, onError, onIdle, idleMs, audio, stream: source, terms }) {
-  const constraints = audio || { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+  const constraints = audio || CAPTURE_AUDIO;
   let stream = source;
   let stopped = false;
   let failed = false;
@@ -251,8 +280,15 @@ export async function startSonioxTranscription({ language, audioContext, onToken
     const analyser = audioContext.createAnalyser();
     analyser.fftSize = 1024;
     const samples = new Float32Array(analyser.fftSize);
+    // The analyser hears the raw stream, which can be a different mix than
+    // the PCM we send. The idle clock follows whichever is louder, so a
+    // loopback that only shows up after the channel mix still counts.
+    let captureRms = 0;
+    let captureAt = 0;
     capture = await openCapture(audioContext, (floats) => {
       if (stopped || !ws || ws.readyState !== WebSocket.OPEN) return;
+      captureRms = blockRms(floats);
+      captureAt = performance.now();
       const pcm = floatToPcm16(floats, audioContext.sampleRate, 16000);
       if (!pcm.byteLength) return;
       ws.send(pcm);
@@ -287,7 +323,8 @@ export async function startSonioxTranscription({ language, audioContext, onToken
       analyser.getFloatTimeDomainData(samples);
       let sum = 0;
       for (const sample of samples) sum += sample * sample;
-      const rms = Math.sqrt(sum / samples.length);
+      let rms = Math.sqrt(sum / samples.length);
+      if (now - captureAt < 500) rms = Math.max(rms, captureRms);
       if (rms > SPEECH_RMS) {
         speaking = true;
         lastVoice = now;

@@ -23,6 +23,7 @@ import { effectiveDictationEngine, enginesOffered, normalizeStoredEngine, resolv
 import { consumeSonioxTranscript, limitContextTerms, spokenPhrasesFromCsv } from "./soniox-session.mjs";
 import { bufferSteps, captureInterrupted, sessionStops, transcriptDestination, uplinkNeedsRebuild } from "./file-dictation.mjs";
 import { formatPlaybackClock, parsePlaybackTime, playbackJump, PLAYBACK_JUMP_MESSAGE } from "./audio-time.mjs";
+import { CAPTURE_AUDIO } from "./mic-capture.mjs";
 import { recordingSupported, startRecording, RECORDING_AUDIO } from "./recording.js";
 import { parseEditBlocks, applyEditBlock, collapseEditBlocks } from "./doc-edits.js";
 import { createAnalysisPanel } from "./analysis.js";
@@ -2627,8 +2628,10 @@ function saveDictationLang() {
 // pointed at a microphone - it always hears the system default - so there
 // the choice reaches only the recording.
 const DICTATION_MIC_KEY = "mark-vector:dictation-mic";
-// The realtime engine's microphone when nothing's recorded from it.
-const DICTATION_AUDIO = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+// The billed engines' microphone when nothing is recorded from it.
+// Processing stays off: echo cancellation deletes a BlackHole loopback
+// and the track then looks open while every sample is zero. See mic-capture.mjs.
+const DICTATION_AUDIO = CAPTURE_AUDIO;
 let micChoice = null; // { deviceId, label } | null for the system default
 let micDevices = []; // the last enumerateDevices() audio inputs
 

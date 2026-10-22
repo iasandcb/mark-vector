@@ -11,6 +11,8 @@
 // is committed anyway so a final transcript never waits too long.
 // Billed per minute streamed - callers stop it as soon as it isn't needed.
 
+import { CAPTURE_AUDIO, mixToMono } from "./mic-capture.mjs";
+
 const SPEECH_RMS = 0.012; // above this the microphone is taken to hear speech
 const PAUSE_MS = 700; // this much quiet after speech ends a stretch
 const MAX_STRETCH_MS = 15000; // commit at least this often while text arrives
@@ -31,16 +33,18 @@ const TICK_MS = 100;
 // errors and the buffer can stop taking audio after that. `clear()` drops
 // whatever the gap since then appended, so the next words are a new phrase.
 export async function startRealtimeTranscription({ language, audioContext, onEvent, onIdle, idleMs, audio, stream: source }) {
-  const constraints = audio || { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+  const constraints = audio || CAPTURE_AUDIO;
   let stream = source;
   try {
     if (!stream) stream = await navigator.mediaDevices.getUserMedia({ audio: constraints });
   } catch (err) {
     // The picked microphone went away - the default rather than nothing.
+    // The processing flags stay off on that retry.
     if (!constraints.deviceId || !["OverconstrainedError", "NotFoundError", "NotReadableError"].includes(err.name)) throw err;
     const { deviceId, ...rest } = constraints;
     stream = await navigator.mediaDevices.getUserMedia({ audio: rest });
   }
+  stream = await mixToMono(audioContext, stream);
   const pc = new RTCPeerConnection();
   let stopped = false;
   let timer = null;
@@ -119,7 +123,8 @@ export async function startRealtimeTranscription({ language, audioContext, onEve
     // A pause can leave the capture track muted while the element itself
     // still plays. The caller builds a fresh stream and hands it here.
     const setStream = async (next) => {
-      const track = next.getAudioTracks()[0];
+      const mixed = await mixToMono(audioContext, next);
+      const track = mixed.getAudioTracks()[0];
       if (!track) return;
       const sender = pc.getSenders().find((item) => !item.track || item.track.kind === "audio");
       if (sender) await sender.replaceTrack(track);
@@ -128,10 +133,10 @@ export async function startRealtimeTranscription({ language, audioContext, onEve
       } catch (err) {
         // already disconnected
       }
-      analyserSource = audioContext.createMediaStreamSource(next);
+      analyserSource = audioContext.createMediaStreamSource(mixed);
       analyserSource.connect(analyser);
-      if (current !== next) current.getTracks().forEach((old) => old !== track && old.stop());
-      current = next;
+      if (current !== mixed) current.getTracks().forEach((old) => old !== track && old.stop());
+      current = mixed;
     };
     timer = setInterval(() => {
       const now = performance.now();
