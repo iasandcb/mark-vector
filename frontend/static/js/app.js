@@ -3551,17 +3551,18 @@ function pauseFilePlayback(session) {
   updateAudioFileBar();
 }
 
-// Speakers stay wired across an interruption. Connecting twice throws, and
-// that throw means the link is already there.
+// One link to the speakers. Some browsers accept a second connect() to the
+// same destination, which would stack the file louder on every resume.
 function ensureSpeakerLink(session) {
   const file = session && session.file;
   const ctx = session && session.audioContext;
   if (!file || !file.source || !ctx || ctx.state === "closed") return;
   try {
-    file.source.connect(ctx.destination);
+    file.source.disconnect(ctx.destination);
   } catch (err) {
-    // already connected
+    // not connected
   }
+  file.source.connect(ctx.destination);
 }
 
 // iOS paused the element, or the audio graph went silent. Finalize once and
@@ -4258,9 +4259,9 @@ window.addEventListener("pageshow", () => recoverVisibleFileSession());
 window.addEventListener("focus", () => {
   const session = dictation;
   if (!session || document.hidden) return;
-  if (session.audioContext && audioContextNeedsResume(session.audioContext.state)) {
-    session.audioContext.resume().catch(() => {});
-  }
+  const ctx = session.audioContext;
+  if (!ctx || !audioContextNeedsResume(ctx.state)) return;
+  ctx.resume().catch(() => {});
   if (session.file) ensureSpeakerLink(session);
 });
 el.dictationRecordBtn.addEventListener("click", () => {
