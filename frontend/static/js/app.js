@@ -23,7 +23,8 @@ import { effectiveDictationEngine, enginesOffered, normalizeStoredEngine, resolv
 import { consumeSonioxTranscript, limitContextTerms, spokenPhrasesFromCsv } from "./soniox-session.mjs";
 import { bufferSteps, captureInterrupted, sessionStops, transcriptDestination, uplinkNeedsRebuild } from "./file-dictation.mjs";
 import { formatPlaybackClock, parsePlaybackTime, playbackJump, PLAYBACK_JUMP_MESSAGE } from "./audio-time.mjs";
-import { CAPTURE_AUDIO } from "./mic-capture.mjs";
+import { captureAudio } from "./mic-capture.mjs";
+import { createWebSpeechTranscript, webSpeechAfterEnd, webSpeechAfterStartError } from "./web-speech-session.mjs";
 import { recordingSupported, startRecording, RECORDING_AUDIO } from "./recording.js";
 import { parseEditBlocks, applyEditBlock, collapseEditBlocks } from "./doc-edits.js";
 import { createAnalysisPanel } from "./analysis.js";
@@ -2628,10 +2629,11 @@ function saveDictationLang() {
 // pointed at a microphone - it always hears the system default - so there
 // the choice reaches only the recording.
 const DICTATION_MIC_KEY = "mark-vector:dictation-mic";
-// The billed engines' microphone when nothing is recorded from it.
-// Processing stays off: echo cancellation deletes a BlackHole loopback
-// and the track then looks open while every sample is zero. See mic-capture.mjs.
-const DICTATION_AUDIO = CAPTURE_AUDIO;
+// The billed engines' microphone. Processing stays off, and a multichannel
+// device is asked for all of its channels: echo cancellation deletes a
+// BlackHole loopback, and the default stereo fold then keeps an empty pair.
+// See mic-capture.mjs. Called per open so the browser's supported
+// constraints (voice isolation) are known.
 let micChoice = null; // { deviceId, label } | null for the system default
 let micDevices = []; // the last enumerateDevices() audio inputs
 
@@ -3343,13 +3345,10 @@ function startDictation() {
 }
 
 function startWebSpeechDictation() {
-  const recognition = new SpeechRecognitionImpl();
-  recognition.lang = el.dictationLang.value;
-  recognition.continuous = true;
-  recognition.interimResults = true;
-  dictation = {
+  const transcript = createWebSpeechTranscript();
+  const session = {
     engine: "webspeech",
-    recognition,
+    recognition: null,
     target: active,
     targetRef: activeDocRef(),
     writeStash: false,
@@ -3357,91 +3356,159 @@ function startWebSpeechDictation() {
     interim: "",
     error: null,
     networkRetries: 0,
+    startFailures: 0,
     recognitionSuspended: false,
+    userStopped: false,
+    restartTimer: null,
     // abort(), not stop(): stop() would still deliver one last "result"
     // after this point, into a session that's already been let go.
-    stop: () => recognition.abort(),
+    stop: () => {},
   };
+  session.stop = () => {
+    session.userStopped = true;
+    clearTimeout(session.restartTimer);
+    session.restartTimer = null;
+    try {
+      session.recognition && session.recognition.abort();
+    } catch (err) {
+      // already ended
+    }
+  };
+  dictation = session;
   // Replace a selection, the way typing would.
   if (el.editor.selectionEnd > el.editor.selectionStart) {
     replaceEditorRange(el.editor.selectionStart, el.editor.selectionEnd, "");
   }
-  const session = dictation;
 
-  recognition.addEventListener("result", (e) => {
-    if (!dictationStillRunning(session)) return;
-    session.networkRetries = 0;
-    let finalText = "";
-    let interimText = "";
-    for (let i = e.resultIndex; i < e.results.length; i++) {
-      const text = e.results[i][0].transcript;
-      if (e.results[i].isFinal) finalText += text;
-      else interimText += text;
-    }
-    writeDictation(finalText, interimText);
-  });
+  // The half-spoken phrase is still in the editor, tracked by session.interim.
+  // Leaving that span in place and clearing the tracker makes the next
+  // result land after it, so the words appear twice. Drop the span; a final
+  // that already landed stays.
+  const discardInterim = () => {
+    if (dictation !== session || !session.interim) return;
+    writeDictation("", "");
+  };
 
-  recognition.addEventListener("error", (e) => {
-    if (dictation !== session) return;
-    // "no-speech" (a silent stretch) and "aborted" (our own restart/stop)
-    // aren't failures - the "end" handler below just carries on.
-    if (e.error === "no-speech" || e.error === "aborted") return;
-    session.error = e.error;
-  });
+  const failDictation = (decision) => {
+    const denied = decision && decision.denied;
+    const message = (decision && decision.message) || "error";
+    stopDictation();
+    alert(denied ? t("editor.dictationDenied") : t("editor.dictationFailed", { message }));
+  };
 
-  // Chrome ends a "continuous" session on its own after a pause or about a
-  // minute of audio - restart it transparently for as long as the user
-  // hasn't pressed stop, keeping whatever was last on screen as final.
-  recognition.addEventListener("end", () => {
-    if (dictation !== session) return;
-    session.interim = "";
-    // Chrome ends a session when the tab is hidden, and iOS Safari suspends
-    // the recognizer there. That isn't the user pressing stop: keep the
-    // session and start it again when the page is visible.
-    if (captureInterrupted(document.hidden) === "resume-when-visible") {
-      session.error = null;
-      session.recognitionSuspended = true;
-      showRemoteStatus(t("editor.dictationBackground"));
-      return;
+  const arm = (recognition) => {
+    recognition.lang = el.dictationLang.value;
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    let settled = false;
+    const finish = () => {
+      if (settled || dictation !== session || session.recognition !== recognition || session.userStopped) return;
+      settled = true;
+      const decision = webSpeechAfterEnd({
+        stopped: false,
+        hidden: captureInterrupted(document.hidden) === "resume-when-visible",
+        error: session.error,
+        networkRetries: session.networkRetries,
+        maxNetworkRetries: DICTATION_NETWORK_RETRIES,
+      });
+      if (decision.action === "ignore") return;
+      if (decision.action === "wait-until-visible") {
+        session.error = null;
+        session.recognitionSuspended = true;
+        discardInterim();
+        showRemoteStatus(t("editor.dictationBackground"));
+        return;
+      }
+      if (decision.action === "fail") {
+        failDictation(decision);
+        return;
+      }
+      if (session.restartTimer) return;
+      discardInterim();
+      session.restartTimer = setTimeout(() => {
+        session.restartTimer = null;
+        if (dictation !== session || session.userStopped) return;
+        if (decision.countNetwork) session.networkRetries++;
+        if (decision.clearError) session.error = null;
+        if (decision.reconnecting) showRemoteStatus(t("editor.dictationReconnecting"));
+        beginRecognition(0);
+      }, decision.delayMs || 0);
+    };
+    recognition.addEventListener("result", (e) => {
+      if (!dictationStillRunning(session) || session.recognition !== recognition) return;
+      session.networkRetries = 0;
+      session.startFailures = 0;
+      let finalText = "";
+      let interimText = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const text = e.results[i][0].transcript;
+        if (e.results[i].isFinal) finalText += text;
+        else interimText += text;
+      }
+      const accepted = transcript.accept(finalText, interimText, performance.now());
+      if (!accepted.finalText && !accepted.interimText) return;
+      writeDictation(accepted.finalText, accepted.interimText);
+    });
+    recognition.addEventListener("error", (e) => {
+      if (dictation !== session || session.recognition !== recognition) return;
+      // "no-speech" is a quiet stretch and "aborted" is our own restart.
+      // Both end the recognizer; finish() starts another while dictation is on.
+      if (e.error === "no-speech" || e.error === "aborted") {
+        if (!session.error || session.error === "aborted" || session.error === "no-speech") session.error = e.error;
+      } else {
+        session.error = e.error;
+      }
+      // end usually follows. If it doesn't, don't leave the session hung.
+      setTimeout(finish, e.error === "no-speech" || e.error === "aborted" ? 400 : 800);
+    });
+    recognition.addEventListener("end", finish);
+  };
+
+  // A fresh recognizer each time. Reusing the one Chrome just ended throws
+  // InvalidStateError from inside the end event, and swallowing that leaves
+  // dictation looking on while nothing is listening.
+  const beginRecognition = (startFailures) => {
+    if (dictation !== session || session.userStopped) return;
+    const previous = session.recognition;
+    // Drop the old recognizer before aborting it. abort() can deliver
+    // "end" before it returns, and that must not schedule a second restart.
+    session.recognition = null;
+    if (previous) {
+      try {
+        previous.abort();
+      } catch (err) {
+        // already ended
+      }
     }
-    // Chrome's recognizer drops its connection now and then ("network")
-    // even on a working connection, and starting it again just works - so
-    // that's done here, a few times in a row before it counts as a failure.
-    if (session.error === "network" && session.networkRetries < DICTATION_NETWORK_RETRIES) {
-      session.error = null;
-      session.networkRetries++;
-      showRemoteStatus(t("editor.dictationReconnecting"));
-      setTimeout(() => {
-        if (dictation !== session) return;
-        try {
-          recognition.start();
-        } catch (err) {
-          stopDictation();
-        }
-      }, 500 * session.networkRetries);
-      return;
-    }
-    if (session.error) {
-      const denied = session.error === "not-allowed" || session.error === "service-not-allowed";
-      stopDictation();
-      alert(denied ? t("editor.dictationDenied") : t("editor.dictationFailed", { message: session.error }));
-      return;
-    }
+    const recognition = new SpeechRecognitionImpl();
+    arm(recognition);
+    session.recognition = recognition;
+    session.recognitionSuspended = false;
+    transcript.expectPossibleRepeat(performance.now());
     try {
       recognition.start();
-      session.recognitionSuspended = false;
+      session.startFailures = 0;
     } catch (err) {
-      if (err && err.name === "InvalidStateError") return;
-      stopDictation();
+      const again = webSpeechAfterStartError({
+        name: err && err.name,
+        message: err && (err.message || err.name),
+        startFailures,
+      });
+      if (again.action === "restart") {
+        session.restartTimer = setTimeout(() => {
+          session.restartTimer = null;
+          if (dictation !== session || session.userStopped) return;
+          beginRecognition(startFailures + 1);
+        }, again.delayMs || 0);
+        return;
+      }
+      failDictation(again);
     }
-  });
+  };
+  session.startRecognition = () => beginRecognition(0);
 
-  try {
-    recognition.start();
-  } catch (err) {
-    dictation = null;
-    alert(t("editor.dictationFailed", { message: err.message }));
-  }
+  beginRecognition(0);
+  if (dictation !== session) return;
   updateDictationButton();
   el.editor.focus();
 }
@@ -3644,26 +3711,17 @@ function watchMicTracks(session, stream) {
 async function resumeMicCapture(session) {
   if (dictation !== session || session.file) return;
   if (session.engine === "webspeech") {
-    const wasSuspended = session.recognitionSuspended;
-    try {
-      session.recognition.start();
-      session.recognitionSuspended = false;
-      if (wasSuspended) showRemoteStatus(t("editor.dictationListening"));
-    } catch (err) {
-      if (err && err.name === "InvalidStateError") {
-        session.recognitionSuspended = false;
-        return;
-      }
-      session.recognitionSuspended = true;
-      showRemoteStatus(t("editor.dictationResumeFailed", { message: err.message }));
-    }
+    if (!session.recognitionSuspended || !session.startRecognition) return;
+    session.error = null;
+    session.startRecognition();
+    if (dictation === session) showRemoteStatus(t("editor.dictationListening"));
     return;
   }
   if (!session.micSuspended || !session.setStream) return;
   try {
     showRemoteStatus(t("editor.dictationReconnecting"));
     const stream = await navigator.mediaDevices.getUserMedia({
-      audio: micConstraints(recordWithDictation && recordingSupported() ? RECORDING_AUDIO : DICTATION_AUDIO),
+      audio: micConstraints(captureAudio()),
     });
     if (dictation !== session) {
       stream.getTracks().forEach((track) => track.stop());
@@ -3766,8 +3824,8 @@ function startBilledDictation(file, engine) {
   showRemoteStatus(t("editor.dictationConnecting"), { sticky: true });
   const pendingText = () => [...session.items.values()].join(" ");
   const language = el.dictationLang.value.split("-")[0];
-  // Recording takes the same stream, so it's opened unprocessed then.
-  const micAudio = micConstraints(recordWithDictation && recordingSupported() ? RECORDING_AUDIO : DICTATION_AUDIO);
+  // Recording shares this open, so it is the same unprocessed multichannel stream.
+  const micAudio = micConstraints(captureAudio());
   // A file's quiet stretches are the recording, not an empty microphone.
   const idleMs = file ? null : REALTIME_IDLE_MS;
   const onIdle = () => {

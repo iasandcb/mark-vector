@@ -11,7 +11,7 @@
 // is committed anyway so a final transcript never waits too long.
 // Billed per minute streamed - callers stop it as soon as it isn't needed.
 
-import { CAPTURE_AUDIO, mixToMono } from "./mic-capture.mjs";
+import { captureAudio, mixToMono } from "./mic-capture.mjs";
 
 const SPEECH_RMS = 0.012; // above this the microphone is taken to hear speech
 const PAUSE_MS = 700; // this much quiet after speech ends a stretch
@@ -33,7 +33,7 @@ const TICK_MS = 100;
 // errors and the buffer can stop taking audio after that. `clear()` drops
 // whatever the gap since then appended, so the next words are a new phrase.
 export async function startRealtimeTranscription({ language, audioContext, onEvent, onIdle, idleMs, audio, stream: source }) {
-  const constraints = audio || CAPTURE_AUDIO;
+  const constraints = audio || captureAudio();
   let stream = source;
   try {
     if (!stream) stream = await navigator.mediaDevices.getUserMedia({ audio: constraints });

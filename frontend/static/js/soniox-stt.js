@@ -13,7 +13,7 @@
 // Keepalive covers a stretch where no audio frame goes out — Soniox closes
 // a socket that is idle for about 40s.
 
-import { blockRms, CAPTURE_AUDIO, downmixChannels } from "./mic-capture.mjs";
+import { applyDiscreteChannels, blockRms, captureAudio, downmixChannels, startChannelPump, trackChannelCount } from "./mic-capture.mjs";
 import { floatToPcm16, sonioxStartConfig, SONIOX_WS_URL } from "./soniox-session.mjs";
 
 const SPEECH_RMS = 0.012;
@@ -62,14 +62,15 @@ async function openCapture(audioContext, onSamples) {
       URL.revokeObjectURL(url);
     }
     const node = new AudioWorkletNode(audioContext, "pcm-capture");
-    // "explicit" 2-channel (the default) would drop every channel past the
-    // first pair before process() runs. Take the device's own channels.
-    node.channelCountMode = "max";
-    node.channelInterpretation = "discrete";
     node.port.onmessage = (event) => onSamples(event.data);
     node.connect(sink);
     return {
-      connect(source) {
+      // The source's default is a stereo fold. Widen it to the track before
+      // connecting, or a later BlackHole channel never reaches process().
+      connect(source, track) {
+        const want = trackChannelCount(track) || source.channelCount;
+        applyDiscreteChannels(source, want);
+        applyDiscreteChannels(node, source.channelCount || want);
         source.connect(node);
       },
       disconnect() {
@@ -108,7 +109,9 @@ async function openCapture(audioContext, onSamples) {
     };
     node.connect(sink);
     return {
-      connect(source) {
+      connect(source, track) {
+        const want = trackChannelCount(track) || source.channelCount;
+        applyDiscreteChannels(source, want);
         source.connect(node);
       },
       disconnect() {
@@ -141,7 +144,7 @@ async function openMicrophone(constraints) {
 }
 
 export async function startSonioxTranscription({ language, audioContext, onTokens, onError, onIdle, idleMs, audio, stream: source, terms }) {
-  const constraints = audio || CAPTURE_AUDIO;
+  const constraints = audio || captureAudio();
   let stream = source;
   let stopped = false;
   let failed = false;
@@ -150,6 +153,7 @@ export async function startSonioxTranscription({ language, audioContext, onToken
   let ws = null;
   let capture = null;
   let captureSource = null;
+  let pump = null;
   const stop = () => {
     if (stopped) return;
     stopped = true;
@@ -165,6 +169,7 @@ export async function startSonioxTranscription({ language, audioContext, onToken
     } catch (err) {
       // already disconnected
     }
+    if (pump) pump.stop();
     try {
       if (stream) stream.getTracks().forEach((track) => track.stop());
     } catch (err) {
@@ -285,32 +290,72 @@ export async function startSonioxTranscription({ language, audioContext, onToken
     // loopback that only shows up after the channel mix still counts.
     let captureRms = 0;
     let captureAt = 0;
-    capture = await openCapture(audioContext, (floats) => {
+    // `rate` is the rate of these samples. The track reader reports the
+    // device rate; the worklet already runs at the AudioContext rate.
+    // Downsampling with the wrong rate would send the wrong pitch.
+    const onFloats = (floats, rate) => {
       if (stopped || !ws || ws.readyState !== WebSocket.OPEN) return;
       captureRms = blockRms(floats);
       captureAt = performance.now();
-      const pcm = floatToPcm16(floats, audioContext.sampleRate, 16000);
+      const pcm = floatToPcm16(floats, rate || audioContext.sampleRate, 16000);
       if (!pcm.byteLength) return;
       ws.send(pcm);
       lastSend = performance.now();
-    });
-    const connectStream = (next) => {
+    };
+    let followGen = 0;
+    const connectStream = async (next) => {
+      const gen = ++followGen;
+      if (pump) {
+        const previous = pump;
+        pump = null;
+        await previous.stop();
+      }
+      if (gen !== followGen) return;
       if (captureSource) {
         try {
           captureSource.disconnect();
         } catch (err) {
           // already disconnected
         }
+        captureSource = null;
       }
+      const track = next.getAudioTracks()[0];
+      if (!track) return;
+      // The analyser is the Web Audio copy. It can be a silent fold of a
+      // multichannel device while the track reader still has the signal,
+      // so the idle clock also follows the samples we actually send.
       captureSource = audioContext.createMediaStreamSource(next);
+      applyDiscreteChannels(captureSource, trackChannelCount(track) || captureSource.channelCount);
       captureSource.connect(analyser);
-      capture.connect(captureSource);
+      // Prefer the track's own planes. createMediaStreamSource folds a
+      // 16-channel BlackHole to two channels before the worklet runs, and
+      // those two are often the empty ones. Chrome's mic meter still moves.
+      const started = await startChannelPump(track, (floats, rate) => onFloats(floats, rate));
+      if (gen !== followGen) {
+        if (started) started.stop();
+        return;
+      }
+      if (started) {
+        pump = started;
+        if (capture) {
+          try {
+            capture.disconnect();
+          } catch (err) {
+            // already disconnected
+          }
+          capture = null;
+        }
+        return;
+      }
+      if (!capture) capture = await openCapture(audioContext, (floats) => onFloats(floats, audioContext.sampleRate));
+      if (gen !== followGen) return;
+      capture.connect(captureSource, track);
     };
-    connectStream(stream);
+    await connectStream(stream);
     const setStream = async (next) => {
       const track = next.getAudioTracks()[0];
       if (!track) return;
-      connectStream(next);
+      await connectStream(next);
       if (stream !== next) stream.getTracks().forEach((old) => old !== track && old.stop());
       stream = next;
     };
