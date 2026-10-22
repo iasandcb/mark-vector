@@ -18,6 +18,9 @@ import { openRecordingsDialog } from "./recordings-dialog.js";
 import { createGamepadRemote } from "./remote.js";
 import { splitSlides, lastSlideStart } from "./slides.js";
 import { startRealtimeTranscription } from "./realtime-stt.js";
+import { startSonioxTranscription } from "./soniox-stt.js";
+import { enginesOffered, normalizeStoredEngine, resolveDictationEngine } from "./dictation-engine.mjs";
+import { consumeSonioxTranscript, limitContextTerms, spokenPhrasesFromCsv } from "./soniox-session.mjs";
 import { bufferSteps, captureInterrupted, sessionStops, transcriptDestination, uplinkNeedsRebuild } from "./file-dictation.mjs";
 import { recordingSupported, startRecording, RECORDING_AUDIO } from "./recording.js";
 import { parseEditBlocks, applyEditBlock, collapseEditBlocks } from "./doc-edits.js";
@@ -2419,23 +2422,23 @@ function updateInlineCompleteButton() {
 
 // ---------- dictation (live speech-to-text into the editor) ----------
 //
-// Two engines behind the one 🎤 button:
+// Engines behind the one 🎤 button:
 //   - the browser's own Web Speech API wherever it works - no server round
 //     trip, no API key, free, interim results arriving continuously. The
 //     audio goes to the browser vendor's recognizer, not to this app.
-//   - realtime transcription through OpenAI (realtime-stt.js), where it
-//     doesn't: every non-Safari browser on iOS (Apple enables
-//     SpeechRecognition in Safari only - Chrome on iOS even exposes
-//     webkitSpeechRecognition, but it never works there) and Firefox.
-//     Needs the server's OPENAI_API_KEY and is billed per minute streamed.
-//     A quiet microphone hangs up after REALTIME_IDLE_MS. Hiding the tab
-//     does not: if the browser itself suspends the capture, it is opened
-//     again when the page is visible. A played file is not billed past its
-//     own length and is not hung up for silence.
-//     Where both work, an engine select next to the language one lets the
-//     realtime engine be picked anyway (built-in recognizers vary a lot -
-//     Safari's is weak) - built-in stays the default since realtime costs.
-// The control is hidden only when neither is available.
+//     This stays the default. It only hears the microphone, so a file
+//     never uses it.
+//   - OpenAI realtime (realtime-stt.js, gpt-live-transcribe) where Web
+//     Speech doesn't work, and wherever the engine select says so.
+//     Needs OPENAI_API_KEY. About $0.017 per minute streamed.
+//   - Soniox realtime (soniox-stt.js, stt-rt-v5) when SONIOX_API_KEY is
+//     set and the select says so. About $0.12 per hour. The long-lived
+//     key stays on the server; the page gets a temporary one.
+// A quiet microphone hangs up after REALTIME_IDLE_MS on either billed
+// engine. Hiding the tab does not: if the browser itself suspends the
+// capture, it is opened again when the page is visible. A played file is
+// not hung up for silence. The select is shown when more than one engine
+// is actually available. The control is hidden only when none is.
 //
 // Text is written straight into the document at the caret: finalized
 // phrases stay, and the phrase still being spoken is shown in place and
@@ -2450,29 +2453,92 @@ const IOS_NON_SAFARI = /CriOS|FxiOS|EdgiOS|OPiOS/.test(navigator.userAgent);
 const WEB_SPEECH_USABLE = !!SpeechRecognitionImpl && !IOS_NON_SAFARI;
 // Set from /api/stt/config at startup (see loadRealtimeSttConfig below).
 let realtimeSttAvailable = false;
+let sonioxSttAvailable = false;
+// Until /api/stt/config returns, a remembered Soniox/OpenAI choice must
+// stay in the select. Hiding an engine before we know it exists would
+// rewrite the value and the next save would forget it.
+let sttConfigLoaded = false;
 // Realtime *microphone* dictation stops itself after this long without
 // hearing anything - the cost guard. A file being played does not use it.
 const REALTIME_IDLE_MS = 3 * 60 * 1000;
 
 function dictationSupported() {
-  return WEB_SPEECH_USABLE || realtimeSttAvailable;
+  return WEB_SPEECH_USABLE || realtimeSttAvailable || sonioxSttAvailable;
 }
 
-// Where both engines work, the engine select picks one (remembered per
-// browser, built-in by default since realtime costs); elsewhere whichever
-// one exists is used.
-function useRealtimeDictation() {
-  return realtimeSttAvailable && (!WEB_SPEECH_USABLE || el.dictationEngine.value === "realtime");
+function dictationEngineArgs(kind) {
+  return {
+    stored: el.dictationEngine.value,
+    webSpeech: WEB_SPEECH_USABLE,
+    openai: realtimeSttAvailable,
+    soniox: sonioxSttAvailable,
+    kind,
+  };
+}
+
+// Microphone: the select, with Web Speech as the default. A file never
+// uses Web Speech — builtin still means OpenAI when that key exists.
+function chosenEngine(kind = "mic") {
+  return resolveDictationEngine(dictationEngineArgs(kind));
+}
+
+function fileDictationAvailable() {
+  return !!chosenEngine("file");
+}
+
+function dictationTitleKey() {
+  const engine = chosenEngine("mic");
+  if (engine === "soniox") return "editor.dictationSonioxTitle";
+  if (engine === "openai") return "editor.dictationRealtimeTitle";
+  return "editor.dictationTitle";
+}
+
+// Hide engines whose key (or Web Speech) is missing. A remembered Soniox
+// choice is left in localStorage when Soniox isn't configured; the select
+// shows the engine that will actually run, without saving over the memory.
+function syncDictationEngineOptions() {
+  if (!sttConfigLoaded) {
+    el.dictationEngine.hidden = true;
+    return;
+  }
+  const offered = enginesOffered({ webSpeech: WEB_SPEECH_USABLE, openai: realtimeSttAvailable, soniox: sonioxSttAvailable });
+  for (const opt of el.dictationEngine.options) {
+    const on = offered.includes(opt.value);
+    opt.hidden = !on;
+    opt.disabled = !on;
+  }
+  if (!offered.includes(normalizeStoredEngine(el.dictationEngine.value))) {
+    const fallback = chosenEngine("mic");
+    if (fallback) el.dictationEngine.value = fallback;
+  }
+  el.dictationEngine.hidden = offered.length < 2;
 }
 
 async function loadRealtimeSttConfig() {
   try {
     const res = await fetch("/api/stt/config");
-    if (res.ok) realtimeSttAvailable = !!(await res.json()).available;
+    if (res.ok) {
+      const body = await res.json();
+      realtimeSttAvailable = !!(body.openai ?? body.available);
+      sonioxSttAvailable = !!body.soniox;
+    }
   } catch (err) {
     realtimeSttAvailable = false;
+    sonioxSttAvailable = false;
   }
+  sttConfigLoaded = true;
   updateDictationButton();
+}
+
+// Spoken phrases (the left column) go to Soniox as context terms so the
+// recognizer expects them. The symbol column is still applied afterwards.
+async function spokenMathTerms() {
+  try {
+    const { content } = await api.getSpokenMath();
+    return limitContextTerms(spokenPhrasesFromCsv(content));
+  } catch (err) {
+    return [];
+  }
 }
 const DICTATION_LANG_KEY = "mark-vector:dictation-lang";
 const DICTATION_NETWORK_RETRIES = 5;
@@ -2503,7 +2569,7 @@ function restoreDictationEngine() {
   } catch (err) {
     stored = null;
   }
-  el.dictationEngine.value = stored === "realtime" ? "realtime" : "builtin";
+  el.dictationEngine.value = normalizeStoredEngine(stored);
 }
 
 function saveDictationEngine() {
@@ -2611,7 +2677,7 @@ async function openMicMenu() {
     micChoice = device ? { deviceId: device.deviceId, label: device.label } : null;
     saveMicChoice();
     updateMicButton();
-    if (device && !useRealtimeDictation()) showRemoteStatus(t("editor.micBuiltinNote"));
+    if (device && chosenEngine("mic") === "builtin") showRemoteStatus(t("editor.micBuiltinNote"));
     // Like a language change: a running dictation starts over on the new one.
     if (dictation) {
       stopDictation();
@@ -2625,7 +2691,7 @@ async function openMicMenu() {
       label: device.label || t("editor.micUnnamed", { n: i + 1 }),
       onSelect: () => pick(device),
     })),
-    ...(realtimeSttAvailable ? ["-", { icon: "🎵", label: t("editor.audioFile"), onSelect: pickAudioFile }] : []),
+    ...(fileDictationAvailable() ? ["-", { icon: "🎵", label: t("editor.audioFile"), onSelect: pickAudioFile }] : []),
   ]);
 }
 
@@ -2706,7 +2772,7 @@ function updateAudioFileBar() {
   el.audioFilePlayBtn.title = t(playing ? "editor.audioFilePause" : "editor.audioFilePlay");
   el.audioFilePlayBtn.disabled = !playing && !dictationUsable() && !player;
   el.audioFileName.textContent = audioFile.name;
-  el.audioFileName.title = t("editor.audioFileTitle");
+  el.audioFileName.title = t(chosenEngine("file") === "soniox" ? "editor.audioFileTitleSoniox" : "editor.audioFileTitle");
   el.audioFileSeek.max = String(audioFile.duration || 0);
   el.audioFileSeek.value = String(audioFile.position);
   el.audioFileSeek.disabled = !audioFile.duration;
@@ -2731,8 +2797,9 @@ el.audioFilePlayBtn.addEventListener("click", () => {
   }
   // Dictating from the microphone: the file takes over.
   if (dictation) stopDictation();
-  if (!realtimeSttAvailable || !dictationUsable()) return;
-  startRealtimeDictation(audioFile);
+  const fileEngine = chosenEngine("file");
+  if (!fileEngine || !dictationUsable()) return;
+  startBilledDictation(audioFile, fileEngine);
   if (dictation) keepScreenOn(true);
 });
 el.audioFileSeek.addEventListener("input", () => {
@@ -2917,9 +2984,8 @@ function dictationStillRunning(session) {
 function updateDictationButton() {
   el.dictationGroup.hidden = !dictationSupported() || !active;
   updateMicButton();
-  el.dictationEngine.hidden = !(WEB_SPEECH_USABLE && realtimeSttAvailable);
-  // When the realtime engine is the one in use, say so - it's the one that costs.
-  el.dictationBtn.title = t(useRealtimeDictation() ? "editor.dictationRealtimeTitle" : "editor.dictationTitle");
+  syncDictationEngineOptions();
+  el.dictationBtn.title = t(dictationTitleKey());
   el.dictationBtn.disabled = !dictationUsable() && !dictation;
   if (dictation && sessionStops(dictationKind(), dictationStopReason())) stopDictation();
   else syncDictationWriteTarget();
@@ -3162,7 +3228,8 @@ function startDictation() {
   // Picks up math vocabulary saved from another browser since this page
   // loaded - in the background, the first phrase won't wait for it.
   api.getSpokenMath().then(({ content }) => setSpokenMathVocabulary(parseSpokenMathCsv(content))).catch(() => {});
-  if (useRealtimeDictation()) startRealtimeDictation();
+  const engine = chosenEngine("mic");
+  if (engine === "openai" || engine === "soniox") startBilledDictation(null, engine);
   else startWebSpeechDictation();
   if (!dictation) return;
   keepScreenOn(true);
@@ -3516,20 +3583,21 @@ async function resumeMicCapture(session) {
   }
 }
 
-function startRealtimeDictation(file = null) {
+function startBilledDictation(file, engine) {
   if (file) setAudioSessionType("playback");
   // Created here, inside the click, for iOS - see realtime-stt.js.
   const audioContext = new (window.AudioContext || window.webkitAudioContext)();
   const session = {
-    engine: "realtime",
+    engine,
     target: active,
     targetRef: activeDocRef(),
     writeStash: false,
     audioContext,
     from: el.editor.selectionStart,
     interim: "",
-    items: new Map(), // item_id -> text so far, in arrival order
+    items: new Map(), // item_id -> text so far, in arrival order (OpenAI)
     abandoned: new Set(),
+    dropPendingFinals: false,
     stop: () => audioContext.close().catch(() => {}),
     commit: () => {},
     clear: () => {},
@@ -3600,34 +3668,62 @@ function startRealtimeDictation(file = null) {
   el.editor.focus();
   showRemoteStatus(t("editor.dictationConnecting"), { sticky: true });
   const pendingText = () => [...session.items.values()].join(" ");
-  startRealtimeTranscription({
-    language: el.dictationLang.value.split("-")[0],
-    audioContext,
-    // Recording takes the same stream, so it's opened unprocessed then.
-    audio: micConstraints(recordWithDictation && recordingSupported() ? RECORDING_AUDIO : DICTATION_AUDIO),
-    stream: fileStream,
-    // A file's quiet stretches are the recording, not an empty microphone.
-    idleMs: file ? null : REALTIME_IDLE_MS,
-    onIdle: () => {
-      if (dictation !== session || session.file) return;
-      stopDictation();
-      showRemoteStatus(t("editor.dictationIdleStopped"));
-    },
-    onEvent: (event) => {
-      if (!dictationStillRunning(session)) return;
-      if (event.type === "conversation.item.input_audio_transcription.delta") {
-        if (session.abandoned.has(event.item_id)) return;
-        session.items.set(event.item_id, (session.items.get(event.item_id) || "") + (event.delta || ""));
-        writeDictation("", pendingText());
-      } else if (event.type === "conversation.item.input_audio_transcription.completed") {
-        if (session.abandoned.delete(event.item_id)) return;
-        session.items.delete(event.item_id);
-        writeDictation(event.transcript || "", pendingText());
-      } else if (event.type === "error") {
-        showRemoteStatus(t("editor.dictationFailed", { message: (event.error && event.error.message) || "error" }));
-      }
-    },
-  })
+  const language = el.dictationLang.value.split("-")[0];
+  // Recording takes the same stream, so it's opened unprocessed then.
+  const micAudio = micConstraints(recordWithDictation && recordingSupported() ? RECORDING_AUDIO : DICTATION_AUDIO);
+  // A file's quiet stretches are the recording, not an empty microphone.
+  const idleMs = file ? null : REALTIME_IDLE_MS;
+  const onIdle = () => {
+    if (dictation !== session || session.file) return;
+    stopDictation();
+    showRemoteStatus(t("editor.dictationIdleStopped"));
+  };
+  const connect = engine === "soniox"
+    ? startSonioxTranscription({
+        language,
+        audioContext,
+        audio: micAudio,
+        stream: fileStream,
+        idleMs,
+        onIdle,
+        terms: spokenMathTerms,
+        onTokens: (message) => {
+          if (!dictationStillRunning(session)) return;
+          const taken = consumeSonioxTranscript(message.tokens, session.dropPendingFinals);
+          session.dropPendingFinals = taken.dropPendingFinals;
+          if (!taken.finals && !taken.interim) return;
+          writeDictation(taken.finals, taken.interim);
+        },
+        onError: (message) => {
+          if (dictation !== session) return;
+          const text = (message && (message.error_message || message.error_type)) || "error";
+          stopDictation();
+          alert(t("editor.dictationFailed", { message: text }));
+        },
+      })
+    : startRealtimeTranscription({
+        language,
+        audioContext,
+        audio: micAudio,
+        stream: fileStream,
+        idleMs,
+        onIdle,
+        onEvent: (event) => {
+          if (!dictationStillRunning(session)) return;
+          if (event.type === "conversation.item.input_audio_transcription.delta") {
+            if (session.abandoned.has(event.item_id)) return;
+            session.items.set(event.item_id, (session.items.get(event.item_id) || "") + (event.delta || ""));
+            writeDictation("", pendingText());
+          } else if (event.type === "conversation.item.input_audio_transcription.completed") {
+            if (session.abandoned.delete(event.item_id)) return;
+            session.items.delete(event.item_id);
+            writeDictation(event.transcript || "", pendingText());
+          } else if (event.type === "error") {
+            showRemoteStatus(t("editor.dictationFailed", { message: (event.error && event.error.message) || "error" }));
+          }
+        },
+      });
+  connect
     .then((handle) => {
       if (dictation !== session) {
         handle.stop();
@@ -3714,7 +3810,9 @@ function rebaseDictation(edit) {
     startDictation();
     return;
   }
+  const pendingInterim = session.interim;
   session.commit();
+  if (session.engine === "soniox" && pendingInterim) session.dropPendingFinals = true;
   for (const id of session.items.keys()) session.abandoned.add(id);
   session.items.clear();
   session.interim = "";
@@ -3772,7 +3870,7 @@ el.dictationRecordBtn.addEventListener("click", () => {
   // Turned on mid-dictation: start recording right away.
   const session = dictation;
   if (recordWithDictation && session && !session.recording && !session.file) {
-    if (session.engine === "realtime" && session.stream) startDictationRecording(session, session.stream, false);
+    if ((session.engine === "openai" || session.engine === "soniox") && session.stream) startDictationRecording(session, session.stream, false);
     else if (session.engine === "webspeech")
       navigator.mediaDevices
         .getUserMedia({ audio: micConstraints(RECORDING_AUDIO) })
@@ -6038,7 +6136,7 @@ function showRecordings(projectId, sessionId, filename) {
     },
     // Into the audio-file bar, on the recording's own document: ▶ there
     // plays it and writes it down, live check and all.
-    onTranscribe: realtimeSttAvailable
+    onTranscribe: fileDictationAvailable()
       ? async (name, url) => {
           await openInTab(docRef(projectId, sessionId, filename));
           if (!active || active.projectId !== projectId || active.sessionId !== sessionId || active.filename !== filename) return;
@@ -7478,10 +7576,15 @@ el.dictationBtn.addEventListener("click", toggleDictation);
 el.dictationEngine.addEventListener("change", () => {
   saveDictationEngine();
   updateDictationButton();
-  if (dictation) {
-    stopDictation();
-    startDictation();
+  if (!dictation) return;
+  const playingFile = dictation.file ? audioFile : null;
+  stopDictation();
+  if (playingFile) {
+    const next = chosenEngine("file");
+    if (next) startBilledDictation(playingFile, next);
+    return;
   }
+  startDictation();
 });
 // A language change mid-dictation restarts it in the new language rather
 // than waiting for the next pause.

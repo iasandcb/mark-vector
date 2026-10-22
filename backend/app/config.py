@@ -50,6 +50,9 @@ class Settings:
     data_dir: str = os.getenv("DATA_DIR", "../data")
     anthropic_api_key: str | None = os.getenv("ANTHROPIC_API_KEY") or None
     openai_api_key: str | None = os.getenv("OPENAI_API_KEY") or None
+    # Long-lived Soniox key. The browser never sees it — /api/stt/soniox/key
+    # mints a short-lived temporary key. Unset = Soniox is not offered.
+    soniox_api_key: str | None = os.getenv("SONIOX_API_KEY") or None
     xai_api_key: str | None = os.getenv("XAI_API_KEY") or None
     custom_providers: list[dict] = field(default_factory=_load_custom_providers)
     # Google sign-in is off entirely until both of these are set (see

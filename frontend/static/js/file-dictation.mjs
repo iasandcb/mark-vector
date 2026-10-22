@@ -1,6 +1,7 @@
-// "재생하며 전사" plays a saved recording into the realtime engine.
-// Web Speech can only hear the microphone, so it is not a second path for
-// the file: the engine select is ignored and the file always uses realtime.
+// "재생하며 전사" plays a saved recording into a realtime engine.
+// Web Speech can only hear the microphone, so a file never uses it.
+// The file uses OpenAI unless the engine select says Soniox (or only
+// Soniox is configured). See dictation-engine.mjs.
 //
 // Both the file and the microphone keep going when the browser tab is
 // hidden or another mark-vector document is on screen, and both keep
