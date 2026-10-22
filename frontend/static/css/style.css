@@ -852,17 +852,16 @@ body.row-dragging {
   border-bottom-right-radius: 0;
 }
 
-/* Phone: the editor header's icon buttons (eight with dictation's two
-   selects) need about 470px at desktop spacing and wrapped to a second row
-   on a 390px screen - tighter padding and gaps keep them on one, down to
-   360px. */
+/* Phone: the editor header's icon buttons need tighter padding than the
+   12px/16px tap-target rule further down. The compact gap cannot live
+   here: .editor-actions { gap: 8px } is declared later and would override
+   it, and that extra gap is what drops the ⚙ onto a second line once the
+   🗣 button is in the row. The gap, nowrap, and scroll live in the phone
+   block after .editor-actions. */
 @media (max-width: 700px) {
   .editor-column > .pane-header {
     padding-left: 8px;
     padding-right: 8px;
-  }
-  .editor-actions {
-    gap: 3px;
   }
   .editor-actions .secondary-btn,
   .editor-actions .primary-btn {
@@ -1566,6 +1565,40 @@ body.row-dragging {
   .secondary-btn {
     font-size: 16px;
     padding: 12px 16px;
+  }
+
+  /* Keep the ⚙ on the header's one row. This comes after the base
+     .editor-actions rule (gap 8px, flex-wrap), which otherwise wins and
+     drops the gear under the 🗣 on a 375–430px screen. Icons stay full size
+     and slide inside this bar when a thread or remote button is open too.
+     The spacer eats leftover space so the cluster still sits on the right
+     when it fits, and the gear sticks to the right edge while the rest
+     scrolls. Overflow stays inside the bar: the page does not. */
+  .editor-actions {
+    gap: 3px;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .editor-actions::-webkit-scrollbar {
+    display: none;
+  }
+
+  .editor-actions::before {
+    content: "";
+    flex: 1 0 0px;
+  }
+
+  .editor-actions > * {
+    flex-shrink: 0;
+  }
+
+  #toolbar-toggle-btn {
+    position: sticky;
+    right: 0;
+    z-index: 2;
   }
 
   .pane-filename {
