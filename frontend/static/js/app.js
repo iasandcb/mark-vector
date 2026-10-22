@@ -18,6 +18,7 @@ import { openRecordingsDialog } from "./recordings-dialog.js";
 import { createGamepadRemote } from "./remote.js";
 import { splitSlides, lastSlideStart } from "./slides.js";
 import { startRealtimeTranscription } from "./realtime-stt.js";
+import { bufferSteps, captureInterrupted, sessionStops, transcriptDestination, uplinkNeedsRebuild } from "./file-dictation.mjs";
 import { recordingSupported, startRecording, RECORDING_AUDIO } from "./recording.js";
 import { parseEditBlocks, applyEditBlock, collapseEditBlocks } from "./doc-edits.js";
 import { createAnalysisPanel } from "./analysis.js";
@@ -558,6 +559,9 @@ function showStashedTab(stash) {
   hideSyncConflict();
   saveActiveDocRef();
   el.editor.value = stash.content;
+  // The transcript's document is on screen again, and the editor now holds
+  // its text - later phrases go here, not into the stash we just copied.
+  if (dictation && dictation.targetRef && sameDocRef(dictation.targetRef, activeDocRef())) dictation.writeStash = false;
   el.editor.disabled = false;
   el.saveBtn.disabled = false;
   updateSendToolbarVisibility();
@@ -603,6 +607,9 @@ async function openInTab(ref) {
   }
   const previous = currentTab;
   stashCurrentTab();
+  // Before the await: a phrase that arrives while the new document loads
+  // must still land in the one dictation started in.
+  holdDictationOn(ref);
   if (await loadIntoTab(ref)) {
     tabs.splice(previous + 1, 0, { ref: activeDocRef(), title: active.filename, stash: null });
     currentTab = previous + 1;
@@ -610,6 +617,8 @@ async function openInTab(ref) {
     // Didn't open (gone, or a fetch failed): the screen never changed.
     tabs[previous].stash = null;
   }
+  releaseDictationIfHome();
+  stopDictationIfDocumentGone();
   saveTabs();
   renderTabs();
 }
@@ -617,13 +626,23 @@ async function openInTab(ref) {
 async function switchToTab(index, { keepCurrent = true } = {}) {
   if (streaming || index < 0 || index >= tabs.length || (index === currentTab && active)) return;
   if (keepCurrent) stashCurrentTab();
+  const arriving = tabs[index].ref;
+  holdDictationOn(arriving);
   currentTab = index;
   const tab = tabs[index];
   const stash = tab.stash;
-  tab.stash = null;
-  if (stashDirty(stash)) {
+  const arrivingHome = !!(dictation && dictation.targetRef && sameDocRef(dictation.targetRef, arriving));
+  // Keep the home tab's stash until its text is back in the editor, so a
+  // phrase that arrives mid-switch still has somewhere to go. Every other
+  // tab's stash has already been copied onto the screen or isn't needed.
+  if (!arrivingHome) tab.stash = null;
+  if (arrivingHome && stash) {
+    showStashedTab(stash);
+    tab.stash = null;
+  } else if (stashDirty(stash)) {
     showStashedTab(stash);
   } else if (await loadIntoTab(tab.ref)) {
+    if (arrivingHome) tab.stash = null;
     restoreTabView(stash);
   } else {
     // Its document is gone - drop the tab and show a neighbor instead.
@@ -635,6 +654,8 @@ async function switchToTab(index, { keepCurrent = true } = {}) {
     }
     clearEditor();
   }
+  releaseDictationIfHome();
+  stopDictationIfDocumentGone();
   saveTabs();
   renderTabs();
 }
@@ -643,6 +664,8 @@ async function closeTab(index, { force = false, keepDraft = false } = {}) {
   if (streaming || index < 0 || index >= tabs.length) return;
   const tab = tabs[index];
   if (!force && tabDirty(index) && !confirm(t("tabs.confirmClose", { name: tab.title || "" }))) return;
+  // The transcript has nowhere to go once this tab is gone.
+  if (dictation && dictation.targetRef && sameDocRef(dictation.targetRef, tab.ref)) stopDictation();
   const wasCurrent = index === currentTab;
   // Closing means discarding: don't offer the edits back next time it opens.
   if (wasCurrent && isDirty() && !keepDraft) clearAutosave();
@@ -703,6 +726,7 @@ async function closeOtherTabs(keep = currentTab) {
   if (unsaved && !confirm(t("tabs.confirmCloseOthers", { count: unsaved }))) return;
   tabs = [tabs[keep]];
   currentTab = 0;
+  stopDictationIfDocumentGone();
   saveTabs();
   renderTabs();
 }
@@ -720,6 +744,7 @@ async function dropTabs(matches) {
     await closeTab(currentTab, { force: true });
     return;
   }
+  stopDictationIfDocumentGone();
   saveTabs();
   renderTabs();
 }
@@ -2402,8 +2427,11 @@ function updateInlineCompleteButton() {
 //     doesn't: every non-Safari browser on iOS (Apple enables
 //     SpeechRecognition in Safari only - Chrome on iOS even exposes
 //     webkitSpeechRecognition, but it never works there) and Firefox.
-//     Needs the server's OPENAI_API_KEY and is billed per minute streamed,
-//     so it stops when the microphone is taken away or nothing's been heard for a while.
+//     Needs the server's OPENAI_API_KEY and is billed per minute streamed.
+//     A quiet microphone hangs up after REALTIME_IDLE_MS. Hiding the tab
+//     does not: if the browser itself suspends the capture, it is opened
+//     again when the page is visible. A played file is not billed past its
+//     own length and is not hung up for silence.
 //     Where both work, an engine select next to the language one lets the
 //     realtime engine be picked anyway (built-in recognizers vary a lot -
 //     Safari's is weak) - built-in stays the default since realtime costs.
@@ -2412,17 +2440,19 @@ function updateInlineCompleteButton() {
 // Text is written straight into the document at the caret: finalized
 // phrases stay, and the phrase still being spoken is shown in place and
 // rewritten on every update (dictation.from/interim track that span).
-// If the caret moves or the text under that span changes while listening,
-// the span is abandoned and dictation picks up again at the new caret.
+// If the caret moves or the text under that span changes while listening
+// *in that document*, the span is abandoned and dictation picks up again
+// at the new caret. Another document on screen, or the browser tab being
+// hidden, does not stop the session and does not move the caret: the
+// words keep landing in the document dictation started in.
 const SpeechRecognitionImpl = window.SpeechRecognition || window.webkitSpeechRecognition;
 const IOS_NON_SAFARI = /CriOS|FxiOS|EdgiOS|OPiOS/.test(navigator.userAgent);
 const WEB_SPEECH_USABLE = !!SpeechRecognitionImpl && !IOS_NON_SAFARI;
 // Set from /api/stt/config at startup (see loadRealtimeSttConfig below).
 let realtimeSttAvailable = false;
-// Realtime dictation stops itself after this long without hearing anything.
+// Realtime *microphone* dictation stops itself after this long without
+// hearing anything - the cost guard. A file being played does not use it.
 const REALTIME_IDLE_MS = 3 * 60 * 1000;
-// A muted microphone with the page hidden ends realtime dictation after this.
-const MIC_MUTED_HIDDEN_MS = 60 * 1000;
 
 function dictationSupported() {
   return WEB_SPEECH_USABLE || realtimeSttAvailable;
@@ -2605,9 +2635,10 @@ async function openMicMenu() {
 // heard and written down at the caret as it goes, so Evaluate's live mode
 // checks it like any lecture. ▶ starts a dictation session on the file
 // (the click is the gesture iOS wants for both the AudioContext and the
-// player); ⏸ only pauses the player, and a pause long enough for
-// REALTIME_IDLE_MS ends the session - ▶ then starts a new one from the same
-// spot. Nothing is recorded: the file is the recording.
+// player). ⏸ pauses the player and finalizes the phrase heard so far;
+// ▶ again clears the gap and keeps the same session, so the next words
+// append. Seeking does both. Nothing about a file uses the microphone's
+// three-minute silence hangup. Nothing is recorded: the file is the recording.
 const AUDIO_FILE_RATES = [1, 1.25, 1.5];
 // Once the file ends, how long the last phrase gets to come back written.
 const AUDIO_FILE_TAIL_MS = 4000;
@@ -2694,8 +2725,8 @@ el.audioFilePlayBtn.addEventListener("click", () => {
   if (!audioFile) return;
   const player = audioFilePlayer();
   if (player) {
-    if (player.paused) player.play().catch(() => {});
-    else player.pause();
+    if (player.paused) resumeFilePlayback(dictation);
+    else pauseFilePlayback(dictation);
     return;
   }
   // Dictating from the microphone: the file takes over.
@@ -2706,20 +2737,14 @@ el.audioFilePlayBtn.addEventListener("click", () => {
 });
 el.audioFileSeek.addEventListener("input", () => {
   if (!audioFile) return;
-  audioFile.position = Number(el.audioFileSeek.value);
-  const player = audioFilePlayer();
-  if (player) player.currentTime = audioFile.position;
-  updateAudioFileBar();
+  seekFileTo(Number(el.audioFileSeek.value));
 });
 // ↺10 / 10↻: ten seconds back or ahead - playing or not.
 const AUDIO_FILE_SKIP_S = 10;
 function skipAudioFile(seconds) {
   if (!audioFile) return;
   const end = audioFile.duration || Infinity;
-  audioFile.position = Math.min(Math.max(0, audioFile.position + seconds), end);
-  const player = audioFilePlayer();
-  if (player) player.currentTime = audioFile.position;
-  updateAudioFileBar();
+  seekFileTo(Math.min(Math.max(0, audioFile.position + seconds), end));
 }
 el.audioFileBackBtn.addEventListener("click", () => skipAudioFile(-AUDIO_FILE_SKIP_S));
 el.audioFileForwardBtn.addEventListener("click", () => skipAudioFile(AUDIO_FILE_SKIP_S));
@@ -2829,6 +2854,66 @@ function dictationUsable() {
   return !!active && !streaming && !el.editor.disabled;
 }
 
+// Where the running session is allowed to write. Compared by document ref:
+// stashing a tab copies `active`, so object identity would look like a
+// different document even after coming back.
+function dictationDestination() {
+  if (!dictation || !dictation.targetRef) return { stop: false, where: "editor", index: currentTab };
+  return transcriptDestination({
+    tabs,
+    activeRef: activeDocRef(),
+    targetRef: dictation.targetRef,
+    same: sameDocRef,
+  });
+}
+
+function dictationStopReason() {
+  if (!dictation || !dictation.targetRef) return "none";
+  const dest = dictationDestination();
+  if (dest.stop) return "closed";
+  // Busy only counts for the document on screen. A send in some other tab
+  // must not hang up a transcript that's landing in a stash.
+  if (dest.where === "editor" && !dictationUsable()) return "editor-busy";
+  return "none";
+}
+
+function dictationKind() {
+  return dictation && dictation.file ? "file" : "mic";
+}
+
+// Called synchronously when a tab switch starts, before any await, so a
+// phrase that arrives while the next document loads stays on the original.
+function holdDictationOn(nextRef) {
+  if (!dictation || !dictation.targetRef) return;
+  if (!sameDocRef(dictation.targetRef, nextRef)) dictation.writeStash = true;
+}
+
+function releaseDictationIfHome() {
+  if (!dictation || !dictation.targetRef) return;
+  if (sameDocRef(dictation.targetRef, activeDocRef())) dictation.writeStash = false;
+}
+
+function stopDictationIfDocumentGone() {
+  if (!dictation || !dictation.targetRef) return;
+  if (sessionStops(dictationKind(), dictationDestination().stop ? "closed" : "none")) stopDictation();
+}
+
+function syncDictationWriteTarget() {
+  if (!dictation || !dictation.targetRef || openingTab) return;
+  const dest = dictationDestination();
+  if (!dest.stop) dictation.writeStash = dest.where === "stash";
+}
+
+function dictationStillRunning(session) {
+  if (dictation !== session) return false;
+  if (sessionStops(dictationKind(), dictationStopReason())) {
+    stopDictation();
+    return false;
+  }
+  syncDictationWriteTarget();
+  return true;
+}
+
 function updateDictationButton() {
   el.dictationGroup.hidden = !dictationSupported() || !active;
   updateMicButton();
@@ -2836,7 +2921,8 @@ function updateDictationButton() {
   // When the realtime engine is the one in use, say so - it's the one that costs.
   el.dictationBtn.title = t(useRealtimeDictation() ? "editor.dictationRealtimeTitle" : "editor.dictationTitle");
   el.dictationBtn.disabled = !dictationUsable() && !dictation;
-  if (dictation && (dictation.target !== active || !dictationUsable())) stopDictation();
+  if (dictation && sessionStops(dictationKind(), dictationStopReason())) stopDictation();
+  else syncDictationWriteTarget();
   const listening = !!dictation;
   el.dictationBtn.classList.toggle("listening", listening);
   el.dictationBtn.setAttribute("aria-pressed", listening ? "true" : "false");
@@ -2845,30 +2931,123 @@ function updateDictationButton() {
   updateAudioFileBar();
 }
 
+// The document dictation is writing into. On screen that's the editor.
+// Anywhere else it's that tab's stash - never the document the user just opened.
+let stashAutosaveTimer = null;
+
+function scheduleStashAutosave(ref, stash) {
+  clearTimeout(stashAutosaveTimer);
+  stashAutosaveTimer = setTimeout(() => {
+    if (!ref || ref.role === "hermes-session") return;
+    const key = `mark-vector:autosave:${JSON.stringify(ref)}`;
+    try {
+      if (stash.content === stash.active.savedContent) localStorage.removeItem(key);
+      else localStorage.setItem(key, JSON.stringify({ content: stash.content, savedAt: Date.now() }));
+    } catch (err) {
+      // localStorage unavailable - the on-screen draft's own net is unaffected
+    }
+  }, AUTOSAVE_DEBOUNCE_MS);
+}
+
+function dictationBuffer() {
+  if (!dictation || !dictation.writeStash) return editorDictationBuffer();
+  const dest = dictationDestination();
+  const tab = dest.index >= 0 ? tabs[dest.index] : null;
+  if (!tab || !tab.stash) return null;
+  return stashDictationBuffer(tab.stash, tab.ref);
+}
+
+function editorDictationBuffer() {
+  return {
+    detached: false,
+    get value() {
+      return el.editor.value;
+    },
+    get selectionStart() {
+      return el.editor.selectionStart;
+    },
+    get selectionEnd() {
+      return el.editor.selectionEnd;
+    },
+    replaceRange(from, to, text) {
+      replaceEditorRange(from, to, text);
+    },
+    replaceRangeKeepingSelection(from, to, text) {
+      el.editor.replaceRangeKeepingSelection(from, to, text);
+      updateFilenameLabel();
+      updateFormatToolbar();
+      renderPreview();
+    },
+    setSelectionRange(start, end) {
+      el.editor.setSelectionRange(start, end);
+    },
+  };
+}
+
+function stashDictationBuffer(stash, ref) {
+  const mapSelection = (from, to, text) => {
+    const delta = text.length - (to - from);
+    const map = (pos) => (pos <= from ? pos : pos >= to ? pos + delta : from + text.length);
+    stash.selectionStart = map(stash.selectionStart);
+    stash.selectionEnd = map(stash.selectionEnd);
+  };
+  return {
+    detached: true,
+    get value() {
+      return stash.content;
+    },
+    get selectionStart() {
+      return stash.selectionStart;
+    },
+    get selectionEnd() {
+      return stash.selectionEnd;
+    },
+    replaceRange(from, to, text) {
+      stash.content = stash.content.slice(0, from) + text + stash.content.slice(to);
+      stash.selectionStart = stash.selectionEnd = from + text.length;
+      scheduleStashAutosave(ref, stash);
+      renderTabs();
+    },
+    replaceRangeKeepingSelection(from, to, text) {
+      mapSelection(from, to, text);
+      stash.content = stash.content.slice(0, from) + text + stash.content.slice(to);
+      scheduleStashAutosave(ref, stash);
+      renderTabs();
+    },
+    setSelectionRange(start, end) {
+      stash.selectionStart = start;
+      stash.selectionEnd = end;
+    },
+  };
+}
+
 // A space between the new text and whatever precedes it, unless it starts
 // a line or already follows whitespace. Japanese isn't space-separated, so
 // it never gets one.
-function dictationSeparator(pos) {
+function dictationSeparator(pos, value) {
   if (pos === 0 || el.dictationLang.value.startsWith("ja")) return "";
-  const prev = el.editor.value[pos - 1];
+  const prev = value[pos - 1];
   return /\s/.test(prev) ? "" : " ";
 }
 
-// Keeps dictation.from/interim honest against edits made while listening -
-// see the section comment above.
-function reanchorDictation() {
+// Keeps dictation.from/interim honest against edits made while listening
+// in the document being dictated. Edits in some other document on screen
+// don't move the anchor - that text isn't this transcript.
+function reanchorDictation(buf) {
   const d = dictation;
-  const { value, selectionStart, selectionEnd } = el.editor;
+  if (!buf || buf.detached) return;
+  const value = buf.value;
+  const { selectionStart, selectionEnd } = buf;
   const end = d.from + d.interim.length;
   const intact = value.slice(d.from, end) === d.interim;
   if (intact && selectionStart === end && selectionEnd === end) return;
   if (intact && d.interim) {
     // Drop the half-spoken phrase from where it was; its final version
     // will be written at the new caret instead.
-    el.editor.replaceRange(d.from, end, "");
+    buf.replaceRange(d.from, end, "");
     const shift = selectionStart >= end ? d.interim.length : 0;
     d.from = Math.max(0, selectionStart - shift);
-    el.editor.setSelectionRange(d.from, d.from);
+    buf.setSelectionRange(d.from, d.from);
   } else {
     d.from = selectionStart;
   }
@@ -2883,16 +3062,25 @@ function reanchorDictation() {
 // dictation instead. Returns whether this position takes a formula.
 const ASCIIMATH_DIRECTIVE = "<!-- math: asciimath -->\n\n";
 
-function prepareMathDictation(pos) {
-  const value = el.editor.value;
+function prepareMathDictation(pos, buf) {
+  const value = buf.value;
   const before = value.slice(0, pos);
-  if (!insideMathBlock(pos)) return false;
-  if (currentDocumentFormat() !== "latex") return true;
+  if (!insideMathBlock(pos, value)) return false;
+  const target = dictation && dictation.target;
+  const format = buf.detached
+    ? detectMathDirective(value) || sessionMathDialect(target && target.projectId, target && target.sessionId)
+    : currentDocumentFormat();
+  if (format !== "latex") return true;
   if (detectMathDirective(value)) return false;
   const close = value.indexOf("$$", pos);
   const elsewhere = value.slice(0, before.lastIndexOf("$$")) + (close === -1 ? "" : value.slice(close + 2));
   if (/\$|\\\(|\\\[/.test(elsewhere)) return false;
-  spliceKeepingCaret(0, 0, ASCIIMATH_DIRECTIVE);
+  if (buf.detached) {
+    buf.replaceRangeKeepingSelection(0, 0, ASCIIMATH_DIRECTIVE);
+    if (dictation) dictation.from += ASCIIMATH_DIRECTIVE.length;
+  } else {
+    spliceKeepingCaret(0, 0, ASCIIMATH_DIRECTIVE);
+  }
   return true;
 }
 
@@ -2902,34 +3090,37 @@ function prepareMathDictation(pos) {
 // at the new position. A command still being spoken isn't shown at all.
 function writeDictation(finalText, interimText) {
   const d = dictation;
-  reanchorDictation();
+  const buf = dictationBuffer();
+  if (!buf) return;
+  reanchorDictation(buf);
   interimText = splitMathBlockCommands(interimText).join(" ");
   const parts = splitMathBlockCommands(finalText);
   if (parts.length === 1) {
-    writeDictationText(finalText, interimText);
+    writeDictationText(finalText, interimText, buf);
     return;
   }
   // Drop the phrase-in-progress span first; the pieces are written fresh.
   if (d.interim) {
-    replaceEditorRange(d.from, d.from + d.interim.length, "");
+    buf.replaceRange(d.from, d.from + d.interim.length, "");
     d.interim = "";
   }
   parts.forEach((part, i) => {
     if (i > 0) {
-      d.from = toggleMathBlockAt(d.from);
-      el.editor.setSelectionRange(d.from, d.from);
+      d.from = toggleMathBlockAt(d.from, buf);
+      buf.setSelectionRange(d.from, d.from);
     }
-    writeDictationText(part, "");
+    writeDictationText(part, "", buf);
   });
-  writeDictationText("", interimText);
+  writeDictationText("", interimText, buf);
 }
 
-function writeDictationText(finalText, interimText) {
+function writeDictationText(finalText, interimText, buf) {
   const d = dictation;
+  if (!buf) return;
   // A formula can say "next line" (a rule whose symbol is \n), so there
   // only spaces are trimmed - a line break at either end is kept, and needs
   // no space in front of it.
-  const math = prepareMathDictation(d.from);
+  const math = prepareMathDictation(d.from, buf);
   if (math) {
     finalText = spokenMathToAsciiMath(finalText);
     interimText = spokenMathToAsciiMath(interimText);
@@ -2940,27 +3131,28 @@ function writeDictationText(finalText, interimText) {
   }
   const tidy = (text) => (math ? text.replace(/^ +| +$/g, "") : text.trim());
   const end = d.from + d.interim.length;
+  const value = buf.value;
   let insert = "";
   if (tidy(finalText)) {
     const text = tidy(finalText);
-    insert += (/^[\n.,?!。、？！]/.test(text) ? "" : dictationSeparator(d.from)) + text;
+    insert += (/^[\n.,?!。、？！]/.test(text) ? "" : dictationSeparator(d.from, value)) + text;
   }
   const committedEnd = d.from + insert.length;
   let interim = "";
   if (tidy(interimText)) {
     const text = tidy(interimText);
     // Separator judged against what the final text above will leave behind.
-    const before = insert ? insert[insert.length - 1] : committedEnd > 0 ? el.editor.value[d.from - 1] : "\n";
+    const before = insert ? insert[insert.length - 1] : committedEnd > 0 ? value[d.from - 1] : "\n";
     const sep = el.dictationLang.value.startsWith("ja") || /\s/.test(before) || committedEnd === 0 || /^[\n.,?!。、？！]/.test(text) ? "" : " ";
     interim = sep + text;
   }
   if (!insert && !interim && !d.interim) return;
   // Dictating in front of existing text: keep a space between the two. The
   // space sits after `committedEnd`, so the next phrase still goes before it.
-  const next = el.editor.value[end];
+  const next = value[end];
   const trailing = insert && !interim && next && !/\s/.test(next) && !el.dictationLang.value.startsWith("ja") ? " " : "";
-  replaceEditorRange(d.from, end, insert + interim + trailing);
-  if (trailing) el.editor.setSelectionRange(committedEnd, committedEnd);
+  buf.replaceRange(d.from, end, insert + interim + trailing);
+  if (trailing) buf.setSelectionRange(committedEnd, committedEnd);
   d.from = committedEnd;
   d.interim = interim;
 }
@@ -2997,10 +3189,13 @@ function startWebSpeechDictation() {
     engine: "webspeech",
     recognition,
     target: active,
+    targetRef: activeDocRef(),
+    writeStash: false,
     from: el.editor.selectionStart,
     interim: "",
     error: null,
     networkRetries: 0,
+    recognitionSuspended: false,
     // abort(), not stop(): stop() would still deliver one last "result"
     // after this point, into a session that's already been let go.
     stop: () => recognition.abort(),
@@ -3012,11 +3207,7 @@ function startWebSpeechDictation() {
   const session = dictation;
 
   recognition.addEventListener("result", (e) => {
-    if (dictation !== session) return;
-    if (session.target !== active || !dictationUsable()) {
-      stopDictation();
-      return;
-    }
+    if (!dictationStillRunning(session)) return;
     session.networkRetries = 0;
     let finalText = "";
     let interimText = "";
@@ -3042,6 +3233,15 @@ function startWebSpeechDictation() {
   recognition.addEventListener("end", () => {
     if (dictation !== session) return;
     session.interim = "";
+    // Chrome ends a session when the tab is hidden, and iOS Safari suspends
+    // the recognizer there. That isn't the user pressing stop: keep the
+    // session and start it again when the page is visible.
+    if (captureInterrupted(document.hidden) === "resume-when-visible") {
+      session.error = null;
+      session.recognitionSuspended = true;
+      showRemoteStatus(t("editor.dictationBackground"));
+      return;
+    }
     // Chrome's recognizer drops its connection now and then ("network")
     // even on a working connection, and starting it again just works - so
     // that's done here, a few times in a row before it counts as a failure.
@@ -3067,7 +3267,9 @@ function startWebSpeechDictation() {
     }
     try {
       recognition.start();
+      session.recognitionSuspended = false;
     } catch (err) {
+      if (err && err.name === "InvalidStateError") return;
       stopDictation();
     }
   });
@@ -3100,7 +3302,7 @@ function setAudioSessionType(type) {
 
 // The lock screen's and Control Center's player: the file's name, and
 // play/pause/seek that reach the player while the page is hidden.
-function setAudioFileMediaSession(audio, file) {
+function setAudioFileMediaSession(file) {
   if (!("mediaSession" in navigator)) return;
   const ms = navigator.mediaSession;
   try {
@@ -3108,12 +3310,19 @@ function setAudioFileMediaSession(audio, file) {
   } catch (err) {
     // MediaMetadata missing - the controls work without it
   }
+  const playing = () => dictation && dictation.file && dictation.file.audio;
   const handlers = {
-    play: () => audio.play().catch(() => {}),
-    pause: () => audio.pause(),
-    seekbackward: (d) => (audio.currentTime = Math.max(0, audio.currentTime - ((d && d.seekOffset) || 10))),
-    seekforward: (d) => (audio.currentTime = Math.min(audio.duration || Infinity, audio.currentTime + ((d && d.seekOffset) || 10))),
-    seekto: (d) => d && Number.isFinite(d.seekTime) && (audio.currentTime = d.seekTime),
+    play: () => resumeFilePlayback(dictation),
+    pause: () => pauseFilePlayback(dictation),
+    seekbackward: (d) => {
+      const audio = playing();
+      if (audio) seekFileTo(audio.currentTime - ((d && d.seekOffset) || 10));
+    },
+    seekforward: (d) => {
+      const audio = playing();
+      if (audio) seekFileTo(audio.currentTime + ((d && d.seekOffset) || 10));
+    },
+    seekto: (d) => d && Number.isFinite(d.seekTime) && seekFileTo(d.seekTime),
   };
   for (const [action, handler] of Object.entries(handlers)) {
     try {
@@ -3137,6 +3346,176 @@ function clearAudioFileMediaSession() {
   }
 }
 
+function applyBufferSteps(session, kind) {
+  if (!session) return;
+  for (const step of bufferSteps(kind)) {
+    if (step === "commit" && session.commit) session.commit();
+    else if (step === "clear" && session.clear) session.clear();
+  }
+}
+
+// The user pressed pause (or the lock-screen pause). The phrase heard so
+// far is finalized by the pause listener, once, because this sets userPaused
+// before the element actually pauses.
+function pauseFilePlayback(session) {
+  if (!session || !session.file) return;
+  session.file.userPaused = true;
+  const audio = session.file.audio;
+  if (!audio.paused) audio.pause();
+  else if (session.file.started) applyBufferSteps(session, "pause");
+  updateAudioFileBar();
+}
+
+// ▶ again, or the lock-screen play. The first play after connect does not
+// clear: nothing has been committed yet. A play after a user pause clears
+// the silent gap so the next words are a new phrase instead of a second
+// copy of the one just finalized.
+function resumeFilePlayback(session) {
+  if (!session || !session.file) return;
+  const audio = session.file.audio;
+  const ctx = session.audioContext;
+  if (ctx && ctx.state === "suspended") ctx.resume().catch(() => {});
+  if (session.file.userPaused) applyBufferSteps(session, "resume");
+  session.file.userPaused = false;
+  session.file.started = true;
+  ensureFileUplink(session);
+  audio.play().catch((err) => {
+    if (dictation === session) showRemoteStatus(t("editor.dictationFailed", { message: err.message }));
+  });
+}
+
+function seekFileTo(position) {
+  if (!audioFile) return;
+  const end = audioFile.duration || Infinity;
+  const next = Math.min(Math.max(0, position), end);
+  audioFile.position = next;
+  const session = dictation && dictation.file ? dictation : null;
+  if (session && session.file.started) {
+    const now = performance.now();
+    // A drag fires this continuously; one commit+clear per gesture is enough.
+    if (now - session.file.seekedAt > 200) {
+      applyBufferSteps(session, "seek");
+      session.file.seekedAt = now;
+    }
+  }
+  if (session) session.file.audio.currentTime = next;
+  updateAudioFileBar();
+}
+
+// Pause or an interruption can leave the capture track muted or ended
+// while the element itself still plays. A fresh destination is a live track.
+function ensureFileUplink(session) {
+  const file = session && session.file;
+  if (!file || !session.setStream || !file.source || file.rebuilding) return;
+  if (file.rebuiltAt && performance.now() - file.rebuiltAt < 500) return;
+  const track = session.stream && session.stream.getAudioTracks()[0];
+  if (!uplinkNeedsRebuild(track)) return;
+  if (!session.audioContext || session.audioContext.state === "closed") return;
+  file.rebuilding = true;
+  file.rebuiltAt = performance.now();
+  try {
+    const dest = session.audioContext.createMediaStreamDestination();
+    try {
+      file.source.disconnect(file.dest);
+    } catch (err) {
+      // already disconnected
+    }
+    file.source.connect(dest);
+    file.dest = dest;
+    const next = dest.stream;
+    // Before setStream stops the old track, so its "ended" handler sees
+    // this stream and doesn't rebuild a second time.
+    session.stream = next;
+    const fresh = next.getAudioTracks()[0];
+    if (fresh) watchFileTrack(session, fresh);
+    session.setStream(next).finally(() => {
+      file.rebuilding = false;
+    });
+  } catch (err) {
+    file.rebuilding = false;
+  }
+}
+
+function watchFileTrack(session, track) {
+  const rebuild = () => {
+    if (dictation !== session || !session.file || session.file.audio.paused) return;
+    const current = session.stream && session.stream.getAudioTracks()[0];
+    if (current && current !== track) return;
+    ensureFileUplink(session);
+  };
+  track.addEventListener("ended", rebuild);
+  track.addEventListener("mute", rebuild);
+}
+
+function watchMicTracks(session, stream) {
+  stream.getAudioTracks().forEach((track) => {
+    track.addEventListener("ended", () => {
+      if (dictation !== session) return;
+      const current = session.stream && session.stream.getAudioTracks()[0];
+      if (current && current !== track) return;
+      if (captureInterrupted(document.hidden) === "resume-when-visible") {
+        session.micSuspended = true;
+        showRemoteStatus(t("editor.dictationBackground"));
+        return;
+      }
+      stopDictation();
+    });
+    let mutedAt = 0;
+    track.addEventListener("mute", () => {
+      if (dictation !== session) return;
+      mutedAt = Date.now();
+    });
+    track.addEventListener("unmute", () => {
+      if (dictation !== session || !mutedAt) return;
+      const seconds = Math.round((Date.now() - mutedAt) / 1000);
+      mutedAt = 0;
+      if (seconds > 0) showRemoteStatus(t("editor.micWasMuted", { seconds }));
+    });
+  });
+}
+
+// iOS Safari (and sometimes Chrome) drop the microphone or the speech
+// recognizer while the tab is hidden. The session is still the same one,
+// still aimed at the original document; only the capture is opened again.
+async function resumeMicCapture(session) {
+  if (dictation !== session || session.file) return;
+  if (session.engine === "webspeech") {
+    const wasSuspended = session.recognitionSuspended;
+    try {
+      session.recognition.start();
+      session.recognitionSuspended = false;
+      if (wasSuspended) showRemoteStatus(t("editor.dictationListening"));
+    } catch (err) {
+      if (err && err.name === "InvalidStateError") {
+        session.recognitionSuspended = false;
+        return;
+      }
+      session.recognitionSuspended = true;
+      showRemoteStatus(t("editor.dictationResumeFailed", { message: err.message }));
+    }
+    return;
+  }
+  if (!session.micSuspended || !session.setStream) return;
+  try {
+    showRemoteStatus(t("editor.dictationReconnecting"));
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: micConstraints(recordWithDictation && recordingSupported() ? RECORDING_AUDIO : DICTATION_AUDIO),
+    });
+    if (dictation !== session) {
+      stream.getTracks().forEach((track) => track.stop());
+      return;
+    }
+    session.stream = stream;
+    await session.setStream(stream);
+    watchMicTracks(session, stream);
+    session.micSuspended = false;
+    showRemoteStatus(t("editor.dictationListening"));
+  } catch (err) {
+    session.micSuspended = true;
+    showRemoteStatus(t("editor.dictationResumeFailed", { message: (err && err.message) || "error" }));
+  }
+}
+
 function startRealtimeDictation(file = null) {
   if (file) setAudioSessionType("playback");
   // Created here, inside the click, for iOS - see realtime-stt.js.
@@ -3144,12 +3523,18 @@ function startRealtimeDictation(file = null) {
   const session = {
     engine: "realtime",
     target: active,
+    targetRef: activeDocRef(),
+    writeStash: false,
+    audioContext,
     from: el.editor.selectionStart,
     interim: "",
     items: new Map(), // item_id -> text so far, in arrival order
     abandoned: new Set(),
     stop: () => audioContext.close().catch(() => {}),
     commit: () => {},
+    clear: () => {},
+    setStream: null,
+    micSuspended: false,
   };
   dictation = session;
   // An audio file (see "audio file" above): played through the session's
@@ -3175,6 +3560,10 @@ function startRealtimeDictation(file = null) {
     audio.addEventListener("play", updateAudioFileBar);
     audio.addEventListener("pause", () => {
       file.buffering = false;
+      // A pause the user asked for finalizes the phrase. A pause the
+      // browser inserts while the tab is hidden does not - playback is
+      // supposed to keep going, and committing here would cut the sentence.
+      if (dictation === session && session.file.userPaused) applyBufferSteps(session, "pause");
       updateAudioFileBar();
     });
     audio.addEventListener("waiting", () => {
@@ -3197,8 +3586,12 @@ function startRealtimeDictation(file = null) {
       }, AUDIO_FILE_TAIL_MS);
       showRemoteStatus(t("editor.audioFileEnded"));
     });
-    session.file = { audio };
-    setAudioFileMediaSession(audio, file);
+    session.file = { audio, source, dest: out, started: false, userPaused: false, seekedAt: 0, rebuilding: false };
+    audioContext.addEventListener("statechange", () => {
+      if (dictation !== session || session.file.userPaused) return;
+      if (audioContext.state === "suspended") audioContext.resume().catch(() => {});
+    });
+    setAudioFileMediaSession(file);
   }
   if (el.editor.selectionEnd > el.editor.selectionStart) {
     replaceEditorRange(el.editor.selectionStart, el.editor.selectionEnd, "");
@@ -3213,18 +3606,15 @@ function startRealtimeDictation(file = null) {
     // Recording takes the same stream, so it's opened unprocessed then.
     audio: micConstraints(recordWithDictation && recordingSupported() ? RECORDING_AUDIO : DICTATION_AUDIO),
     stream: fileStream,
-    idleMs: REALTIME_IDLE_MS,
+    // A file's quiet stretches are the recording, not an empty microphone.
+    idleMs: file ? null : REALTIME_IDLE_MS,
     onIdle: () => {
-      if (dictation !== session) return;
+      if (dictation !== session || session.file) return;
       stopDictation();
       showRemoteStatus(t("editor.dictationIdleStopped"));
     },
     onEvent: (event) => {
-      if (dictation !== session) return;
-      if (session.target !== active || !dictationUsable()) {
-        stopDictation();
-        return;
-      }
+      if (!dictationStillRunning(session)) return;
       if (event.type === "conversation.item.input_audio_transcription.delta") {
         if (session.abandoned.has(event.item_id)) return;
         session.items.set(event.item_id, (session.items.get(event.item_id) || "") + (event.delta || ""));
@@ -3245,37 +3635,24 @@ function startRealtimeDictation(file = null) {
       }
       session.stop = handle.stop;
       session.commit = handle.commit;
+      session.clear = handle.clear;
+      session.setStream = handle.setStream;
       session.stream = handle.stream;
-      // Hidden, it goes on as long as the browser lets the microphone run
-      // (Orion does, locked or not) - it's billed, so it ends once the
-      // microphone is taken away (Safari and Chrome do that on hiding),
-      // and after REALTIME_IDLE_MS of silence either way. A microphone
-      // that's only muted may come back (iOS mutes some USB ones on
-      // hiding) - that gets a minute, and saying how long it was out.
-      handle.stream.getAudioTracks().forEach((track) => {
-        const end = () => dictation === session && stopDictation();
-        let mutedAt = 0;
-        let timer = null;
-        track.addEventListener("ended", end);
-        track.addEventListener("mute", () => {
-          mutedAt = Date.now();
-          if (document.hidden) timer = setTimeout(end, MIC_MUTED_HIDDEN_MS);
-        });
-        track.addEventListener("unmute", () => {
-          clearTimeout(timer);
-          if (mutedAt && dictation === session)
-            showRemoteStatus(t("editor.micWasMuted", { seconds: Math.round((Date.now() - mutedAt) / 1000) }));
-          mutedAt = 0;
-        });
-      });
       if (file) {
+        const track = handle.stream.getAudioTracks()[0];
+        if (track) watchFileTrack(session, track);
         const audio = session.file.audio;
         const seek = () => (audio.currentTime = file.position);
         if (audio.readyState >= 1) seek();
         else audio.addEventListener("loadedmetadata", seek, { once: true });
-        audio.play().catch((err) => showRemoteStatus(t("editor.dictationFailed", { message: err.message })));
+        resumeFilePlayback(session);
+        showRemoteStatus(t("editor.dictationListening"));
         return;
       }
+      // The microphone's three quiet minutes still hang up (onIdle above).
+      // The track ending or muting because the tab was hidden does not:
+      // that capture is opened again when the page is visible.
+      watchMicTracks(session, handle.stream);
       showRemoteStatus(t("editor.dictationListening"));
       if (recordWithDictation && recordingSupported()) startDictationRecording(session, handle.stream, false);
     })
@@ -3325,7 +3702,9 @@ function stopDictation() {
 // and the anchor moved.
 function rebaseDictation(edit) {
   const session = dictation;
-  if (!session) {
+  // The edit is happening in the document on screen. When the transcript
+  // is landing in a different document, leave that anchor where it is.
+  if (!session || session.writeStash) {
     edit();
     return;
   }
@@ -3343,11 +3722,42 @@ function rebaseDictation(edit) {
   session.from = el.editor.selectionStart;
 }
 
-// Realtime dictation is billed per minute streamed: a hidden tab (another
-// app, a locked phone) stops it.
+// Hiding the page does not stop dictation. The browser drops a wake lock
+// whenever the page is hidden, and it may also suspend the microphone,
+// the speech recognizer, or the file's audio graph - those are started
+// again here. A file the user paused stays paused.
 document.addEventListener("visibilitychange", () => {
-  // The browser drops a wake lock whenever the page is hidden.
-  if (!document.hidden && dictation) keepScreenOn(true);
+  if (document.hidden || !dictation) return;
+  keepScreenOn(true);
+  const session = dictation;
+  if (session.file) {
+    if (!session.file.userPaused) {
+      if (session.audioContext && session.audioContext.state === "suspended") session.audioContext.resume().catch(() => {});
+      ensureFileUplink(session);
+      if (session.file.started && session.file.audio.paused) session.file.audio.play().catch(() => {});
+    }
+    return;
+  }
+  if (session.engine === "webspeech") {
+    resumeMicCapture(session);
+    return;
+  }
+  const track = session.stream && session.stream.getAudioTracks()[0];
+  if (session.micSuspended || !track || track.readyState === "ended") {
+    session.micSuspended = true;
+    resumeMicCapture(session);
+    return;
+  }
+  if (track.muted) {
+    setTimeout(() => {
+      if (dictation !== session || document.hidden) return;
+      const again = session.stream && session.stream.getAudioTracks()[0];
+      if (again && again.muted) {
+        session.micSuspended = true;
+        resumeMicCapture(session);
+      }
+    }, 1000);
+  }
 });
 el.dictationRecordBtn.addEventListener("click", () => {
   recordWithDictation = !recordWithDictation;
@@ -3481,7 +3891,9 @@ function presenterUsable() {
 // being swapped in sits above where dictation is still typing.
 function spliceKeepingCaret(from, to, text) {
   el.editor.replaceRangeKeepingSelection(from, to, text);
-  if (dictation && to <= dictation.from) dictation.from += text.length - (to - from);
+  // A background transcript has its own anchor in another document. An edit
+  // on screen must not slide that.
+  if (dictation && !dictation.writeStash && to <= dictation.from) dictation.from += text.length - (to - from);
   updateFilenameLabel();
   updateFormatToolbar();
   renderPreview();
@@ -3723,8 +4135,8 @@ function toggleMath() {
 
 // Whether `pos` is inside a $$ block (an odd number of $$ before it in the
 // same slide).
-function insideMathBlock(pos) {
-  const before = el.editor.value.slice(0, pos);
+function insideMathBlock(pos, value = el.editor.value) {
+  const before = value.slice(0, pos);
   return (before.slice(lastSlideStart(before)).match(/\$\$/g) || []).length % 2 === 1;
 }
 
@@ -3735,30 +4147,33 @@ function insideMathBlock(pos) {
 //   $$
 // - and inside one, leaves it past its closing $$ (adding one if it was
 // deleted). Returns where writing continues.
-function toggleMathBlockAt(pos) {
-  const value = el.editor.value;
+function toggleMathBlockAt(pos, buf) {
+  const value = buf ? buf.value : el.editor.value;
+  const replace = (from, to, text) => (buf ? buf.replaceRange(from, to, text) : replaceEditorRange(from, to, text));
+  const current = () => (buf ? buf.value : el.editor.value);
   const before = value.slice(0, pos);
-  if (!insideMathBlock(pos)) {
+  if (!insideMathBlock(pos, value)) {
     const lead = !before.trim() || before.endsWith("\n\n") ? "" : before.endsWith("\n") ? "\n" : "\n\n";
     const rest = value.slice(pos);
     const tail = rest && !rest.startsWith("\n") ? "\n\n" : "";
-    replaceEditorRange(pos, pos, `${lead}$$\n\n$$${tail}`);
+    replace(pos, pos, `${lead}$$\n\n$$${tail}`);
     return pos + lead.length + 3;
   }
   const close = value.indexOf("$$", pos);
   if (close === -1) {
     // No closing line (it was deleted): close the formula here instead.
     const end = value.length;
-    replaceEditorRange(end, end, `${value.endsWith("\n") ? "" : "\n"}$$\n\n`);
+    replace(end, end, `${value.endsWith("\n") ? "" : "\n"}$$\n\n`);
   } else {
     const afterClose = close + 2;
     const next = value.slice(afterClose, afterClose + 2);
     const gap = next === "\n\n" ? "" : next.startsWith("\n") ? "\n" : "\n\n";
-    if (gap) replaceEditorRange(afterClose, afterClose, gap);
+    if (gap) replace(afterClose, afterClose, gap);
   }
-  const caretAt = el.editor.value.indexOf("$$", pos) + 2;
+  const text = current();
+  const caretAt = text.indexOf("$$", pos) + 2;
   let caret = caretAt;
-  while (el.editor.value[caret] === "\n" && caret < caretAt + 2) caret += 1;
+  while (text[caret] === "\n" && caret < caretAt + 2) caret += 1;
   return caret;
 }
 
