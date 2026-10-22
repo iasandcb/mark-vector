@@ -148,7 +148,18 @@ async function openMicrophone(constraints) {
   }
 }
 
-export async function startSonioxTranscription({ language, audioContext, onTokens, onError, onIdle, idleMs, audio, stream: source, terms }) {
+export async function startSonioxTranscription({
+  language,
+  audioContext,
+  onTokens,
+  onError,
+  onIdle,
+  idleMs,
+  audio,
+  stream: source,
+  terms,
+  maxEndpointDelayMs,
+}) {
   const constraints = audio || captureAudio();
   let stream = source;
   let stopped = false;
@@ -274,7 +285,7 @@ export async function startSonioxTranscription({ language, audioContext, onToken
       if (stopped) return;
       fail({ error_message: "connection closed" });
     });
-    sendJson(sonioxStartConfig({ language, terms: termList, sampleRate: 16000 }));
+    sendJson(sonioxStartConfig({ language, terms: termList, sampleRate: 16000, maxEndpointDelayMs }));
 
     let heardSinceCommit = false;
     let textSinceCommit = false;

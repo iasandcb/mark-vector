@@ -118,6 +118,8 @@ test("the start message hints Korean by default and never carries an api key", (
   assert.deepEqual(sonioxStartConfig({ language: "ja" }).language_hints, ["ja"]);
   assert.deepEqual(sonioxStartConfig({ language: "xx" }).language_hints, ["ko"]);
   assert.equal("context" in sonioxStartConfig({ language: "ko", terms: [] }), false);
+  assert.equal("max_endpoint_delay_ms" in sonioxStartConfig({ language: "ko" }), false);
+  assert.equal(sonioxStartConfig({ language: "ko", maxEndpointDelayMs: 800 }).max_endpoint_delay_ms, 800);
 });
 
 test("spoken-math terms are the spoken side, trimmed under the context cap", () => {

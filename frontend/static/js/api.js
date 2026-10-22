@@ -351,6 +351,21 @@ export async function sendMessage(projectId, id, content, settings, onEvent) {
 // the document, so there's nothing on the server to look it up from.
 // `context` is the document text above the question (threads stripped), so
 // the question can refer to what it's sitting in.
+// Voice discussion (the split pane). Same provider/model the toolbar has
+// selected, and the same edit-block document protocol as sendMessage, but
+// nothing is written into the session: the transcript stays in the pane and
+// only the document save path persists edits. `signal` aborts the stream
+// when the speaker continues and the turn has to be resent.
+export async function discuss(projectId, id, body, onEvent, signal) {
+  const res = await fetch(`${BASE}/projects/${projectId}/conversations/${id}/discuss`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal,
+  });
+  await streamNdjson(res, onEvent);
+}
+
 export async function inlineComplete(projectId, id, content, history, context, settings, onEvent) {
   const res = await fetch(`${BASE}/projects/${projectId}/conversations/${id}/inline-complete`, {
     method: "POST",
