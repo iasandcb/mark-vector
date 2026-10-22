@@ -852,17 +852,13 @@ body.row-dragging {
   border-bottom-right-radius: 0;
 }
 
-/* Phone: the editor header's icon buttons (eight with dictation's two
-   selects) need about 470px at desktop spacing and wrapped to a second row
-   on a 390px screen - tighter padding and gaps keep them on one, down to
-   360px. */
+/* Phone: tighter than the 12px/16px tap-target padding below. The row
+   itself is one line at every width (see .editor-actions); a narrow
+   column tightens the gap again in the editor-column container query. */
 @media (max-width: 700px) {
   .editor-column > .pane-header {
     padding-left: 8px;
     padding-right: 8px;
-  }
-  .editor-actions {
-    gap: 3px;
   }
   .editor-actions .secondary-btn,
   .editor-actions .primary-btn {
@@ -1154,22 +1150,45 @@ body.row-dragging {
   flex-shrink: 1;
 }
 
-/* Wraps rather than overflowing: a draft can show four buttons at once
-   (save / publish / inline complete / send) plus the "live" checkbox, which
-   is more than a phone-width header fits on one line. */
-/* Shrinkable (min-width: 0), so that when the buttons don't fit - a phone,
-   or a narrow split pane - flex-wrap actually wraps them onto a second line.
-   With flex-shrink: 0 the row stayed one line wider than the pane and ran
-   off-screen, taking the ⚙ (and with it the Live/Slides checkboxes in the
-   row it opens) out of reach on an iPhone. The title group still gives way
-   first: its flex-basis is 0, so it never holds any of the row's width. */
+/* One row at every width and pane combination. Wrapping used to drop ◫
+   and ⚙ onto a second line once the editor column got narrow (tree and
+   preview both open, or split view). The icons scroll inside
+   .editor-actions-scroll; the ⚙ stays outside that scroller so it is never
+   covered and never widens the page. The spacer keeps the icons against
+   the gear when they fit. */
 .editor-actions {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 8px;
   min-width: 0;
+}
+
+.editor-actions-scroll {
+  display: flex;
+  align-items: center;
+  gap: inherit;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  flex-wrap: nowrap;
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
+}
+
+.editor-actions-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.editor-actions-scroll::before {
+  content: "";
+  flex: 1 0 0px;
+}
+
+.editor-actions-scroll > *,
+.editor-actions > :not(.editor-actions-scroll) {
+  flex-shrink: 0;
 }
 
 .preview-actions {
@@ -1566,6 +1585,12 @@ body.row-dragging {
   .secondary-btn {
     font-size: 16px;
     padding: 12px 16px;
+  }
+
+  /* Full-width phone editor (the column is the viewport). Narrower
+     columns get the same gap from the editor-column container query. */
+  .editor-actions {
+    gap: 3px;
   }
 
   .pane-filename {
@@ -2625,6 +2650,35 @@ kbd.shortcut-key {
   min-width: 0;
   min-height: 0;
   position: relative;
+  container: editor-column / inline-size;
+}
+
+/* Desktop spacing needs about 530px for the icon row. Below that (1280px
+   with tree and preview, 1024px, split view) use the phone gap and padding
+   so the row still fits; the bar scrolls only if it still does not. */
+@container editor-column (max-width: 640px) {
+  .editor-actions {
+    gap: 3px;
+  }
+  .editor-actions .secondary-btn,
+  .editor-actions .primary-btn {
+    padding: 6px 5px;
+  }
+  .editor-actions .dictation-lang {
+    padding: 0 2px;
+  }
+}
+
+/* 1024px with both side panes, and split view, are tighter still.
+   390px stays on the 3px tier above (that column is the full viewport). */
+@container editor-column (max-width: 384px) {
+  .editor-actions {
+    gap: 2px;
+  }
+  .editor-actions .secondary-btn,
+  .editor-actions .primary-btn {
+    padding: 6px 3px;
+  }
 }
 
 .discuss-pane {
