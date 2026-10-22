@@ -4,6 +4,7 @@
 
 import * as api from "./api.js";
 import { t, getLanguage } from "./i18n.js";
+import { formatPlaybackClock, parsePlaybackTime, playbackJump, PLAYBACK_JUMP_MESSAGE } from "./audio-time.mjs";
 
 function escapeHtml(text) {
   return String(text).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -219,6 +220,14 @@ export async function openRecordingsDialog({ projectId, sessionId, filename, onC
           <button class="secondary-btn" type="button" data-skip="10" title="${escapeHtml(t("audio.forward10"))}">10↻</button>
           ${onTranscribe ? `<button class="secondary-btn recordings-transcribe" type="button" data-transcribe title="${escapeHtml(t("recordings.transcribeTitle"))}">🎤 ${escapeHtml(t("recordings.transcribe"))}</button>` : ""}
         </div>
+        <div class="recordings-goto">
+          <span class="recordings-clock" data-clock title="${escapeHtml(t("audio.clock"))}">--:-- / --:--</span>
+          <form class="audio-goto" data-goto>
+            <input type="text" inputmode="text" enterkeyhint="go" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="${escapeHtml(t("audio.gotoPlaceholder"))}" title="${escapeHtml(t("audio.gotoTitle"))}" aria-label="${escapeHtml(t("audio.gotoTitle"))}">
+            <button class="secondary-btn" type="submit" title="${escapeHtml(t("audio.gotoTitle"))}">${escapeHtml(t("audio.goto"))}</button>
+          </form>
+          <p class="audio-goto-error" data-goto-error role="alert" hidden></p>
+        </div>
         <div class="recordings-video" data-video></div>`;
       // preload="none": nothing is fetched (or converted) until its own
       // play button is pressed.
@@ -268,6 +277,7 @@ export async function openRecordingsDialog({ projectId, sessionId, filename, onC
           audio.currentTime = Math.min(Math.max(0, audio.currentTime + Number(btn.dataset.skip)), end);
         })
       );
+      bindPlaybackGoto(audio, item);
       item.querySelector("[data-delete]").addEventListener("click", async () => {
         if (!confirm(t("recordings.deleteConfirm"))) return;
         try {
@@ -283,6 +293,76 @@ export async function openRecordingsDialog({ projectId, sessionId, filename, onC
       body.appendChild(item);
     }
   }
+  // Plain playback (no transcription). The typed time sets currentTime,
+  // the same assignment as the 10-second buttons, after the text is checked.
+  function bindPlaybackGoto(audio, item) {
+    const clock = item.querySelector("[data-clock]");
+    const form = item.querySelector("[data-goto]");
+    const input = form.querySelector("input");
+    const error = item.querySelector("[data-goto-error]");
+    error.id = `goto-error-${Math.random().toString(36).slice(2, 8)}`;
+    input.setAttribute("aria-describedby", error.id);
+    let pending = null;
+    const paint = () => {
+      const cur = Number.isFinite(audio.currentTime) ? audio.currentTime : 0;
+      const dur = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : null;
+      clock.textContent = `${formatPlaybackClock(cur)} / ${dur ? formatPlaybackClock(dur) : "--:--"}`;
+    };
+    const showError = (reason) => {
+      error.hidden = false;
+      error.textContent = t(PLAYBACK_JUMP_MESSAGE[reason] || PLAYBACK_JUMP_MESSAGE.invalid);
+      const waiting = reason === "loading";
+      error.classList.toggle("waiting", waiting);
+      if (waiting) input.removeAttribute("aria-invalid");
+      else input.setAttribute("aria-invalid", "true");
+    };
+    const clearError = () => {
+      error.hidden = true;
+      error.textContent = "";
+      error.classList.remove("waiting");
+      input.removeAttribute("aria-invalid");
+    };
+    const jumpTo = (seconds) => {
+      const duration = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : null;
+      const jump = playbackJump(seconds, duration);
+      if (!jump.ok) {
+        pending = jump.reason === "loading" ? seconds : null;
+        showError(jump.reason);
+        if (pending != null && audio.preload === "none") {
+          audio.preload = "metadata";
+          audio.load();
+        }
+        return;
+      }
+      pending = null;
+      clearError();
+      audio.currentTime = jump.seconds;
+      input.blur();
+    };
+    paint();
+    for (const type of ["timeupdate", "loadedmetadata", "durationchange", "seeked"]) audio.addEventListener(type, paint);
+    audio.addEventListener("loadedmetadata", () => {
+      if (pending == null) return;
+      const seconds = pending;
+      pending = null;
+      jumpTo(seconds);
+    });
+    input.addEventListener("input", () => {
+      pending = null;
+      clearError();
+    });
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const parsed = parsePlaybackTime(input.value);
+      if (parsed == null) {
+        pending = null;
+        showError("invalid");
+        return;
+      }
+      jumpTo(parsed);
+    });
+  }
+
   // YouTube queue: new recordings are opted in when the upload finishes
   // (recording.js). This row is how an older one is added, or a queued
   // one is taken back, and where the worker's progress shows up.
