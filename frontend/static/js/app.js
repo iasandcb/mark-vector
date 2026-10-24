@@ -43,6 +43,7 @@ import { recordingSupported, startRecording, RECORDING_AUDIO } from "./recording
 import { parseEditBlocks, applyEditBlock, collapseEditBlocks } from "./doc-edits.js";
 import { createAnalysisPanel } from "./analysis.js";
 import { punctuateSpeech } from "./punctuation.js";
+import { expectsText } from "./glasses-link.mjs";
 import { mountDiscussion } from "./discussion-pane.js";
 
 // Inline-thread markers. Declared up here, away from the rest of the
@@ -1620,10 +1621,32 @@ const GLASSES_ENABLED_KEY = "mark-vector:live-enabled";
 
 // Only the glasses get the Evaluate tab's live check findings (see
 // analysis.js's liveSnapshot) - for the speaker's eyes, never a public page.
+// `producing` tells that screen a quiet stretch is a stall rather than an
+// idle document: dictation writing into this buffer, or a reply streaming
+// in. Dictation aimed at another tab (writeStash) is not this document.
+function glassesExpectsText() {
+  return expectsText({ dictatingHere: !!(dictation && !dictation.writeStash), streaming });
+}
 const glassesSocket = createLiveSocket((connected) => el.glassesStatusDot.classList.toggle("connected", connected), {
   onCommand: handleScreenCommand,
-  state: () => ({ ...currentLiveState(), liveCheck: analysisPanel.liveSnapshot() }),
+  state: () => ({ ...currentLiveState(), liveCheck: analysisPanel.liveSnapshot(), producing: glassesExpectsText() }),
 });
+
+// Starting and stopping a session doesn't always edit the document in the
+// same turn (the pause before the first word, the moment listening ends).
+// Push once when the flag flips so the glasses stall clock tracks the
+// session, not only the keystrokes. Kept off the dictation button path.
+let glassesProducingSent = null;
+setInterval(() => {
+  if (!el.glassesCheckbox.checked) {
+    glassesProducingSent = null;
+    return;
+  }
+  const producing = glassesExpectsText();
+  if (producing === glassesProducingSent) return;
+  glassesProducingSent = producing;
+  glassesSocket.send(true);
+}, 1000);
 
 function getOrCreateGlassesChannel() {
   let channel = null;
@@ -1649,7 +1672,14 @@ function getOrCreateGlassesChannel() {
 // already on), when the socket has no channel yet - which used to put
 // "?c=null" in the URL, a channel nothing ever sends to.
 function glassesUrl() {
-  return `${location.origin}/glasses/?c=${encodeURIComponent(getOrCreateGlassesChannel())}`;
+  const params = new URLSearchParams();
+  params.set("c", getOrCreateGlassesChannel());
+  // The glasses page has no language control. Carry the editor's choice so
+  // an iPhone (or the glasses) opened from this link shows the connection
+  // status in the same language. English stays the bare URL it always was.
+  const lang = getLanguage();
+  if (lang && lang !== "en") params.set("lang", lang);
+  return `${location.origin}/glasses/?${params.toString()}`;
 }
 
 function saveGlassesEnabledPref() {

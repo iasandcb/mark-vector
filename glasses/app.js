@@ -11,9 +11,26 @@
 // /login it can't complete - no keyboard).
 import { renderMarkdown, detectMathDirective, parseCustomSymbolsCsv, setCustomAsciiMathSymbols } from "/static/js/markdown.js";
 import { splitSlides } from "/static/js/slides.js";
+import {
+  HEARTBEAT_MS,
+  PONG_TIMEOUT_MS,
+  RESUME_PONG_TIMEOUT_MS,
+  applyDocument,
+  heartbeatAction,
+  isLiveDocument,
+  linkPhase,
+  resumeAction,
+  stallAction,
+  stallInfo,
+  stallLabel,
+  statusLabel,
+} from "/static/js/glasses-link.mjs";
 
 const filenameEl = document.getElementById("filename");
 const statusEl = document.getElementById("status");
+const statusLabelEl = document.getElementById("status-label");
+const linkStatusEl = document.getElementById("link-status");
+const stallEl = document.getElementById("stall");
 const contentEl = document.getElementById("content");
 const screenEl = document.getElementById("screen");
 const liveCheckEl = document.getElementById("live-check");
@@ -31,9 +48,64 @@ const channel = new URLSearchParams(location.search).get("c");
 // it entirely), so it's just always forwarded when present.
 const pin = new URLSearchParams(location.search).get("pin");
 
-function setStatus(connected) {
-  statusEl.classList.toggle("live", connected);
+// The editor appends its language when it copies this URL (app.js's
+// glassesUrl), so an iPhone that has never opened mark-vector still shows
+// the same language. A stored choice on this device is the fallback.
+function readGlassLang() {
+  const fromQuery = new URLSearchParams(location.search).get("lang");
+  if (fromQuery === "ko" || fromQuery === "ja" || fromQuery === "en") return fromQuery;
+  try {
+    const stored = localStorage.getItem("mark-vector:lang");
+    if (stored === "ko" || stored === "ja" || stored === "en") return stored;
+  } catch (err) {
+    // private mode — English labels
+  }
+  return "en";
 }
+const glassLang = readGlassLang();
+document.documentElement.lang = glassLang;
+
+// The page is a fixed 600×600 waveguide (viewport width=600, initial-scale=1).
+// On an iPhone that scale does not shrink to fit: the visual viewport is the
+// phone width and the status, which sits at the right of the 600px header,
+// would be off screen with user-scalable=no. When the visible width is
+// narrower than the waveguide, fit the screen to what is actually in view.
+// At 600 (the glasses) this leaves the stylesheet's fixed size alone.
+function fitGlassViewport() {
+  const vv = window.visualViewport;
+  const width = vv ? vv.width : window.innerWidth;
+  const height = vv ? vv.height : window.innerHeight;
+  const narrow = width > 0 && width < 590;
+  const targets = [document.documentElement, document.body, screenEl];
+  if (!narrow) {
+    for (const node of targets) {
+      node.style.width = "";
+      node.style.height = "";
+    }
+    return;
+  }
+  // width=600 and initial-scale=1 leave the right-hand status outside an
+  // iPhone's visible area, and user-scalable=no means it cannot be pinched
+  // back. Pull the layout viewport in to the visible width. The glasses
+  // themselves report ~600 and never enter this branch.
+  const meta = document.querySelector('meta[name="viewport"]');
+  const wpx = Math.round(width);
+  const hpx = Math.max(200, Math.round(height));
+  if (meta) {
+    const content = `width=${wpx}, height=${hpx}, initial-scale=1, maximum-scale=1, user-scalable=no`;
+    if (meta.getAttribute("content") !== content) meta.setAttribute("content", content);
+  }
+  const w = `${wpx}px`;
+  const h = `${hpx}px`;
+  for (const node of targets) {
+    node.style.width = w;
+    node.style.height = h;
+  }
+}
+fitGlassViewport();
+window.addEventListener("resize", fitGlassViewport);
+window.addEventListener("orientationchange", () => setTimeout(fitGlassViewport, 100));
+if (window.visualViewport) window.visualViewport.addEventListener("resize", fitGlassViewport);
 
 function renderIdle(hint) {
   filenameEl.textContent = "";
@@ -247,6 +319,11 @@ function render(message) {
 
 let socket = null;
 let retryDelay = 1000;
+let retryTimer = null;
+let heartbeatTimer = null;
+let pongTimer = null;
+let started = false;
+let retrying = false;
 // Browsers deliberately hide *why* a WebSocket handshake was rejected
 // (no HTTP status, and in practice not even routers/live.py's own close
 // code reliably survives to the browser's "close" event either - a
@@ -260,38 +337,174 @@ let openedThisAttempt = false;
 let attemptStartedAt = 0;
 let consecutiveFastFails = 0;
 
-// A connection the network dropped without a word (the glasses' Wi-Fi or
-// the phone's hotspot blinking) can stay "open" here indefinitely - the
-// dot lit, nothing arriving. So every LIVE_HEARTBEAT_MS a ping goes out
-// (answered by routers/live.py), and one still unanswered at the next beat
-// means the socket is replaced; the server replays the latest state to the
-// new one.
-const LIVE_HEARTBEAT_MS = 10000;
+// WebKit keeps readyState OPEN after the radio dies (lock screen, tab
+// background, Safari/Orion discarding the page) and may never fire close.
+// A ping unanswered within PONG_TIMEOUT_MS replaces the socket now — the
+// old "check again next heartbeat" waited another 10s with the dot still
+// lit. `dropped` makes a late close on the socket we already replaced a
+// no-op, so it can't schedule a second reconnect.
 let awaitingPong = false;
+let pingSentAt = 0;
+let pongBudget = PONG_TIMEOUT_MS;
+let lastPongAt = 0;
+// Bumped when the page is hidden so a ping timer that was frozen in the
+// background can't wake up and declare a healthy socket dead. iOS delivers
+// that timer and visibilitychange in either order.
+let pingGeneration = 0;
+const dropped = new WeakSet();
+let track = { content: null, producing: false, lastChangeAt: null };
+let stallProbed = false;
 
-setInterval(() => {
-  if (!socket || socket.readyState !== WebSocket.OPEN) return;
-  if (awaitingPong) {
-    // Not waiting on close(): a dead connection's close can take minutes
-    // to come back - the new socket goes up now, and the old one's events
-    // are ignored from here on (see connect).
-    const dead = socket;
-    socket = null;
-    setStatus(false);
-    dead.close();
-    connect();
+const PHASE_DOT = { connected: "live", connecting: "pending", reconnecting: "pending", disconnected: "down" };
+
+function paintLink(now = Date.now()) {
+  const phase = linkPhase({
+    readyState: socket ? socket.readyState : 3,
+    online: navigator.onLine !== false,
+    retrying,
+    started,
+  });
+  const label = statusLabel(glassLang, phase);
+  if (linkStatusEl.dataset.phase !== phase) {
+    linkStatusEl.dataset.phase = phase;
+    statusEl.className = PHASE_DOT[phase] || "pending";
+  }
+  if (statusLabelEl.textContent !== label) statusLabelEl.textContent = label;
+  if (linkStatusEl.title !== label) linkStatusEl.title = label;
+  const stall = stallInfo(track, now);
+  const stallText = stall.stalled ? stallLabel(glassLang, stall.seconds) : "";
+  if (stallText) {
+    stallEl.hidden = false;
+    if (stallEl.textContent !== stallText) stallEl.textContent = stallText;
+  } else if (!stallEl.hidden) {
+    stallEl.hidden = true;
+    stallEl.textContent = "";
+  }
+  return stall;
+}
+
+function stopHeartbeat() {
+  clearInterval(heartbeatTimer);
+  heartbeatTimer = null;
+}
+
+function noteDrop(ws) {
+  if (dropped.has(ws)) return;
+  dropped.add(ws);
+  if (socket === ws) socket = null;
+  stopHeartbeat();
+  clearTimeout(pongTimer);
+  awaitingPong = false;
+  if (!openedThisAttempt && Date.now() - attemptStartedAt < 2000) consecutiveFastFails += 1;
+  else consecutiveFastFails = 0;
+  // Only ambient mode (no ?c=) can be rejected this way (see routers/
+  // live.py) - and only once it's happened a couple of times in a row,
+  // so one stray fast failure doesn't flash this over the real idle
+  // message. Retrying is still worth doing regardless (the pin could get
+  // fixed, or the reason might not be the pin at all), so this is a hint
+  // shown alongside the retry loop, not a replacement for it.
+  if (!channel && consecutiveFastFails >= 2) {
+    renderIdle("Can't connect - check this page's own URL has the right ?pin= (see the live-preview checkbox in mark-vector).");
+  }
+  // No radio: say disconnected and wait for `online`. Dialing on a timer
+  // while the phone is offline only burns the backoff.
+  if (navigator.onLine === false) {
+    retrying = false;
+    clearTimeout(retryTimer);
+    paintLink();
+    return;
+  }
+  retrying = true;
+  paintLink();
+  clearTimeout(retryTimer);
+  retryTimer = setTimeout(connect, retryDelay);
+  retryDelay = Math.min(retryDelay * 1.5, 10000);
+}
+
+// Not waiting on close(): a dead connection's close can take minutes to
+// come back. The new socket goes up now, and the old one's events are
+// ignored (see dropped / socket identity in the handlers).
+function reconnectNow() {
+  const dead = socket;
+  if (dead) dropped.add(dead);
+  socket = null;
+  stopHeartbeat();
+  clearTimeout(pongTimer);
+  clearTimeout(retryTimer);
+  awaitingPong = false;
+  retrying = true;
+  paintLink();
+  if (dead) {
+    try {
+      dead.close();
+    } catch (err) {
+      // already closing
+    }
+  }
+  connect();
+}
+
+function sendPing(budget) {
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    reconnectNow();
     return;
   }
   awaitingPong = true;
+  pingSentAt = Date.now();
+  pongBudget = budget;
+  clearTimeout(pongTimer);
+  const ws = socket;
+  const generation = ++pingGeneration;
+  pongTimer = setTimeout(() => {
+    if (generation !== pingGeneration || socket !== ws || !awaitingPong) return;
+    // A timer unfrozen as the phone wakes is not evidence the socket died.
+    // resumeLink sends a fresh ping once the page is actually visible.
+    if (document.hidden) return;
+    const action = heartbeatAction({
+      readyState: socket.readyState,
+      awaitingPong,
+      sincePing: Date.now() - pingSentAt,
+      pongTimeout: pongBudget,
+    });
+    if (action === "reconnect") reconnectNow();
+  }, budget);
   try {
-    socket.send(JSON.stringify({ type: "ping" }));
+    ws.send(JSON.stringify({ type: "ping" }));
   } catch (err) {
-    socket.close();
+    reconnectNow();
   }
-}, LIVE_HEARTBEAT_MS);
+}
+
+function startHeartbeat() {
+  stopHeartbeat();
+  heartbeatTimer = setInterval(() => {
+    if (document.hidden) return;
+    const action = heartbeatAction({
+      readyState: socket ? socket.readyState : 3,
+      awaitingPong,
+      sincePing: Date.now() - pingSentAt,
+      pongTimeout: pongBudget,
+    });
+    if (action === "reconnect") reconnectNow();
+    else if (action === "ping") sendPing(PONG_TIMEOUT_MS);
+  }, HEARTBEAT_MS);
+}
 
 function connect() {
+  started = true;
+  clearTimeout(retryTimer);
+  clearTimeout(pongTimer);
   awaitingPong = false;
+  const previous = socket;
+  if (previous) {
+    dropped.add(previous);
+    socket = null;
+    try {
+      previous.close();
+    } catch (err) {
+      // already closing
+    }
+  }
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const path = channel ? `/ws/live/${encodeURIComponent(channel)}` : "/ws/live";
   const query = pin ? `?pin=${encodeURIComponent(pin)}` : "";
@@ -299,13 +512,20 @@ function connect() {
   attemptStartedAt = Date.now();
   const ws = new WebSocket(`${proto}://${location.host}${path}${query}`);
   socket = ws;
+  paintLink();
 
   ws.addEventListener("open", () => {
     if (socket !== ws) return;
     openedThisAttempt = true;
     consecutiveFastFails = 0;
-    setStatus(true);
+    retrying = false;
     retryDelay = 1000;
+    awaitingPong = false;
+    // Opening is proof of life until the first real pong, so a stall in
+    // the first few seconds doesn't immediately redial.
+    lastPongAt = Date.now();
+    paintLink();
+    startHeartbeat();
   });
   ws.addEventListener("message", (event) => {
     if (socket !== ws) return;
@@ -317,35 +537,117 @@ function connect() {
     }
     if (message && message.type === "pong") {
       awaitingPong = false;
+      lastPongAt = Date.now();
+      clearTimeout(pongTimer);
+      paintLink();
       return;
+    }
+    if (isLiveDocument(message)) {
+      track = applyDocument(track, message, Date.now());
+      if (!stallInfo(track, Date.now()).stalled) stallProbed = false;
+      paintLink();
     }
     scheduleRender(message);
   });
-  ws.addEventListener("close", () => {
-    if (socket !== ws) return;
-    setStatus(false);
-    if (!openedThisAttempt && Date.now() - attemptStartedAt < 2000) {
-      consecutiveFastFails += 1;
-    } else {
-      consecutiveFastFails = 0;
+  ws.addEventListener("close", () => noteDrop(ws));
+  // error often arrives without a timely close on iOS. noteDrop is
+  // idempotent, so a close that follows does not dial twice.
+  ws.addEventListener("error", () => {
+    try {
+      ws.close();
+    } catch (err) {
+      // already closing
     }
-    // Only ambient mode (no ?c=) can be rejected this way (see routers/
-    // live.py) - and only once it's happened a couple of times in a row,
-    // so one stray fast failure doesn't flash this over the real idle
-    // message. Retrying is still worth doing regardless (the pin could get
-    // fixed, or the reason might not be the pin at all), so this is a hint
-    // shown alongside the retry loop, not a replacement for it.
-    if (!channel && consecutiveFastFails >= 2) {
-      renderIdle("Can't connect - check this page's own URL has the right ?pin= (see the live-preview checkbox in mark-vector).");
-    }
-    setTimeout(connect, retryDelay);
-    retryDelay = Math.min(retryDelay * 1.5, 10000);
+    noteDrop(ws);
   });
-  // A network blip fires "error" then "close" - closing explicitly here
-  // just avoids waiting out however long the browser takes to notice on
-  // its own before the "close" handler above kicks off the retry.
-  ws.addEventListener("error", () => ws.close());
 }
+
+// Back on screen after the phone locked or the tab was discarded. A
+// backgrounded WebKit socket is not trustworthy just because it still
+// says OPEN — ping it, and replace it if it can't answer. bfcache
+// (pageshow.persisted) restores a socket that is already dead.
+let lastResumeAt = 0;
+
+function resumeLink({ force = false } = {}) {
+  if (!started) return;
+  // visibility, pageshow, and focus all fire together when an iPhone
+  // unlocks. One probe is enough; the rest would reset the pong timer.
+  const now = Date.now();
+  if (!force && now - lastResumeAt < 1000) {
+    paintLink();
+    return;
+  }
+  lastResumeAt = now;
+  paintLink();
+  if (force) {
+    reconnectNow();
+    return;
+  }
+  const action = resumeAction({
+    readyState: socket ? socket.readyState : 3,
+    online: navigator.onLine !== false,
+    awaitingPong,
+    sincePing: Date.now() - pingSentAt,
+    resumeTimeout: RESUME_PONG_TIMEOUT_MS,
+  });
+  if (action === "offline") {
+    clearTimeout(retryTimer);
+    retrying = false;
+    paintLink();
+    return;
+  }
+  if (action === "reconnect") reconnectNow();
+  else if (action === "probe") sendPing(RESUME_PONG_TIMEOUT_MS);
+  else paintLink();
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) fitGlassViewport();
+  if (document.hidden) {
+    // The in-flight pong deadline was scheduled against a clock that iOS
+    // is about to freeze. Drop it; the next visible pass probes from scratch.
+    pingGeneration += 1;
+    clearTimeout(pongTimer);
+    awaitingPong = false;
+    return;
+  }
+  resumeLink();
+});
+window.addEventListener("pageshow", (event) => {
+  fitGlassViewport();
+  resumeLink({ force: !!event.persisted });
+});
+window.addEventListener("online", () => resumeLink());
+window.addEventListener("offline", () => resumeLink());
+window.addEventListener("focus", () => {
+  if (!document.hidden) resumeLink();
+});
+document.addEventListener("resume", () => resumeLink());
+
+// While a session should be writing (message.producing), ten seconds
+// without a changed document is a stall. If the socket is actually dead,
+// that same moment redials; a live pong leaves the warning up and the
+// connection alone.
+setInterval(() => {
+  const stall = paintLink();
+  if (!stall.stalled) {
+    stallProbed = false;
+    return;
+  }
+  if (stallProbed) return;
+  stallProbed = true;
+  const action = stallAction({
+    readyState: socket ? socket.readyState : 3,
+    awaitingPong,
+    sincePing: Date.now() - pingSentAt,
+    sincePong: lastPongAt > 0 ? Date.now() - lastPongAt : null,
+    pongTimeout: PONG_TIMEOUT_MS,
+  });
+  if (action === "reconnect") reconnectNow();
+  else if (action === "probe") sendPing(PONG_TIMEOUT_MS);
+}, 1000);
+
+paintLink();
 
 // Commands back to the editor (see app.js's handleScreenCommand): returns
 // whether one was actually sent.
