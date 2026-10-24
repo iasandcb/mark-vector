@@ -2547,6 +2547,11 @@ kbd.shortcut-key {
   min-width: 44px;
   padding: 4px 8px;
 }
+.audio-file-play.resume-needed {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
 /* Which paid engine ▶ will use. Visible before play; a built-in choice
    still lands on Soniox or OpenAI. Stays on screen when the filename hides. */
 .audio-file-engine {

@@ -12,13 +12,14 @@
 // takes the microphone away while hidden is resumed when the page shows
 // again (see captureInterrupted), not treated as the user pressing stop.
 //
-// iOS takes the audio session when another app plays sound. WebKit then
-// sets AudioContext.state to "interrupted" (sometimes "suspended"). The
-// media element clock can keep moving while that graph is silent, so the
-// provider hears nothing and closes with "Request timeout". That is not
-// the user pressing stop: the next play resumes the graph, and a file
-// session that died is opened again from the current position. A user
-// pause keeps the socket and asks it to wait (keepalive).
+// iOS takes the audio session when another app wants the microphone.
+// WebKit then sets AudioContext.state to "interrupted" (sometimes
+// "suspended") and AudioSession.state to "interrupted", and may pause the
+// element. That is not the user pressing pause, and it is not the page
+// becoming hidden: background playback keeps the "playback" session.
+// The file player releases the session (suspend, type "auto") so the other
+// app can record, and takes it back when the interruption ends or the page
+// is visible again. A user pause keeps the socket and asks it to wait.
 
 // What to send around a gap so the phrase already heard is finalized once
 // and audio after the gap starts a new phrase. `commit` with nothing new
@@ -156,6 +157,54 @@ export function fileResumeAction({
     reconnect: dead && !reconnecting && reconnects < FILE_RECONNECT_CAP,
     popup: dead && !reconnecting && reconnects >= FILE_RECONNECT_CAP,
   };
+}
+
+// Another app took the output. "suspended" while the page is hidden is the
+// browser parking a background tab, not an interruption — playback keeps
+// the session. "suspended" counts only where AudioSession exists (WebKit)
+// and we did not suspend ourselves. A system pause counts only on that
+// same WebKit session: a desktop pause is not one, and a pause while the
+// page is hidden is not one unless the session actually reports interrupted.
+export function fileOsInterruption({
+  started = false,
+  userPaused = false,
+  audioEnded = false,
+  contextState = "",
+  audioSessionState = "",
+  systemPause = false,
+  causedByUs = false,
+  weSuspended = false,
+  hidden = false,
+  hasAudioSession = false,
+} = {}) {
+  if (!started || userPaused || audioEnded || causedByUs) return false;
+  if (audioSessionState === "interrupted" || contextState === "interrupted") return true;
+  if (contextState === "suspended" && !weSuspended && !hidden && hasAudioSession) return true;
+  if (!systemPause || !hasAudioSession) return false;
+  if (hidden && audioSessionState !== "interrupted" && contextState !== "interrupted") return false;
+  return true;
+}
+
+// The other app let go, or the user came back. A failed automatic play
+// waits for a tap or the next time the page is shown, so a stuck "active"
+// does not retry forever. resumeSuppressed ignores the statechange that
+// setting type back to "auto" can fire in the same turn. A user pause
+// stays paused. Becoming visible still tries, including after a failed play.
+export function fileOsResumeCue({
+  osReleased = false,
+  userPaused = false,
+  audioEnded = false,
+  contextState = "",
+  audioSessionState = "",
+  becameVisible = false,
+  resumeFailed = false,
+  resumeSuppressed = false,
+} = {}) {
+  if (!osReleased || userPaused || audioEnded) return false;
+  if (becameVisible) return true;
+  if (resumeSuppressed || resumeFailed) return false;
+  if (audioSessionState === "active" || contextState === "running") return true;
+  return false;
 }
 
 export function transcriptDestination({ tabs, activeRef, targetRef, same }) {

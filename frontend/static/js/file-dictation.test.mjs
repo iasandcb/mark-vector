@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import test from "node:test";
 import {
   FILE_RECONNECT_CAP,
@@ -6,6 +7,8 @@ import {
   bufferSteps,
   captureInterrupted,
   fileContextAction,
+  fileOsInterruption,
+  fileOsResumeCue,
   filePauseKind,
   fileProviderFailureAction,
   fileResumeAction,
@@ -154,6 +157,49 @@ test("iOS interruption pauses the clock and holds the socket; a user pause is no
   assert.equal(fileContextAction("interrupted", { started: true, userPaused: true }).pauseMedia, false);
   assert.equal(fileContextAction("suspended", { started: false }).resumeContext, true);
   assert.equal(fileContextAction("interrupted", { started: false }).pauseMedia, false);
+});
+
+test("an OS interruption releases a playing file; a user pause or a hidden tab does not", () => {
+  const playing = { started: true, hasAudioSession: true };
+  assert.equal(fileOsInterruption({ ...playing, contextState: "interrupted" }), true);
+  assert.equal(fileOsInterruption({ ...playing, audioSessionState: "interrupted", hidden: true }), true);
+  assert.equal(fileOsInterruption({ ...playing, contextState: "suspended" }), true);
+  assert.equal(fileOsInterruption({ ...playing, contextState: "suspended", hidden: true }), false);
+  assert.equal(fileOsInterruption({ ...playing, contextState: "suspended", hasAudioSession: false }), false);
+  assert.equal(fileOsInterruption({ ...playing, contextState: "suspended", weSuspended: true }), false);
+  assert.equal(fileOsInterruption({ ...playing, contextState: "interrupted", userPaused: true }), false);
+  assert.equal(fileOsInterruption({ ...playing, contextState: "interrupted", started: false }), false);
+  assert.equal(fileOsInterruption({ ...playing, contextState: "interrupted", causedByUs: true }), false);
+  assert.equal(fileOsInterruption({ ...playing, systemPause: true, contextState: "running", hidden: true }), false);
+  assert.equal(fileOsInterruption({ ...playing, systemPause: true, contextState: "suspended", hidden: true }), false);
+  assert.equal(fileOsInterruption({ ...playing, systemPause: true, contextState: "running" }), true);
+  assert.equal(fileOsInterruption({ started: true, systemPause: true, contextState: "running" }), false);
+  assert.equal(fileOsInterruption({ ...playing, systemPause: true, contextState: "interrupted", hidden: true }), true);
+  assert.equal(fileOsInterruption({ ...playing, contextState: "running", hidden: true }), false);
+});
+
+test("the interruption ending or the page showing resumes; a failed play waits for a tap or the next visit", () => {
+  assert.equal(fileOsResumeCue({ osReleased: true, audioSessionState: "active" }), true);
+  assert.equal(fileOsResumeCue({ osReleased: true, contextState: "running" }), true);
+  assert.equal(fileOsResumeCue({ osReleased: true, becameVisible: true }), true);
+  assert.equal(fileOsResumeCue({ osReleased: true, audioSessionState: "interrupted" }), false);
+  assert.equal(fileOsResumeCue({ osReleased: false, becameVisible: true }), false);
+  assert.equal(fileOsResumeCue({ osReleased: true, userPaused: true, becameVisible: true }), false);
+  assert.equal(fileOsResumeCue({ osReleased: true, audioEnded: true, audioSessionState: "active" }), false);
+  assert.equal(fileOsResumeCue({ osReleased: true, audioSessionState: "active", resumeFailed: true }), false);
+  assert.equal(fileOsResumeCue({ osReleased: true, becameVisible: true, resumeFailed: true }), true);
+  assert.equal(fileOsResumeCue({ osReleased: true, audioSessionState: "active", resumeSuppressed: true }), false);
+  assert.equal(fileOsResumeCue({ osReleased: true, contextState: "running", resumeSuppressed: true }), false);
+  assert.equal(fileOsResumeCue({ osReleased: true, becameVisible: true, resumeSuppressed: true }), true);
+});
+
+test("the interruption copy exists in every UI language", () => {
+  const src = fs.readFileSync(new URL("./i18n.js", import.meta.url), "utf8");
+  for (const key of ["editor.audioFileInterrupted", "editor.audioFileResume"]) {
+    assert.equal(src.split(`"${key}"`).length - 1, 3, key);
+  }
+  assert.equal(src.includes("재생이 끊겼습니다. 이어하려면 ▶를 누르세요."), true);
+  assert.equal(src.includes("이어하려면 ▶"), true);
 });
 
 test("Request timeout during playback reconnects; after the cap it alerts; it does not write the phrase twice", () => {
