@@ -951,6 +951,24 @@ body.row-dragging {
   animation: dictation-pulse 1.2s ease-in-out infinite;
 }
 
+/* A played file. Accent, not the recording red, and the icon does not pulse. */
+#dictation-btn.transcribing-file {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+}
+
+#dictation-btn.transcribing-file .btn-icon {
+  display: inline-block;
+  animation: none;
+}
+
+/* File transcription doesn't record. Greyed, outline dot, tooltip still works. */
+.dictation-record[aria-disabled="true"] {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 @keyframes dictation-pulse {
   0%, 100% { transform: scale(1); }
   50% { transform: scale(1.18); }

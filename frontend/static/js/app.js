@@ -20,6 +20,7 @@ import { splitSlides, lastSlideStart } from "./slides.js";
 import { startRealtimeTranscription } from "./realtime-stt.js";
 import { startSonioxTranscription } from "./soniox-stt.js";
 import { effectiveDictationEngine, enginesOffered, normalizeStoredEngine, resolveDictationEngine } from "./dictation-engine.mjs";
+import { dictationControlState, recordControlState } from "./dictation-button.mjs";
 import { consumeSonioxTranscript, limitContextTerms, spokenPhrasesFromCsv } from "./soniox-session.mjs";
 import {
   FILE_RECONNECT_CAP,
@@ -2972,13 +2973,19 @@ function formatClock(ms) {
 function updateRecordButton(progress) {
   const btn = el.dictationRecordBtn;
   btn.hidden = !recordingSupported();
-  btn.setAttribute("aria-pressed", recordWithDictation ? "true" : "false");
+  const fileSession = !!(dictation && dictation.file);
   const recording = !!(dictation && dictation.recording);
-  btn.classList.toggle("recording", recording);
-  if (!recording) {
+  // A file session never records. The saved preference stays as it is;
+  // only the dot is painted off, and the control won't take a click.
+  const view = recordControlState({ fileSession, recordWithDictation, recording });
+  if (view.ariaDisabled) btn.setAttribute("aria-disabled", "true");
+  else btn.removeAttribute("aria-disabled");
+  btn.setAttribute("aria-pressed", view.pressed ? "true" : "false");
+  btn.classList.toggle("recording", view.showRecording);
+  if (!view.showRecording) {
     btn.innerHTML = '<span class="rec-dot"></span>';
     btn.classList.remove("behind");
-    btn.title = t("editor.dictationRecordTitle");
+    btn.title = t(view.titleKey);
     return;
   }
   if (!progress) return;
@@ -3113,14 +3120,19 @@ function updateDictationButton() {
   el.dictationGroup.hidden = !dictationSupported() || !active;
   updateMicButton();
   syncDictationEngineOptions();
-  el.dictationBtn.title = t(dictationTitleKey());
   el.dictationBtn.disabled = !dictationUsable() && !dictation;
   if (dictation && sessionStops(dictationKind(), dictationStopReason())) stopDictation();
   else syncDictationWriteTarget();
-  const listening = !!dictation;
-  el.dictationBtn.classList.toggle("listening", listening);
-  el.dictationBtn.setAttribute("aria-pressed", listening ? "true" : "false");
-  el.dictationLabel.textContent = t(listening ? "editor.dictationStop" : "editor.dictation");
+  // A file session is still "on" (click stops it) but the microphone is
+  // closed, so it does not get the red pulsing mic.
+  const view = dictationControlState({ active: !!dictation, file: !!(dictation && dictation.file) });
+  el.dictationBtn.title = t(view.titleKey || dictationTitleKey());
+  el.dictationBtn.classList.toggle("listening", view.listening);
+  el.dictationBtn.classList.toggle("transcribing-file", view.transcribingFile);
+  el.dictationBtn.setAttribute("aria-pressed", view.pressed ? "true" : "false");
+  const icon = el.dictationBtn.querySelector(".btn-icon");
+  if (icon) icon.textContent = view.icon;
+  el.dictationLabel.textContent = t(view.labelKey);
   updateRecordButton();
   updateAudioFileBar();
 }
@@ -4336,6 +4348,9 @@ window.addEventListener("focus", () => {
   if (session.file) ensureSpeakerLink(session);
 });
 el.dictationRecordBtn.addEventListener("click", () => {
+  // File transcription doesn't open the microphone, so this click must not
+  // flip the saved record-with-dictation preference.
+  if (el.dictationRecordBtn.getAttribute("aria-disabled") === "true") return;
   recordWithDictation = !recordWithDictation;
   // Turned off mid-recording: the recording ends here, dictation goes on.
   if (!recordWithDictation && dictation && dictation.recording) stopDictationRecording(dictation);
