@@ -136,13 +136,15 @@ test("a file provider timeout reconnects; a bad key does not", () => {
   assert.equal(shouldReconnectFileSession(""), false);
 });
 
-test("iOS interruption pauses the clock and holds the socket; a user pause is not one", () => {
+test("a graph interruption does not pause the file; a user pause is not one", () => {
   assert.equal(filePauseKind(true), "user");
   assert.equal(filePauseKind(false), "interrupted");
+  // The audible element keeps going so iOS can duck it. The socket is
+  // held only if the element itself is paused.
   const stolen = fileContextAction("interrupted", { started: true, audioPaused: false });
-  assert.equal(stolen.pauseMedia, true);
-  assert.equal(stolen.hold, true);
-  assert.equal(stolen.commit, true);
+  assert.equal(stolen.pauseMedia, false);
+  assert.equal(stolen.hold, false);
+  assert.equal(stolen.commit, false);
   assert.equal(stolen.resumeContext, true);
   const suspended = fileContextAction("suspended", { started: true });
   assert.equal(suspended.resumeContext, true);
@@ -159,7 +161,7 @@ test("iOS interruption pauses the clock and holds the socket; a user pause is no
   assert.equal(fileContextAction("interrupted", { started: false }).pauseMedia, false);
 });
 
-test("an OS interruption releases a playing file; a user pause or a hidden tab does not", () => {
+test("an OS interruption is detected; a user pause or a hidden tab is not", () => {
   const playing = { started: true, hasAudioSession: true };
   assert.equal(fileOsInterruption({ ...playing, contextState: "interrupted" }), true);
   assert.equal(fileOsInterruption({ ...playing, audioSessionState: "interrupted", hidden: true }), true);

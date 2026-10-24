@@ -6,6 +6,7 @@
 
 import * as api from "./api.js";
 import { t, getLanguage } from "./i18n.js";
+import { beginMicSession, endMicSession } from "./playback-session.mjs";
 
 // Speech-grade bitrate: ~14 MB/hour, so even a long in-browser recording
 // stays under the API's 25 MB cap without server-side re-encoding.
@@ -158,9 +159,15 @@ export async function openTranscribeDialog({ projectId, sessionId, onDone }) {
       recorder.stop();
       return;
     }
+    // A playback claim would end this track (Audio Session: mic requires
+    // auto or play-and-record). Release it before opening the microphone.
+    let micHeld = false;
+    beginMicSession();
+    micHeld = true;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch (err) {
+      if (micHeld) endMicSession();
       status(t("transcribe.micDenied"), true);
       return;
     }
@@ -169,6 +176,10 @@ export async function openTranscribeDialog({ projectId, sessionId, onDone }) {
     const chunks = [];
     recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
     recorder.onstop = () => {
+      if (micHeld) {
+        endMicSession();
+        micHeld = false;
+      }
       stopTracks();
       const type = recorder.mimeType || mimeType || "audio/webm";
       setFile(new File(chunks, recordingFilename(type), { type }));
