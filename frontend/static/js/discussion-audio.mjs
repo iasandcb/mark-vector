@@ -1,7 +1,7 @@
 // iOS / WebKit can suspend the capture graph (`interrupted`) without the
-// user pressing stop. Same decisions as file transcription: resume the
-// context, hold the socket, and reconnect a dead one — don't treat the
-// interruption as hang-up.
+// user pressing stop. This is a microphone (play-and-record), not the
+// ducked file player: hold the socket and resume the context. A file keeps
+// playing through a graph flinch and only holds if its element pauses.
 
 import {
   FILE_RECONNECT_CAP,
@@ -21,7 +21,13 @@ export function discussCaptureAction(state, { userStopped = false, started = fal
     started,
     audioPaused: false,
   });
-  return { stop: false, hold: action.hold, resumeContext: action.resumeContext };
+  // fileContextAction no longer holds on a graph interruption, so a playing
+  // file is not cut. A discussion mic still finalizes the open phrase.
+  return {
+    stop: false,
+    hold: state === "interrupted" && started,
+    resumeContext: action.resumeContext,
+  };
 }
 
 export function discussSocketAction(args) {

@@ -5,6 +5,7 @@
 import * as api from "./api.js";
 import { t, getLanguage } from "./i18n.js";
 import { formatPlaybackClock, parsePlaybackTime, playbackJump, PLAYBACK_JUMP_MESSAGE } from "./audio-time.mjs";
+import { attachDuckPlayback } from "./playback-session.mjs";
 
 function escapeHtml(text) {
   return String(text).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -109,7 +110,9 @@ export async function openRecordingsDialog({ projectId, sessionId, filename, onC
   body.innerHTML = `<p class="recordings-empty">${escapeHtml(t("recordings.loading"))}</p>`;
   document.body.appendChild(overlay);
 
+  const ducks = [];
   const close = () => {
+    ducks.splice(0).forEach((handle) => handle.stop());
     overlay.querySelectorAll("audio").forEach((audio) => audio.pause());
     overlay.remove();
     document.removeEventListener("keydown", onKey);
@@ -180,13 +183,16 @@ export async function openRecordingsDialog({ projectId, sessionId, filename, onC
   }
 
   async function render() {
+    ducks.splice(0).forEach((handle) => handle.stop());
     let recordings;
     try {
       recordings = await api.listRecordings(projectId, sessionId, filename);
     } catch (err) {
+      if (!overlay.isConnected) return;
       body.innerHTML = `<p class="recordings-empty error">${escapeHtml(err.message)}</p>`;
       return;
     }
+    if (!overlay.isConnected) return;
     body.innerHTML = "";
     mountUpload(body);
     if (!recordings.length) {
@@ -234,6 +240,12 @@ export async function openRecordingsDialog({ projectId, sessionId, filename, onC
       // No copy to be had (the server couldn't convert) - the original.
       const audio = item.querySelector("audio");
       audio.addEventListener("error", () => (audio.src = url), { once: true });
+      // Plain playback of an ingested soundtrack (YouTube audio included).
+      // playback session + media session, so iOS ducks a voice alert instead
+      // of stopping the file. A pause the listener didn't ask for resumes
+      // when the alert ends.
+      const label = when ? when.toLocaleString(getLanguage()) : rec.id;
+      ducks.push(attachDuckPlayback(audio, { owner: `recording:${rec.id}`, title: label }));
       const downloadLink = item.querySelector("[data-download]");
       const progress = item.querySelector("[data-progress]");
       let downloading = false;

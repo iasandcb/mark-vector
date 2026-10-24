@@ -12,14 +12,16 @@
 // takes the microphone away while hidden is resumed when the page shows
 // again (see captureInterrupted), not treated as the user pressing stop.
 //
-// iOS takes the audio session when another app wants the microphone.
-// WebKit then sets AudioContext.state to "interrupted" (sometimes
-// "suspended") and AudioSession.state to "interrupted", and may pause the
-// element. That is not the user pressing pause, and it is not the page
-// becoming hidden: background playback keeps the "playback" session.
-// The file player releases the session (suspend, type "auto") so the other
-// app can record, and takes it back when the interruption ends or the page
-// is visible again. A user pause keeps the socket and asks it to wait.
+// iOS takes the audio session when another app wants it. A short voice
+// alert (a workout pace cue, Siri, a maps prompt) should duck a playback
+// session — the volume dips, both are heard, then the volume returns —
+// the way the YouTube app does. WebKit does that for a plain media element
+// whose session type is "playback". It interrupts a Web Audio graph that
+// is the thing being heard, and it interrupts "play-and-record".
+// The audible file stays a media element (see playback-session.mjs). If the
+// platform still pauses it, that pause is not the user: playback stays on
+// the playback session and resumes when the interruption ends. A user pause
+// stays paused. The microphone is a different session and is not overridden.
 
 // What to send around a gap so the phrase already heard is finalized once
 // and audio after the gap starts a new phrase. `commit` with nothing new
@@ -108,12 +110,12 @@ export function fileContextAction(state, { userPaused = false, audioEnded = fals
   if (!started) {
     return { resumeContext: state !== "interrupted", pauseMedia: false, hold: false, commit: false };
   }
-  // Interrupted output is silence. Stop the clock with it and hold the
-  // socket. resume() is still attempted; WebKit often ignores it until the
-  // play gesture, which tries again. A plain suspend (a desktop tab) just
-  // tries resume(), without cutting the sentence.
+  // The graph going quiet is not a reason to pause the file. The audible
+  // element is what iOS ducks; pausing it here turned a voice alert into
+  // a stop. Resume the graph. The element's own pause, if one arrives, is
+  // what holds the socket. A plain suspend (a desktop tab) just resumes.
   if (state === "interrupted") {
-    return { resumeContext: true, pauseMedia: !audioPaused, hold: true, commit: true };
+    return { resumeContext: true, pauseMedia: false, hold: false, commit: false };
   }
   return { resumeContext: true, pauseMedia: false, hold: false, commit: false };
 }
@@ -159,12 +161,13 @@ export function fileResumeAction({
   };
 }
 
-// Another app took the output. "suspended" while the page is hidden is the
-// browser parking a background tab, not an interruption — playback keeps
-// the session. "suspended" counts only where AudioSession exists (WebKit)
-// and we did not suspend ourselves. A system pause counts only on that
-// same WebKit session: a desktop pause is not one, and a pause while the
-// page is hidden is not one unless the session actually reports interrupted.
+// The platform took the output, as opposed to the user or a hidden tab.
+// "suspended" while the page is hidden is the browser parking a background
+// tab. "suspended" counts only where AudioSession exists (WebKit) and we
+// did not suspend ourselves. A system pause counts only on that same
+// WebKit session. Detecting this does not mean dropping the playback
+// session: a playback element stays playback and resumes when it ends
+// (see playback-session.mjs). A desktop pause is not one.
 export function fileOsInterruption({
   started = false,
   userPaused = false,

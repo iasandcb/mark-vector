@@ -80,6 +80,7 @@ export function mountDiscussion(deps) {
   let mic = null;
   let starting = false;
   let userStopped = false;
+  let micClaimed = false;
   let reconnects = 0;
   let reconnecting = false;
   let startedAt = 0;
@@ -285,6 +286,10 @@ export function mountDiscussion(deps) {
     }
     audioContext = null;
     deps.setAwake(false);
+    if (micClaimed && deps.setMicLive) {
+      deps.setMicLive(false);
+      micClaimed = false;
+    }
     setPartial("");
     setStatus(deps.t("discuss.idle"));
     if (meterEl) meterEl.textContent = "";
@@ -305,6 +310,11 @@ export function mountDiscussion(deps) {
     starting = true;
     deps.stopDictation();
     deps.setAudioSession("auto");
+    // auto, not playback: this open uses the microphone (play-and-record).
+    if (!micClaimed && deps.setMicLive) {
+      deps.setMicLive(true);
+      micClaimed = true;
+    }
     // Created inside the click, before any await — iOS will not resume a
     // context that was born after the gesture ended.
     audioContext = new AudioContext();
