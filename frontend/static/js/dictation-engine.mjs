@@ -45,3 +45,20 @@ export function resolveDictationEngine({ stored, webSpeech, openai, soniox, kind
 export function effectiveDictationEngine({ stored, webSpeech, openai, soniox, fileRunning = false }) {
   return resolveDictationEngine({ stored, webSpeech, openai, soniox, kind: fileRunning ? "file" : "mic" });
 }
+
+// Short label for the audio-file bar, before ▶ is pressed. A built-in
+// choice never reaches here as "builtin": resolveDictationEngine already
+// picked Soniox or OpenAI, both paid. Null means neither key is configured.
+export function fileEngineNoticeKey(engine) {
+  if (engine === "soniox") return "editor.audioFileEngineSoniox";
+  if (engine === "openai") return "editor.audioFileEngineOpenai";
+  return "editor.audioFileEngineNone";
+}
+
+// Longer hover text. Same engine as the notice, so a built-in choice does
+// not get the OpenAI sentence when Soniox is the one that will run.
+export function fileEngineDetailKey(engine) {
+  if (engine === "soniox") return "editor.audioFileTitleSoniox";
+  if (engine === "openai") return "editor.audioFileTitle";
+  return "editor.audioFileEngineNone";
+}

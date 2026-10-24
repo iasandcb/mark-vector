@@ -2547,6 +2547,20 @@ kbd.shortcut-key {
   min-width: 44px;
   padding: 4px 8px;
 }
+/* Which paid engine ▶ will use. Visible before play; a built-in choice
+   still lands on Soniox or OpenAI. Stays on screen when the filename hides. */
+.audio-file-engine {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--accent);
+  font-weight: 600;
+  line-height: 1.35;
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  border-radius: 999px;
+  padding: 2px 8px;
+}
 .audio-file-name {
   flex: 0 1 auto;
   max-width: 30%;

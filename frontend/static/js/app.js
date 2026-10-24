@@ -19,7 +19,7 @@ import { createGamepadRemote } from "./remote.js";
 import { splitSlides, lastSlideStart } from "./slides.js";
 import { startRealtimeTranscription } from "./realtime-stt.js";
 import { startSonioxTranscription } from "./soniox-stt.js";
-import { effectiveDictationEngine, enginesOffered, normalizeStoredEngine, resolveDictationEngine } from "./dictation-engine.mjs";
+import { effectiveDictationEngine, enginesOffered, fileEngineDetailKey, fileEngineNoticeKey, normalizeStoredEngine, resolveDictationEngine } from "./dictation-engine.mjs";
 import { dictationControlState, recordControlState } from "./dictation-button.mjs";
 import { consumeSonioxTranscript, limitContextTerms, spokenPhrasesFromCsv } from "./soniox-session.mjs";
 import {
@@ -166,6 +166,7 @@ const el = {
   dictationRecordBtn: document.getElementById("dictation-record-btn"),
   audioFileBar: document.getElementById("audio-file-bar"),
   audioFilePlayBtn: document.getElementById("audio-file-play-btn"),
+  audioFileEngine: document.getElementById("audio-file-engine"),
   audioFileBackBtn: document.getElementById("audio-file-back-btn"),
   audioFileForwardBtn: document.getElementById("audio-file-forward-btn"),
   audioFileName: document.getElementById("audio-file-name"),
@@ -2842,10 +2843,17 @@ function updateAudioFileBar() {
   const player = audioFilePlayer();
   const playing = !!player && !player.paused;
   el.audioFilePlayBtn.textContent = playing ? "⏸" : "▶";
-  el.audioFilePlayBtn.title = t(playing ? "editor.audioFilePause" : "editor.audioFilePlay");
+  // What ▶ will use, including a built-in choice that falls through to a
+  // paid engine. Follows the select and which keys the server reported.
+  const fileEngine = chosenEngine("file");
+  const notice = t(fileEngineNoticeKey(fileEngine));
+  const detail = t(fileEngineDetailKey(fileEngine));
+  if (el.audioFileEngine.textContent !== notice) el.audioFileEngine.textContent = notice;
+  el.audioFileEngine.title = detail;
+  el.audioFilePlayBtn.title = playing ? t("editor.audioFilePause") : detail;
   el.audioFilePlayBtn.disabled = !playing && !dictationUsable() && !player;
   el.audioFileName.textContent = audioFile.name;
-  el.audioFileName.title = t(chosenEngine("file") === "soniox" ? "editor.audioFileTitleSoniox" : "editor.audioFileTitle");
+  el.audioFileName.title = detail;
   el.audioFileSeek.max = String(audioFile.duration || 0);
   el.audioFileSeek.value = String(audioFile.position);
   el.audioFileSeek.disabled = !audioFile.duration;
