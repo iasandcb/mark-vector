@@ -951,6 +951,24 @@ body.row-dragging {
   animation: dictation-pulse 1.2s ease-in-out infinite;
 }
 
+/* A played file. Accent, not the recording red, and the icon does not pulse. */
+#dictation-btn.transcribing-file {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+}
+
+#dictation-btn.transcribing-file .btn-icon {
+  display: inline-block;
+  animation: none;
+}
+
+/* File transcription doesn't record. Greyed, outline dot, tooltip still works. */
+.dictation-record[aria-disabled="true"] {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 @keyframes dictation-pulse {
   0%, 100% { transform: scale(1); }
   50% { transform: scale(1.18); }
@@ -2528,6 +2546,25 @@ kbd.shortcut-key {
 .audio-file-play {
   min-width: 44px;
   padding: 4px 8px;
+}
+.audio-file-play.resume-needed {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+/* Which paid engine ▶ will use. Visible before play; a built-in choice
+   still lands on Soniox or OpenAI. Stays on screen when the filename hides. */
+.audio-file-engine {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--accent);
+  font-weight: 600;
+  line-height: 1.35;
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  border-radius: 999px;
+  padding: 2px 8px;
 }
 .audio-file-name {
   flex: 0 1 auto;

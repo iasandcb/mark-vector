@@ -19,7 +19,8 @@ import { createGamepadRemote } from "./remote.js";
 import { splitSlides, lastSlideStart } from "./slides.js";
 import { startRealtimeTranscription } from "./realtime-stt.js";
 import { startSonioxTranscription } from "./soniox-stt.js";
-import { effectiveDictationEngine, enginesOffered, normalizeStoredEngine, resolveDictationEngine } from "./dictation-engine.mjs";
+import { effectiveDictationEngine, enginesOffered, fileEngineDetailKey, fileEngineNoticeKey, normalizeStoredEngine, resolveDictationEngine } from "./dictation-engine.mjs";
+import { dictationControlState, recordControlState } from "./dictation-button.mjs";
 import { consumeSonioxTranscript, limitContextTerms, spokenPhrasesFromCsv } from "./soniox-session.mjs";
 import {
   FILE_RECONNECT_CAP,
@@ -28,6 +29,8 @@ import {
   captureInterrupted,
   fileContextAction,
   fileErrorText,
+  fileOsInterruption,
+  fileOsResumeCue,
   filePauseKind,
   fileProviderFailureAction,
   fileResumeAction,
@@ -165,6 +168,7 @@ const el = {
   dictationRecordBtn: document.getElementById("dictation-record-btn"),
   audioFileBar: document.getElementById("audio-file-bar"),
   audioFilePlayBtn: document.getElementById("audio-file-play-btn"),
+  audioFileEngine: document.getElementById("audio-file-engine"),
   audioFileBackBtn: document.getElementById("audio-file-back-btn"),
   audioFileForwardBtn: document.getElementById("audio-file-forward-btn"),
   audioFileName: document.getElementById("audio-file-name"),
@@ -2840,15 +2844,25 @@ function updateAudioFileBar() {
   if (!audioFile) return;
   const player = audioFilePlayer();
   const playing = !!player && !player.paused;
+  const osReleased = !!(dictation && dictation.file && dictation.file.osReleased) && !playing;
   el.audioFilePlayBtn.textContent = playing ? "⏸" : "▶";
-  el.audioFilePlayBtn.title = t(playing ? "editor.audioFilePause" : "editor.audioFilePlay");
+  el.audioFilePlayBtn.classList.toggle("resume-needed", osReleased);
+  // What ▶ will use, including a built-in choice that falls through to a
+  // paid engine. Follows the select and which keys the server reported.
+  const fileEngine = chosenEngine("file");
+  const notice = t(fileEngineNoticeKey(fileEngine));
+  const detail = t(fileEngineDetailKey(fileEngine));
+  if (el.audioFileEngine.textContent !== notice) el.audioFileEngine.textContent = notice;
+  el.audioFileEngine.title = detail;
+  el.audioFilePlayBtn.title = playing ? t("editor.audioFilePause") : osReleased ? t("editor.audioFileInterrupted") : detail;
   el.audioFilePlayBtn.disabled = !playing && !dictationUsable() && !player;
   el.audioFileName.textContent = audioFile.name;
-  el.audioFileName.title = t(chosenEngine("file") === "soniox" ? "editor.audioFileTitleSoniox" : "editor.audioFileTitle");
+  el.audioFileName.title = detail;
   el.audioFileSeek.max = String(audioFile.duration || 0);
   el.audioFileSeek.value = String(audioFile.position);
   el.audioFileSeek.disabled = !audioFile.duration;
   const clock = `${formatPlaybackClock(audioFile.position)} / ${audioFile.duration ? formatPlaybackClock(audioFile.duration) : "--:--"}`;
+  const withResume = osReleased ? `${clock} · ${t("editor.audioFileResume")}` : clock;
   el.audioFileGoto.setAttribute("aria-label", t("audio.gotoTitle"));
   el.audioFileTime.textContent = audioFile.error
     ? audioFile.error
@@ -2856,7 +2870,7 @@ function updateAudioFileBar() {
       ? t("recordings.preparing")
       : audioFile.buffering
         ? `${clock} · ${t("editor.audioFileBuffering")}`
-        : clock;
+        : withResume;
   el.audioFileRateBtn.textContent = `${audioFile.rate}×`;
 }
 
@@ -2868,6 +2882,14 @@ el.audioFilePlayBtn.addEventListener("click", () => {
     // Playing, but the graph is still interrupted: this tap is the gesture
     // that makes sound come back. Pausing would leave it silent.
     if (!player.paused && ctx && audioContextNeedsResume(ctx.state)) {
+      const session = dictation;
+      // The element can still be playing for a moment after WebKit
+      // interrupts. Resuming the graph here would take the session back.
+      if (session && session.file && (session.file.osReleased || session.file.weSuspended)) return;
+      if (session && session.file && fileOsInterruption(fileInterruptionInput(session, { contextState: ctx.state }))) {
+        releaseFileAudioSession(session);
+        return;
+      }
       ctx.resume().catch(() => {});
       ensureSpeakerLink(dictation);
       return;
@@ -2972,13 +2994,19 @@ function formatClock(ms) {
 function updateRecordButton(progress) {
   const btn = el.dictationRecordBtn;
   btn.hidden = !recordingSupported();
-  btn.setAttribute("aria-pressed", recordWithDictation ? "true" : "false");
+  const fileSession = !!(dictation && dictation.file);
   const recording = !!(dictation && dictation.recording);
-  btn.classList.toggle("recording", recording);
-  if (!recording) {
+  // A file session never records. The saved preference stays as it is;
+  // only the dot is painted off, and the control won't take a click.
+  const view = recordControlState({ fileSession, recordWithDictation, recording });
+  if (view.ariaDisabled) btn.setAttribute("aria-disabled", "true");
+  else btn.removeAttribute("aria-disabled");
+  btn.setAttribute("aria-pressed", view.pressed ? "true" : "false");
+  btn.classList.toggle("recording", view.showRecording);
+  if (!view.showRecording) {
     btn.innerHTML = '<span class="rec-dot"></span>';
     btn.classList.remove("behind");
-    btn.title = t("editor.dictationRecordTitle");
+    btn.title = t(view.titleKey);
     return;
   }
   if (!progress) return;
@@ -3113,14 +3141,19 @@ function updateDictationButton() {
   el.dictationGroup.hidden = !dictationSupported() || !active;
   updateMicButton();
   syncDictationEngineOptions();
-  el.dictationBtn.title = t(dictationTitleKey());
   el.dictationBtn.disabled = !dictationUsable() && !dictation;
   if (dictation && sessionStops(dictationKind(), dictationStopReason())) stopDictation();
   else syncDictationWriteTarget();
-  const listening = !!dictation;
-  el.dictationBtn.classList.toggle("listening", listening);
-  el.dictationBtn.setAttribute("aria-pressed", listening ? "true" : "false");
-  el.dictationLabel.textContent = t(listening ? "editor.dictationStop" : "editor.dictation");
+  // A file session is still "on" (click stops it) but the microphone is
+  // closed, so it does not get the red pulsing mic.
+  const view = dictationControlState({ active: !!dictation, file: !!(dictation && dictation.file) });
+  el.dictationBtn.title = t(view.titleKey || dictationTitleKey());
+  el.dictationBtn.classList.toggle("listening", view.listening);
+  el.dictationBtn.classList.toggle("transcribing-file", view.transcribingFile);
+  el.dictationBtn.setAttribute("aria-pressed", view.pressed ? "true" : "false");
+  const icon = el.dictationBtn.querySelector(".btn-icon");
+  if (icon) icon.textContent = view.icon;
+  el.dictationLabel.textContent = t(view.labelKey);
   updateRecordButton();
   updateAudioFileBar();
 }
@@ -3561,6 +3594,181 @@ function setAudioSessionType(type) {
   }
 }
 
+function readAudioSessionState() {
+  try {
+    const audioSession = navigator.audioSession;
+    return audioSession && typeof audioSession.state === "string" ? audioSession.state : "";
+  } catch (err) {
+    return "";
+  }
+}
+
+function hasNavigatorAudioSession() {
+  try {
+    return !!navigator.audioSession;
+  } catch (err) {
+    return false;
+  }
+}
+
+function suspendFileContext(ctx) {
+  if (!ctx || typeof ctx.suspend !== "function") return;
+  // "interrupted" is WebKit's. suspend() there may reject; the type change
+  // is what lets the other app record. A plain "suspended" is already quiet.
+  if (ctx.state !== "running" && ctx.state !== "interrupted") return;
+  try {
+    const pending = ctx.suspend();
+    if (pending && typeof pending.catch === "function") pending.catch(() => {});
+  } catch (err) {
+    // already suspended, or this browser has no suspend
+  }
+}
+
+// Setting type to "auto" can report "active" in the same turn. Ignore that
+// as a resume, and let a later statechange (the other app actually finished)
+// through. Coming back to the page does not wait on this.
+const FILE_RESUME_SUPPRESS_MS = 500;
+
+function suppressFileAutoResume(session) {
+  const file = session && session.file;
+  if (!file) return;
+  file.resumeSuppressed = true;
+  file.resumeEpoch = (file.resumeEpoch || 0) + 1;
+  const epoch = file.resumeEpoch;
+  setTimeout(() => {
+    if (dictation !== session || !session.file || session.file.resumeEpoch !== epoch) return;
+    session.file.resumeSuppressed = false;
+  }, FILE_RESUME_SUPPRESS_MS);
+}
+
+// Another app took the output. Pause the file and the uplink, drop the
+// playback session, and keep the transcript. Hiding the page does not
+// come through here.
+function releaseFileAudioSession(session) {
+  const file = session && session.file;
+  if (!file || file.userPaused || file.osReleased || !file.started || file.audio.ended || file.resuming) return;
+  file.osReleased = true;
+  file.weSuspended = true;
+  file.causedByUs = true;
+  file.uplinkHeld = true;
+  file.interruptPending = false;
+  suppressFileAutoResume(session);
+  noteFileInterrupted(session);
+  if (!file.audio.paused) file.audio.pause();
+  const track = session.stream && session.stream.getAudioTracks()[0];
+  if (track) {
+    try {
+      track.enabled = false;
+    } catch (err) {
+      // the track is already gone
+    }
+  }
+  suspendFileContext(session.audioContext);
+  setAudioSessionType("auto");
+  file.causedByUs = false;
+  showRemoteStatus(t("editor.audioFileInterrupted"), { sticky: true });
+  updateAudioFileBar();
+}
+
+function fileInterruptionInput(session, extra = {}) {
+  const file = session.file;
+  return {
+    started: file.started,
+    userPaused: file.userPaused,
+    audioEnded: file.audio.ended,
+    contextState: session.audioContext ? session.audioContext.state : "",
+    audioSessionState: readAudioSessionState(),
+    causedByUs: file.causedByUs,
+    weSuspended: file.weSuspended,
+    hidden: document.hidden,
+    hasAudioSession: hasNavigatorAudioSession(),
+    ...extra,
+  };
+}
+
+function fileResumeCueInput(session, extra = {}) {
+  const file = session.file;
+  return {
+    osReleased: file.osReleased,
+    userPaused: file.userPaused,
+    audioEnded: file.audio.ended,
+    contextState: session.audioContext ? session.audioContext.state : "",
+    audioSessionState: readAudioSessionState(),
+    resumeFailed: file.resumeFailed,
+    resumeSuppressed: file.resumeSuppressed,
+    ...extra,
+  };
+}
+
+// An interruption that arrives while play() is in flight must not be
+// dropped: the resume attempt is holding resuming, so release waits.
+function noteFileInterruptWhileResuming(session, input) {
+  if (fileOsInterruption(input)) session.file.interruptPending = true;
+}
+
+function bindFileAudioSession(session) {
+  let audioSession;
+  try {
+    audioSession = navigator.audioSession;
+  } catch (err) {
+    return () => {};
+  }
+  if (!audioSession) return () => {};
+  const onState = () => {
+    if (dictation !== session || !session.file) return;
+    const state = readAudioSessionState();
+    const input = fileInterruptionInput(session, { audioSessionState: state });
+    if (session.file.resuming) {
+      noteFileInterruptWhileResuming(session, input);
+      return;
+    }
+    if (fileOsInterruption(input)) {
+      releaseFileAudioSession(session);
+      return;
+    }
+    if (fileOsResumeCue(fileResumeCueInput(session, { audioSessionState: state }))) {
+      resumeFilePlayback(session, { announce: false });
+    }
+  };
+  try {
+    if (typeof audioSession.addEventListener === "function") {
+      audioSession.addEventListener("statechange", onState);
+      return () => {
+        try {
+          audioSession.removeEventListener("statechange", onState);
+        } catch (err) {
+          // already gone
+        }
+      };
+    }
+  } catch (err) {
+    // property-only implementation below
+  }
+  let previous = null;
+  try {
+    previous = audioSession.onstatechange || null;
+    audioSession.onstatechange = (event) => {
+      if (typeof previous === "function") {
+        try {
+          previous.call(audioSession, event);
+        } catch (err) {
+          // the previous handler failed
+        }
+      }
+      onState();
+    };
+  } catch (err) {
+    return () => {};
+  }
+  return () => {
+    try {
+      audioSession.onstatechange = previous;
+    } catch (err) {
+      // not settable
+    }
+  };
+}
+
 // The lock screen's and Control Center's player: the file's name, and
 // play/pause/seek that reach the player while the page is hidden.
 function setAudioFileMediaSession(file) {
@@ -3713,7 +3921,8 @@ async function reconnectFileTranscription(session, reasonText) {
   } catch (err) {
     // already ended
   }
-  if (ctx && audioContextNeedsResume(ctx.state)) ctx.resume().catch(() => {});
+  // A released session stays suspended until playback itself resumes.
+  if (ctx && audioContextNeedsResume(ctx.state) && !(session.file.osReleased && !session.file.resuming)) ctx.resume().catch(() => {});
   let stream = null;
   try {
     ensureSpeakerLink(session);
@@ -3827,37 +4036,128 @@ function handleProviderError(session, message) {
 // not clear: nothing has been committed yet. A play after a pause or an
 // interruption clears the silent gap so the next words are a new phrase.
 function resumeFilePlayback(session, { announce = true } = {}) {
-  if (!session || !session.file) return;
-  const audio = session.file.audio;
+  if (!session || !session.file || session.file.resuming) return;
+  const file = session.file;
+  const wasReleased = !!file.osReleased;
+  file.resuming = true;
+  file.resumeFailed = false;
+  if (wasReleased) {
+    file.causedByUs = true;
+    setAudioSessionType("playback");
+    file.uplinkHeld = false;
+    const track = session.stream && session.stream.getAudioTracks()[0];
+    if (track && track.readyState !== "ended") {
+      try {
+        track.enabled = true;
+      } catch (err) {
+        // the track is already gone
+      }
+    }
+  }
+  const audio = file.audio;
   const ctx = session.audioContext;
-  const sttOpen = !session.file.sttDropped && (typeof session.alive !== "function" || session.alive());
+  const sttOpen = !file.sttDropped && (typeof session.alive !== "function" || session.alive());
   const action = fileResumeAction({
     contextState: ctx ? ctx.state : "closed",
-    userPaused: session.file.userPaused,
-    interrupted: session.file.interrupted,
+    userPaused: file.userPaused,
+    interrupted: file.interrupted,
     sttOpen,
-    reconnects: session.file.reconnects || 0,
-    reconnecting: session.file.reconnecting,
-    started: session.file.started,
+    reconnects: file.reconnects || 0,
+    reconnecting: file.reconnecting,
+    started: file.started,
   });
+  const finishReleaseAttempt = (ok) => {
+    if (!session.file) return;
+    const interruptedAgain = session.file.interruptPending;
+    session.file.interruptPending = false;
+    if (interruptedAgain) {
+      // play() may have reclaimed the session. Put it back down.
+      session.file.resuming = false;
+      session.file.causedByUs = false;
+      session.file.osReleased = false;
+      session.file.weSuspended = false;
+      releaseFileAudioSession(session);
+      return;
+    }
+    if (ok) {
+      session.file.osReleased = false;
+      session.file.weSuspended = false;
+      session.file.resumeFailed = false;
+      session.file.uplinkHeld = false;
+      session.file.resuming = false;
+      session.file.causedByUs = false;
+      if (wasReleased) showRemoteStatus(t("editor.dictationListening"));
+      updateAudioFileBar();
+      return;
+    }
+    if (!wasReleased) {
+      session.file.resuming = false;
+      session.file.causedByUs = false;
+      return;
+    }
+    // Flags before suspend(), and resuming stays set across it, so that
+    // statechange is not a new interruption and does not resume the graph.
+    session.file.osReleased = true;
+    session.file.resumeFailed = true;
+    session.file.weSuspended = true;
+    session.file.uplinkHeld = true;
+    session.file.causedByUs = true;
+    const held = session.stream && session.stream.getAudioTracks()[0];
+    if (held) {
+      try {
+        held.enabled = false;
+      } catch (err) {
+        // already ended
+      }
+    }
+    suspendFileContext(session.audioContext);
+    setAudioSessionType("auto");
+    session.file.causedByUs = false;
+    session.file.resuming = false;
+    suppressFileAutoResume(session);
+    showRemoteStatus(t("editor.audioFileInterrupted"), { sticky: true });
+    updateAudioFileBar();
+  };
   // resume() has to be invoked before any await. "interrupted" is not
   // "suspended", and leaving it there is why the clock moved with no sound.
+  // weSuspended stays set until play actually starts, so this resume is not
+  // read as a new interruption.
+  if (wasReleased) file.weSuspended = false;
   if (ctx && ctx.state !== "closed" && action.resumeContext) ctx.resume().catch(() => {});
   ensureSpeakerLink(session);
   if (action.popup) {
-    const text = session.file.dropReason || "error";
+    file.resuming = false;
+    file.causedByUs = false;
+    const text = file.dropReason || "error";
     stopDictation();
     alert(t("editor.dictationFailed", { message: text }));
     return;
   }
   if (action.clearBuffer) applyBufferSteps(session, "resume");
-  session.file.userPaused = false;
-  session.file.interrupted = false;
-  session.file.started = true;
-  if (action.reconnect) reconnectFileTranscription(session, session.file.dropReason);
-  else if (!session.file.reconnecting) ensureFileUplink(session);
-  audio.play().catch((err) => {
-    if (announce && dictation === session) showRemoteStatus(t("editor.dictationFailed", { message: err.message }));
+  file.userPaused = false;
+  file.interrupted = false;
+  file.started = true;
+  if (action.reconnect) reconnectFileTranscription(session, file.dropReason);
+  else if (!file.reconnecting) ensureFileUplink(session);
+  let played;
+  try {
+    played = audio.play();
+  } catch (err) {
+    finishReleaseAttempt(false);
+    if (!wasReleased && announce && dictation === session) showRemoteStatus(t("editor.dictationFailed", { message: err.message }));
+    return;
+  }
+  if (!played || typeof played.then !== "function") {
+    finishReleaseAttempt(true);
+    return;
+  }
+  played.then(() => {
+    if (dictation !== session) return;
+    finishReleaseAttempt(true);
+  }).catch((err) => {
+    if (dictation !== session) return;
+    finishReleaseAttempt(false);
+    if (!wasReleased && announce) showRemoteStatus(t("editor.dictationFailed", { message: err.message }));
   });
 }
 
@@ -3917,7 +4217,7 @@ function ensureFileUplink(session) {
 
 function watchFileTrack(session, track) {
   const rebuild = () => {
-    if (dictation !== session || !session.file || session.file.reconnecting || session.file.audio.paused) return;
+    if (dictation !== session || !session.file || session.file.reconnecting || session.file.audio.paused || session.file.osReleased || session.file.uplinkHeld) return;
     const current = session.stream && session.stream.getAudioTracks()[0];
     if (current && current !== track) return;
     ensureFileUplink(session);
@@ -4040,11 +4340,16 @@ function startBilledDictation(file, engine) {
         updateAudioFileBar();
         return;
       }
-      // The button sets userPaused first. Any other pause is the OS taking
-      // the audio session: finalize once and hold the socket, but don't stop.
+      // The button sets userPaused first. A pause we caused while releasing
+      // the session is not a second interruption. Any other pause may be
+      // the OS. Hiding the page does not pause the element by itself.
       if (filePauseKind(session.file.userPaused) === "user") {
         applyBufferSteps(session, "pause");
         if (typeof session.hold === "function") session.hold();
+      } else if (session.file.osReleased || session.file.causedByUs) {
+        // already releasing
+      } else if (session.file.started && !audio.ended && fileOsInterruption(fileInterruptionInput(session, { systemPause: true }))) {
+        releaseFileAudioSession(session);
       } else if (session.file.started && !audio.ended) {
         noteFileInterrupted(session);
       }
@@ -4077,6 +4382,15 @@ function startBilledDictation(file, engine) {
       started: false,
       userPaused: false,
       interrupted: false,
+      osReleased: false,
+      weSuspended: false,
+      causedByUs: false,
+      uplinkHeld: false,
+      resumeFailed: false,
+      resumeSuppressed: false,
+      resumeEpoch: 0,
+      interruptPending: false,
+      resuming: false,
       seekedAt: 0,
       rebuilding: false,
       reconnects: 0,
@@ -4086,7 +4400,24 @@ function startBilledDictation(file, engine) {
     };
     audioContext.addEventListener("statechange", () => {
       if (dictation !== session || !session.file) return;
-      const action = fileContextAction(audioContext.state, {
+      const contextState = audioContext.state;
+      const input = fileInterruptionInput(session, { contextState });
+      if (session.file.resuming) {
+        noteFileInterruptWhileResuming(session, input);
+        return;
+      }
+      if (fileOsInterruption(input)) {
+        releaseFileAudioSession(session);
+        return;
+      }
+      if (fileOsResumeCue(fileResumeCueInput(session, { contextState }))) {
+        resumeFilePlayback(session, { announce: false });
+        return;
+      }
+      // Still released, or suspended by us: do not resume the graph. That
+      // would take the session back while the other app is recording.
+      if (session.file.osReleased || session.file.weSuspended) return;
+      const action = fileContextAction(contextState, {
         userPaused: session.file.userPaused,
         audioEnded: audio.ended,
         started: session.file.started,
@@ -4096,6 +4427,7 @@ function startBilledDictation(file, engine) {
       if (action.pauseMedia && !audio.paused && !audio.ended) audio.pause();
       if (action.resumeContext) audioContext.resume().catch(() => {});
     });
+    session.file.unbindAudioSession = bindFileAudioSession(session);
     setAudioFileMediaSession(file);
   }
   if (el.editor.selectionEnd > el.editor.selectionStart) {
@@ -4216,6 +4548,10 @@ function stopDictation() {
   dictation = null;
   // The recorder first: the realtime engine's stop() ends the stream it records.
   stopDictationRecording(session);
+  if (session.file && typeof session.file.unbindAudioSession === "function") {
+    session.file.unbindAudioSession();
+    session.file.unbindAudioSession = null;
+  }
   if (session.file) session.file.audio.pause();
   keepScreenOn(false);
   if (session.file) {
@@ -4269,6 +4605,9 @@ function recoverVisibleFileSession() {
   const file = session.file;
   const ctx = session.audioContext;
   if (file.userPaused) {
+    // A user pause does not release the session. An OS release that the
+    // user then confirmed with pause must not wake the graph on focus.
+    if (file.osReleased || file.weSuspended) return;
     if (ctx && audioContextNeedsResume(ctx.state)) ctx.resume().catch(() => {});
     ensureSpeakerLink(session);
     return;
@@ -4284,10 +4623,12 @@ function recoverVisibleFileSession() {
   ensureFileUplink(session);
 }
 
-// Hiding the page does not stop dictation. The browser drops a wake lock
-// whenever the page is hidden, and iOS may also freeze timers, so a file
-// sends keepalive once on the way out. The graph is resumed when the page
-// is visible again. A file the user paused stays paused.
+// Hiding the page does not stop dictation and does not release the iOS
+// playback session. The browser drops a wake lock whenever the page is
+// hidden, and iOS may also freeze timers, so a file sends keepalive once
+// on the way out. The graph is resumed when the page is visible again.
+// A file the user paused stays paused. An OS interruption is a different
+// signal (AudioContext / AudioSession / a system pause) and is handled there.
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
     if (dictation && dictation.file && typeof dictation.hold === "function") dictation.hold();
@@ -4330,12 +4671,18 @@ window.addEventListener("pageshow", () => recoverVisibleFileSession());
 window.addEventListener("focus", () => {
   const session = dictation;
   if (!session || document.hidden) return;
+  // Focus is not the interruption ending. Waking the graph here would take
+  // the playback session back while the other app is still recording.
+  if (session.file && (session.file.osReleased || session.file.weSuspended || session.file.uplinkHeld)) return;
   const ctx = session.audioContext;
   if (!ctx || !audioContextNeedsResume(ctx.state)) return;
   ctx.resume().catch(() => {});
   if (session.file) ensureSpeakerLink(session);
 });
 el.dictationRecordBtn.addEventListener("click", () => {
+  // File transcription doesn't open the microphone, so this click must not
+  // flip the saved record-with-dictation preference.
+  if (el.dictationRecordBtn.getAttribute("aria-disabled") === "true") return;
   recordWithDictation = !recordWithDictation;
   // Turned off mid-recording: the recording ends here, dictation goes on.
   if (!recordWithDictation && dictation && dictation.recording) stopDictationRecording(dictation);
