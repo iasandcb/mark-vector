@@ -1923,8 +1923,17 @@ function maybeRestoreAutosave() {
 // renderPreviewB below) - only the shared #preview element itself, and the
 // sync-scroll it drives, follow the source.
 let previewSource = "a";
+let focusedEditorPane = "a";
+
+function conversationPairOpen() {
+  return splitViewOpen() && !!active && !!activeB &&
+    active.projectId === activeB.projectId && active.sessionId === activeB.sessionId &&
+    activeB.filename?.endsWith(".md") &&
+    active.filename === activeB.filename.slice(0, -3) + ".c.md";
+}
 
 function setPreviewSource(source) {
+  if (conversationPairOpen()) source = "b";
   if (previewSource === source) return;
   previewSource = source;
   if (source === "a") renderPreview();
@@ -2035,6 +2044,10 @@ function paintSharedPreview(text, dialect) {
 }
 
 function renderPreview() {
+  if (conversationPairOpen()) {
+    previewSource = "b";
+    renderPreviewB();
+  }
   // renderPreview() is already the one function every pane-A content change
   // in this file calls right afterward (new document, streaming delta,
   // Tab/Enter, format conversion, ...), so hooking the nav/sync/autosave/
@@ -2066,6 +2079,7 @@ function renderPreview() {
 // follow pane A's own document regardless of what's on screen - see
 // renderPreview above).
 function renderPreviewB() {
+  if (conversationPairOpen()) previewSource = "b";
   if (previewSource === "b" && activeB) {
     paintSharedPreview(el.editorB.value, sessionMathDialect(activeB.projectId, activeB.sessionId));
     syncPreviewScrollFromSource("b");
@@ -6643,6 +6657,7 @@ async function selectDocumentB(projectId, sessionId, filename, { focus = true, p
   el.editorB.disabled = false;
   el.saveBtnB.disabled = false;
   updateFilenameLabelB();
+  renderPreviewB();
   renderTree();
   // Skipped on restore (see restoreActiveDocumentB) - stealing focus (and
   // with it previewSource, see the "focus" listener below) into the
@@ -8560,8 +8575,14 @@ el.editorB.addEventListener("input", () => {
   updateFilenameLabelB();
   renderPreviewB();
 });
-el.editor.addEventListener("focus", () => setPreviewSource("a"));
-el.editorB.addEventListener("focus", () => setPreviewSource("b"));
+el.editor.addEventListener("focus", () => {
+  focusedEditorPane = "a";
+  setPreviewSource("a");
+});
+el.editorB.addEventListener("focus", () => {
+  focusedEditorPane = "b";
+  setPreviewSource("b");
+});
 el.editorB.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
     e.preventDefault();
@@ -8805,8 +8826,7 @@ document.addEventListener("keydown", (e) => {
   }
 });
 // Moves focus to whichever editor pane isn't currently focused - see
-// previewSource, which this doubles as "the pane last focused" for (it's
-// already updated by the "focus" listeners on el.editor/el.editorB). A
+// focusedEditorPane, updated independently of the pinned preview. A
 // document-level listener like the alt-hint one above, rather than one
 // tied to either editor, so it fires the same way regardless of which pane
 // (or neither - the tree, a toolbar control) currently has focus.
@@ -8822,7 +8842,7 @@ document.addEventListener("keydown", (e) => {
   toggleSplitFocus();
 });
 function toggleSplitFocus() {
-  if (previewSource === "b") {
+  if (focusedEditorPane === "b") {
     el.editor.focus();
   } else if (splitViewOpen() && activeB) {
     el.editorB.focus();
