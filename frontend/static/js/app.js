@@ -1,4 +1,5 @@
 import * as api from "./api.js";
+import { createDocumentFollower } from "./document-sync.mjs";
 import {
   renderMarkdown,
   detectMathDirective,
@@ -2044,6 +2045,7 @@ function paintSharedPreview(text, dialect) {
 }
 
 function renderPreview() {
+  syncDocumentFollowers();
   if (conversationPairOpen()) {
     previewSource = "b";
     renderPreviewB();
@@ -2079,6 +2081,7 @@ function renderPreview() {
 // follow pane A's own document regardless of what's on screen - see
 // renderPreview above).
 function renderPreviewB() {
+  syncDocumentFollowers();
   if (conversationPairOpen()) previewSource = "b";
   if (previewSource === "b" && activeB) {
     paintSharedPreview(el.editorB.value, sessionMathDialect(activeB.projectId, activeB.sessionId));
@@ -5211,6 +5214,38 @@ el.remoteBtn.addEventListener("click", () => remote.openSettings());
 //     about that version; the next Save here wins, as before.
 // Pane B (split view) syncs the same way but only while it has no unsaved
 // edits of its own - it has no room for the pill.
+// Saved snapshots from the single-writer iPhone editor arrive immediately.
+// Existing HTTP polling remains as a fallback after a dropped connection.
+var documentFollowers = ["a", "b"].map(pane => createDocumentFollower({
+  onUpdate(ref, message) {
+    const doc = pane === "a" ? active : activeB;
+    if (!doc || doc.projectId !== ref.projectId || doc.sessionId !== ref.sessionId || doc.filename !== ref.filename) return;
+    if (pane === "a" && (streaming || slideJob || dictation)) return;
+    const editor = pane === "a" ? el.editor : el.editorB;
+    if (pane === "a" ? isDirty() : isDirtyB()) return;
+    if (doc.version === message.version && editor.value === message.content) return;
+    doc.liveRevision = (doc.liveRevision || 0) + 1;
+    doc.version = message.version;
+    if (pane === "a") {
+      hideSyncConflict();
+      applyRemoteToA(message.content);
+    } else {
+      applyTextKeepingCaret(editor, message.content);
+      doc.savedContent = message.content;
+      cacheDocumentContent(doc, message.content);
+      updateFilenameLabelB();
+      renderPreviewB();
+    }
+  }
+}));
+function syncDocumentFollowers() {
+  if (!documentFollowers) return;
+  documentFollowers[0].follow(syncable(active) ? active : null);
+  documentFollowers[1].follow(splitViewOpen() && syncable(activeB) ? activeB : null);
+}
+window.addEventListener("pagehide", () => documentFollowers.forEach(follower => follower.close()));
+window.addEventListener("pageshow", syncDocumentFollowers);
+
 const SYNC_INTERVAL_MS = 4000;
 let pendingRemote = null; // { doc, content } while the pill is showing
 let syncInFlight = false;
@@ -5264,6 +5299,7 @@ async function pollPane(pane) {
   const doc = pane === "a" ? active : activeB;
   if (!syncable(doc)) return;
   if (pane === "a" && (streaming || slideJob || dictation)) return;
+  const liveRevision = doc.liveRevision || 0;
   let result;
   try {
     result = await api.pollDocument(doc.projectId, doc.sessionId, doc.filename, doc.version);
@@ -5272,6 +5308,7 @@ async function pollPane(pane) {
   }
   // The document may have been switched (or a send started) meanwhile.
   if ((pane === "a" ? active : activeB) !== doc || (pane === "a" && (streaming || slideJob || dictation))) return;
+  if ((doc.liveRevision || 0) !== liveRevision) return; // A newer WebSocket snapshot arrived while polling.
   doc.version = result.version;
   if (!result.changed) return;
   const editor = pane === "a" ? el.editor : el.editorB;

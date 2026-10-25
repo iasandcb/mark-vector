@@ -10,6 +10,7 @@ from .routers import (
     analysis,
     convert,
     conversations,
+    document_sync,
     custom_symbols,
     hermes,
     ingest,
@@ -39,6 +40,7 @@ app.include_router(auth_router)
 
 app.include_router(projects.router)
 app.include_router(conversations.router)
+app.include_router(document_sync.router)
 app.include_router(analysis.router)
 app.include_router(providers.router)
 app.include_router(system_prompt.router)
