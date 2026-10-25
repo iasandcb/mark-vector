@@ -7713,12 +7713,22 @@ function headingFoldRanges(text) {
   const threads = inlineThreads(text);
   const lines = [];
   let offset = 0;
+  let fence = null;
   for (const line of text.split("\n")) {
-    const heading = /^(#{1,6})\s/.exec(line);
+    const fenceMatch = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    const inFence = !!fence;
+    if (fenceMatch) {
+      const marker = fenceMatch[1];
+      if (!fence) fence = { char: marker[0], length: marker.length };
+      else if (marker[0] === fence.char && marker.length >= fence.length && !fenceMatch[2].trim()) fence = null;
+    }
+    const heading = !inFence && !fenceMatch && /^(#{1,6})\s/.exec(line);
+    const insideThread = threads.some((thread) => offset >= thread.start && offset <= thread.end);
     lines.push({
       start: offset,
       end: offset + line.length,
       level: heading ? heading[1].length : 0,
+      role: heading && !insideThread ? exchangeHeadingRole(line.trim()) : null,
       blank: !line.trim(),
     });
     offset += line.length + 1;
@@ -7729,7 +7739,9 @@ function headingFoldRanges(text) {
     if (threads.some((thread) => line.start >= thread.start && line.start <= thread.end)) return;
     let last = lines.length - 1;
     for (let next = index + 1; next < lines.length; next++) {
-      if (lines[next].level && lines[next].level <= line.level) {
+      // Exchange headings own the entire reply, including its Markdown
+      // sections. A heading quoted inside an inline thread isn't a turn.
+      if (line.role ? lines[next].role : lines[next].level && lines[next].level <= line.level) {
         last = next - 1;
         break;
       }
