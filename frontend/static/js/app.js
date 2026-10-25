@@ -621,6 +621,7 @@ function showStashedTab(stash) {
 }
 
 async function loadIntoTab(ref) {
+  ref = await pairedDocumentRef(ref);
   openingTab = true;
   try {
     await restoreActiveDocument(ref);
@@ -634,6 +635,7 @@ async function loadIntoTab(ref) {
 // tab it already has. The same document again just reloads it, as before.
 async function openInTab(ref) {
   if (streaming || !ref) return;
+  ref = await pairedDocumentRef(ref);
   const at = tabs.findIndex((tab) => sameDocRef(tab.ref, ref));
   if (at >= 0 && at === currentTab && active) {
     await restoreActiveDocument(ref);
@@ -5368,6 +5370,9 @@ function buildDocumentRow(projectId, sessionId, doc) {
     row.appendChild(renameBtn);
     attachRowMenu(row, row, (feedbackEl) => [
       { icon: "✎", label: t("doc.rename"), onSelect: () => renameDocument(projectId, sessionId, doc.filename) },
+      ...(!doc.filename.endsWith(".c.md")
+        ? [{ icon: "+", label: t("doc.createConversationFile"), onSelect: () => createConversationFile(projectId, sessionId, doc.filename) }]
+        : []),
       // The inverse of sending a draft (storage.start_exchange's
       // draft_filename) - only a real turn has anything to revert.
       ...(doc.role !== "draft"
@@ -6534,6 +6539,24 @@ async function toggleSession(projectId, id) {
 // probably opened to read.
 const PHONE_LAYOUT = window.matchMedia("(max-width: 700px)");
 
+// Only pair existing siblings; the final .c suffix identifies the left pane.
+async function documentPair(projectId, sessionId, filename) {
+  if (!filename.endsWith(".md")) return null;
+  const session = projects.get(projectId)?.sessions?.get(sessionId);
+  if (!session) return null;
+  if (session.documents === null) session.documents = await api.listDocuments(projectId, sessionId);
+  const right = filename.endsWith(".c.md") ? filename.slice(0, -5) + ".md" : filename;
+  const left = right.slice(0, -3) + ".c.md";
+  return [left, right].every((name) => session.documents.some((doc) => doc.filename === name))
+    ? { left, right } : null;
+}
+
+async function pairedDocumentRef(ref) {
+  if (ref?.role !== "document") return ref;
+  const pair = await documentPair(ref.projectId, ref.sessionId, ref.filename);
+  return pair ? { ...ref, filename: pair.left } : ref;
+}
+
 // `focus` (on by default): every way of arriving at a document - a tree
 // row, quick open, the jump keys, an internal link, and the page-load
 // restore of the last open one - leaves the caret at the top of the editor,
@@ -6541,6 +6564,11 @@ const PHONE_LAYOUT = window.matchMedia("(max-width: 700px)");
 async function selectDocument(projectId, sessionId, filename, { focus = true } = {}) {
   if (streaming) return;
   if (!openingTab && isDirty() && !confirm(t("confirm.unsavedChanges"))) return;
+
+  const pair = await documentPair(projectId, sessionId, filename);
+  const sameRight = pair && activeB?.projectId === projectId && activeB?.sessionId === sessionId && activeB?.filename === pair.right;
+  if (pair && !sameRight && isDirtyB() && !confirm(t("confirm.unsavedChanges"))) return;
+  if (pair) filename = pair.left;
 
   const project = projects.get(projectId);
   if (!project) return;
@@ -6573,6 +6601,10 @@ async function selectDocument(projectId, sessionId, filename, { focus = true } =
   renderPreview();
   renderTree();
   setMobileView("editor");
+  if (pair) {
+    if (sameRight) setSplitView(true);
+    else await selectDocumentB(projectId, sessionId, pair.right, { focus: false, paired: true });
+  }
   if (focus && !PHONE_LAYOUT.matches && editorViewMode !== "rendered") {
     el.editor.setSelectionRange(0, 0);
     el.editor.focus();
@@ -6586,8 +6618,12 @@ async function selectDocument(projectId, sessionId, filename, { focus = true } =
 // view if it wasn't already, and focusing the pane (which the caller does
 // right after, both from the tree and from ⌘/Ctrl-click) is what actually
 // makes the shared preview follow it - see the "focus" listeners below.
-async function selectDocumentB(projectId, sessionId, filename, { focus = true } = {}) {
-  if (isDirtyB() && !confirm(t("confirm.unsavedChanges"))) return;
+async function selectDocumentB(projectId, sessionId, filename, { focus = true, paired = false } = {}) {
+  if (!paired && await documentPair(projectId, sessionId, filename)) {
+    await openInTab(docRef(projectId, sessionId, filename));
+    return;
+  }
+  if (!paired && isDirtyB() && !confirm(t("confirm.unsavedChanges"))) return;
 
   const project = projects.get(projectId);
   if (!project) return;
@@ -7070,6 +7106,22 @@ async function revertDocumentToDraft(projectId, sessionId, filename) {
     updateFilenameLabel();
   }
   renderTree();
+}
+
+async function createConversationFile(projectId, sessionId, filename) {
+  if (streaming) return;
+  try {
+    // Refresh first so an existing conversation can simply be reopened.
+    await refreshSessionDocs(projectId, sessionId);
+    const target = filename.slice(0, -3) + ".c.md";
+    if (!cachedDocument(projectId, sessionId, target)) {
+      await api.createConversationFile(projectId, sessionId, filename);
+      await refreshSessionDocs(projectId, sessionId);
+    }
+    await openInTab(docRef(projectId, sessionId, target));
+  } catch (err) {
+    alert(t("action.error", { message: err.message }));
+  }
 }
 
 async function renameDocument(projectId, sessionId, filename) {

@@ -107,6 +107,18 @@ def create_draft(project_id: str, conv_id: str, today: str | None = None):
         raise HTTPException(status_code=404, detail="Conversation not found")
 
 
+@router.post("/{conv_id}/documents/{filename}/conversation-file")
+def create_conversation_file(project_id: str, conv_id: str, filename: str):
+    try:
+        return storage.create_conversation_file(project_id, conv_id, filename)
+    except FileExistsError:
+        raise HTTPException(status_code=409, detail="Conversation file already exists")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+
 @router.get("/{conv_id}/documents/{filename}")
 def poll_document(project_id: str, conv_id: str, filename: str, since: str | None = None):
     """Polled by an open editor to pick up saves made in another browser -

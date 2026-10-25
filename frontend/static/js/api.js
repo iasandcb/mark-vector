@@ -145,6 +145,12 @@ export function createDraft(projectId, id) {
   return fetch(`${BASE}/projects/${projectId}/conversations/${id}/documents?today=${today}`, { method: "POST" }).then(asJson);
 }
 
+export function createConversationFile(projectId, id, filename) {
+  return fetch(`${BASE}/projects/${projectId}/conversations/${id}/documents/${encodeURIComponent(filename)}/conversation-file`, {
+    method: "POST",
+  }).then(asJson);
+}
+
 export function saveDraftSettings(projectId, id, filename, settings) {
   return fetch(`${BASE}/projects/${projectId}/conversations/${id}/documents/${encodeURIComponent(filename)}/settings`, {
     method: "PUT",

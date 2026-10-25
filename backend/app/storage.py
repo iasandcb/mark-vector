@@ -1096,6 +1096,21 @@ def create_draft(project_id: str, conv_id: str, today: date | None = None) -> di
     return {"filename": filename, "role": "draft", "turn_id": None, "content": "", "updated_at": _now()}
 
 
+def create_conversation_file(project_id: str, conv_id: str, filename: str) -> dict:
+    """Create an empty sibling conversation document without overwriting one."""
+    _validate_filename(filename)
+    conv_dir = _conversations_dir(project_id) / conv_id
+    if not (conv_dir / filename).is_file():
+        raise FileNotFoundError(filename)
+    if filename == SYSTEM_FILENAME or filename.endswith(".c.md"):
+        raise ValueError("Select a regular Markdown document")
+    target = filename[:-3] + ".c.md"
+    path = conv_dir / target
+    with path.open("x", encoding="utf-8"):
+        pass
+    return {"filename": target, "role": "draft", "turn_id": None, "content": "", "updated_at": _now(), "version": _file_version(path)}
+
+
 def _file_version(path: Path) -> str:
     """A document's version for change detection between browsers that have
     it open (see poll_document): the file's own mtime in nanoseconds, so any

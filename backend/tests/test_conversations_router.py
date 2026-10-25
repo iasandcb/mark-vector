@@ -47,6 +47,25 @@ def client():
     return TestClient(app)
 
 
+def test_create_conversation_file(isolated_data_dir, client):
+    pid = storage.create_project("test")["id"]
+    cid = storage.create_conversation(pid)["id"]
+    draft = storage.create_draft(pid, cid)
+    storage.rename_document(pid, cid, draft["filename"], "report.v2.md")
+    url = f"/api/projects/{pid}/conversations/{cid}/documents/report.v2.md/conversation-file"
+    response = client.post(url)
+    assert response.status_code == 200
+    assert response.json()["filename"] == "report.v2.c.md"
+    assert response.json()["content"] == ""
+    storage.save_document(pid, cid, "report.v2.c.md", "keep this")
+    assert client.post(url).status_code == 409
+    assert storage.poll_document(pid, cid, "report.v2.c.md")["content"] == "keep this"
+    base = f"/api/projects/{pid}/conversations/{cid}/documents"
+    assert client.post(f"{base}/missing.md/conversation-file").status_code == 404
+    assert client.post(f"{base}/report.v2.c.md/conversation-file").status_code == 400
+    assert client.post(f"{base}/system.md/conversation-file").status_code == 400
+
+
 def _seed_one_turn(pid: str, conv_id: str) -> None:
     turn = storage.start_exchange(pid, conv_id, "첫 질문", provider="openai", model="gpt-test")
     storage.complete_exchange(pid, conv_id, turn["id"], "첫 대답")
