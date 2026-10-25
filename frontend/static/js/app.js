@@ -6588,7 +6588,7 @@ async function toggleSession(projectId, id) {
 // Same breakpoint as style.css's phone layout. There, putting the caret in
 // the editor would also pop the on-screen keyboard over a document you
 // probably opened to read.
-const PHONE_LAYOUT = window.matchMedia("(max-width: 700px)");
+const PHONE_LAYOUT = window.matchMedia("(max-width: 700px), (pointer: coarse) and (max-width: 1000px) and (max-height: 500px)");
 
 // Only pair existing siblings; the final .c suffix identifies the left pane.
 async function documentPair(projectId, sessionId, filename) {
