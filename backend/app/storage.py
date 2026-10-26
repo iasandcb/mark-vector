@@ -272,8 +272,16 @@ def list_projects() -> list[dict]:
     for entry in _projects_root().iterdir():
         if entry.is_dir() and (entry / "meta.json").exists():
             meta = _read_project_meta(entry.name)
+            root_id = meta.get("root_folder_id")
+            if root_id is None:
+                # Earlier promotion kept the source folder without marking it.
+                roots = [c for c in list_conversations(meta["id"]) if not c["parent_id"]]
+                if (len(roots) == 1 and roots[0]["title"] == meta["title"]
+                        and roots[0]["created_at"] < meta["created_at"]):
+                    root_id = roots[0]["id"]
             summaries.append(
                 {
+                    "root_folder_id": root_id,
                     "id": meta["id"],
                     "title": meta["title"],
                     "created_at": meta["created_at"],
@@ -546,6 +554,8 @@ def promote_conversation(project_id: str, conv_id: str) -> dict:
     ids = _descendant_folder_ids(project_id, conv_id)
     project = create_project(root["title"])
     target_id = project["id"]
+    project["root_folder_id"] = conv_id
+    _write_project_meta(target_id, project)
     # Retain the former project's defaults for the moved documents.
     save_project_system_prompt(target_id, get_project_system_prompt(project_id))
     moved = []

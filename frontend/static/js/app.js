@@ -5654,6 +5654,7 @@ function buildProjectNode(id, project) {
     createSession(id);
   });
   attachRowMenu(row, actions, () => [
+    ...(project.meta.root_folder_id ? [{ icon: "+", label: t("folder.newDoc"), onSelect: () => createDraft(id, project.meta.root_folder_id) }] : []),
     { icon: "+", label: t("project.newFolder"), onSelect: () => createSession(id) },
     "-",
     { icon: "S", label: t("project.systemPrompt"), onSelect: () => openInTab({ role: "project-system", projectId: id }) },
@@ -5690,7 +5691,12 @@ function buildProjectNode(id, project) {
       // in its own subfolders recursively (see buildSessionNode), so a
       // folder with a parent is never also rendered again here.
       for (const [sessionId, session] of project.sessions) {
-        if (!session.meta.parent_id) {
+        if (sessionId === project.meta.root_folder_id) {
+          // Keep the backing conversation for document IDs and history, but
+          // show its contents directly under the project that replaced it.
+          const contents = buildSessionNode(id, sessionId, { ...session, expanded: true }, project.sessions);
+          body.append(...contents.children[1].children, ...contents.children[2].children);
+        } else if (!session.meta.parent_id) {
           body.appendChild(buildSessionNode(id, sessionId, session, project.sessions));
         }
       }
@@ -5907,6 +5913,10 @@ async function refreshProjectSessions(projectId) {
       documents: prev ? prev.documents : null,
       expanded: prev ? prev.expanded : expandedTreeState.sessions.has(summary.id),
     });
+  }
+  const root = next.get(project.meta.root_folder_id);
+  if (root && root.documents === null) {
+    root.documents = await api.listDocuments(projectId, project.meta.root_folder_id);
   }
   project.sessions = next;
   project.systemPromptContent = systemPrompt.content;

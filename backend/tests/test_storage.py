@@ -1212,6 +1212,8 @@ def test_promote_folder_preserves_subtree_and_shared_documents(pid):
     result = storage.promote_conversation(pid, root)
     target = result["project"]["id"]
     assert result["project"]["title"] == "promoted"
+    assert result["project"]["root_folder_id"] == root
+    assert next(p for p in storage.list_projects() if p["id"] == target)["root_folder_id"] == root
     assert set(result["folder_ids"]) == {root, child}
     assert {c["id"] for c in storage.list_conversations(pid)} == {parent}
     assert storage.get_conversation(target, root)["parent_id"] is None
@@ -1225,3 +1227,18 @@ def test_promote_missing_folder_does_not_create_project(pid):
     with pytest.raises(FileNotFoundError):
         storage.promote_conversation(pid, "missing")
     assert storage.list_projects() == before
+
+
+def test_legacy_promoted_project_root_is_recognized(pid):
+    root = storage.create_conversation(pid, "promoted")["id"]
+    result = storage.promote_conversation(pid, root)
+    target = result["project"]["id"]
+    meta = storage.get_project(target)
+    del meta["root_folder_id"]
+    storage._write_project_meta(target, meta)
+    assert next(p for p in storage.list_projects() if p["id"] == target)["root_folder_id"] == root
+
+
+def test_normal_same_name_folder_is_not_a_project_root(pid):
+    storage.create_conversation(pid, storage.get_project(pid)["title"])
+    assert next(p for p in storage.list_projects() if p["id"] == pid)["root_folder_id"] is None
