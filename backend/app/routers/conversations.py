@@ -73,6 +73,14 @@ def delete_conversation(project_id: str, conv_id: str):
     return {"ok": True}
 
 
+@router.post("/{conv_id}/promote")
+def promote_conversation(project_id: str, conv_id: str):
+    try:
+        return storage.promote_conversation(project_id, conv_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+
 @router.post("/{conv_id}/move")
 def move_conversation(project_id: str, conv_id: str, req: MoveConversationRequest):
     try:

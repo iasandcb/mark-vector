@@ -5563,6 +5563,7 @@ function buildSessionNode(projectId, id, session, allSessions) {
     "-",
     { icon: "S", label: t("folder.systemPrompt"), onSelect: () => openSessionSystemPrompt(projectId, id) },
     { icon: "✎", label: t("doc.rename"), onSelect: () => renameSession(projectId, id) },
+    { icon: "↑", label: t("folder.promote"), onSelect: () => promoteSession(projectId, id) },
     { icon: "⤓", label: t("folder.exportPdfShort"), onSelect: () => exportSessionToPdf(projectId, id) },
     "-",
     { icon: "×", label: t("folder.delete"), danger: true, onSelect: () => removeSession(projectId, id) },
@@ -7086,6 +7087,38 @@ async function renameSession(projectId, id) {
   const updated = await api.renameConversation(projectId, id, title);
   session.meta = updated;
   renderTree();
+}
+
+async function promoteSession(projectId, id) {
+  if (streaming) return;
+  try {
+    const result = await api.promoteConversation(projectId, id);
+    const moved = new Set(result.folder_ids);
+    const retarget = (ref) => {
+      if (ref?.projectId === projectId && moved.has(ref.sessionId)) ref.projectId = result.project.id;
+    };
+    retarget(active);
+    retarget(activeB);
+    for (const tab of tabs) {
+      retarget(tab.ref);
+      retarget(tab.stash?.active);
+    }
+    for (const ref of recentDocs) retarget(ref);
+    retarget(dictation?.targetRef);
+    saveActiveDocRef();
+    saveActiveDocRefB();
+    saveTabs();
+    writeAutosave();
+    try { localStorage.setItem(RECENT_DOCS_KEY, JSON.stringify(recentDocs)); } catch {}
+    await loadProjects();
+    await Promise.all([refreshProjectSessions(projectId), refreshProjectSessions(result.project.id)]);
+    projects.get(result.project.id).sessions.get(id).expanded = true;
+    saveExpandedTreeState();
+    renderTabs();
+    renderTree();
+  } catch (err) {
+    alert(t("action.error", { message: err.message }));
+  }
 }
 
 async function removeSession(projectId, id) {

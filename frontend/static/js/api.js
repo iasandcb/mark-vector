@@ -124,6 +124,12 @@ export function renameConversation(projectId, id, title) {
   }).then(asJson);
 }
 
+export function promoteConversation(projectId, id) {
+  return fetch(`${BASE}/projects/${projectId}/conversations/${id}/promote`, {
+    method: "POST",
+  }).then(asJson);
+}
+
 export function moveConversation(projectId, id, parentId) {
   return fetch(`${BASE}/projects/${projectId}/conversations/${id}/move`, {
     method: "POST",

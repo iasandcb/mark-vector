@@ -438,3 +438,15 @@ def test_discuss_rejects_an_empty_turn_and_an_unknown_provider(isolated_data_dir
     resp = client.post(f"/api/projects/{pid}/conversations/{conv_id}/discuss", json=body)
     assert resp.status_code == 400
     assert "unknown provider" in resp.json()["detail"]
+
+
+def test_promote_folder_endpoint(isolated_data_dir):
+    pid = storage.create_project("source")["id"]
+    folder = storage.create_conversation(pid, "promoted")["id"]
+    with TestClient(app) as client:
+        response = client.post(f"/api/projects/{pid}/conversations/{folder}/promote")
+        assert response.status_code == 200
+        result = response.json()
+        assert result["project"]["title"] == "promoted"
+        assert result["folder_ids"] == [folder]
+        assert client.post(f"/api/projects/{pid}/conversations/{folder}/promote").status_code == 404

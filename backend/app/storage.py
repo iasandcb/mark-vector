@@ -540,6 +540,41 @@ def move_conversation(project_id: str, conv_id: str, new_parent_id: str | None) 
     return meta
 
 
+def promote_conversation(project_id: str, conv_id: str) -> dict:
+    """Move a complete folder subtree into a new project, retaining folder IDs."""
+    root = _read_meta(project_id, conv_id)
+    ids = _descendant_folder_ids(project_id, conv_id)
+    project = create_project(root["title"])
+    target_id = project["id"]
+    # Retain the former project's defaults for the moved documents.
+    save_project_system_prompt(target_id, get_project_system_prompt(project_id))
+    moved = []
+    try:
+        for folder_id in ids:
+            shutil.move(str(_conversations_dir(project_id) / folder_id),
+                        str(_conversations_dir(target_id) / folder_id))
+            moved.append(folder_id)
+        root["parent_id"] = None
+        _write_meta(target_id, conv_id, root)
+    except Exception:
+        for folder_id in reversed(moved):
+            shutil.move(str(_conversations_dir(target_id) / folder_id),
+                        str(_conversations_dir(project_id) / folder_id))
+        shutil.rmtree(_project_dir(target_id))
+        raise
+    registry = _read_published()
+    for entry in registry.values():
+        if entry["project_id"] == project_id and entry["conv_id"] in ids:
+            entry["project_id"] = target_id
+    _write_published(registry)
+    for folder_id in ids:
+        for doc in list_documents(target_id, folder_id):
+            _retarget_video_jobs(project_id, folder_id, doc["filename"],
+                                 target_id, folder_id, doc["filename"])
+    _touch_project(project_id)
+    return {"project": project, "folder_ids": ids}
+
+
 def delete_conversation(project_id: str, conv_id: str) -> None:
     """Cascades to every descendant folder too, same principle as
     delete_project already cascading to every session inside it - deleting

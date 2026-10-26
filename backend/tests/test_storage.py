@@ -1201,3 +1201,27 @@ def test_spoken_math_is_seeded_once_then_edited_in_place(isolated_data_dir):
     storage.save_global_spoken_math("제곱, ^2\n")
     # The saved copy is the vocabulary from now on - never re-seeded.
     assert storage.get_global_spoken_math() == "제곱, ^2\n"
+
+
+def test_promote_folder_preserves_subtree_and_shared_documents(pid):
+    parent = storage.create_conversation(pid, "parent")["id"]
+    root = storage.create_conversation(pid, "promoted", parent_id=parent)["id"]
+    child = storage.create_conversation(pid, "child", parent_id=root)["id"]
+    draft = storage.create_draft(pid, child)
+    published = storage.publish_document(pid, child, draft["filename"])
+    result = storage.promote_conversation(pid, root)
+    target = result["project"]["id"]
+    assert result["project"]["title"] == "promoted"
+    assert set(result["folder_ids"]) == {root, child}
+    assert {c["id"] for c in storage.list_conversations(pid)} == {parent}
+    assert storage.get_conversation(target, root)["parent_id"] is None
+    assert storage.get_conversation(target, child)["parent_id"] == root
+    assert storage.get_document(target, child, draft["filename"])["content"] == draft["content"]
+    assert storage.resolve_published(published["token"])
+
+
+def test_promote_missing_folder_does_not_create_project(pid):
+    before = storage.list_projects()
+    with pytest.raises(FileNotFoundError):
+        storage.promote_conversation(pid, "missing")
+    assert storage.list_projects() == before
