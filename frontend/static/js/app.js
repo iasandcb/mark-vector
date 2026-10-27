@@ -114,6 +114,7 @@ const el = {
   // `el.editor.*` below is the same API a <textarea> would have offered,
   // which is why nothing else in this file had to change to gain folding.
   editor: createEditor(document.getElementById("editor"), {
+    documentKey: () => active && JSON.stringify([active.projectId, active.sessionId, active.filename]),
     foldRanges: (text) => editorFoldRanges(text),
     onFoldToggle: (markerLineStart) => toggleInlineThreadAt(markerLineStart),
   }),
@@ -162,6 +163,7 @@ const el = {
   // folding (nothing there ever flips a thread's marker) and no AI-toolbar
   // wiring at all.
   editorB: createEditor(document.getElementById("editor-b"), {
+    documentKey: () => activeB && JSON.stringify([activeB.projectId, activeB.sessionId, activeB.filename]),
     foldRanges: (text) => headingFoldRanges(text),
     onFoldToggle: () => false,
   }),
@@ -9083,3 +9085,18 @@ discussionPane = mountDiscussion({
   renderTabs();
   await restoreActiveDocumentB(savedDocRefB);
 })();
+
+// Bulk thread toggles use the same document markers as the gutter and preview.
+for (const pane of ["a", "b"]) {
+  for (const folded of [true, false]) {
+    document.getElementById(`${folded ? "fold" : "unfold"}-all-${pane}`).addEventListener("click", () => {
+      const editor = pane === "a" ? el.editor : el.editorB;
+      if (!(pane === "a" ? active : activeB) || streaming) return;
+      if (pane === "a" && !editor.disabled) {
+        for (const thread of inlineThreads(editor.value).reverse()) setInlineThreadShown(thread, !folded);
+      }
+      if (folded) editor.foldAll();
+      else editor.unfoldAll();
+    });
+  }
+}

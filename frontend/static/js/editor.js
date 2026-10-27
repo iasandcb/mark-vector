@@ -44,9 +44,10 @@ const USE_CODEMIRROR = true;
 // DOM events, forwarded to the element they actually fire on.
 const SYNTHETIC_EVENTS = new Set(["input", "selectionchange"]);
 
-export function createEditor(textarea, { onFoldToggle, foldRanges }) {
+export function createEditor(textarea, { onFoldToggle, foldRanges, documentKey = () => null }) {
   if (!USE_CODEMIRROR) {
     textarea.syncThreadFolds = () => {};
+    textarea.foldAll = textarea.unfoldAll = () => {};
     textarea.replaceRange = (from, to, text) => {
       textarea.value = textarea.value.slice(0, from) + text + textarea.value.slice(to);
       textarea.selectionStart = textarea.selectionEnd = from + text.length;
@@ -80,6 +81,25 @@ export function createEditor(textarea, { onFoldToggle, foldRanges }) {
   const listeners = new Map();
   const emit = (type) => {
     for (const listener of listeners.get(type) || []) listener({ type, target: adapter });
+  };
+
+  let foldKey = null;
+  let replacingDocument = false;
+  const storageKey = (key) => `mv-editor-folds:${key}`;
+  const currentFolds = () => {
+    const ranges = [];
+    foldedRanges(view.state).between(0, view.state.doc.length, (from, to) => ranges.push({ from, to }));
+    return ranges;
+  };
+  const saveFolds = () => {
+    if (!foldKey || replacingDocument) return;
+    // Only restore ranges whose marker and endpoint still match this file.
+    const text = view.state.doc.toString();
+    const ranges = currentFolds().map(({ from, to }) => ({
+      from, to, marker: view.state.doc.lineAt(from).text,
+      ending: text.slice(Math.max(from, to - 40), to),
+    }));
+    try { localStorage.setItem(storageKey(foldKey), JSON.stringify(ranges)); } catch {}
   };
 
   const editable = new Compartment();
@@ -140,6 +160,7 @@ export function createEditor(textarea, { onFoldToggle, foldRanges }) {
         placeholderText.of(placeholder(textarea.placeholder || "")),
         editable.of(EditorView.editable.of(!textarea.disabled)),
         EditorView.updateListener.of((update) => {
+          if (update.docChanged || update.transactions.some((tr) => tr.effects.some((effect) => effect.is(foldEffect) || effect.is(unfoldEffect)))) saveFolds();
           if (update.docChanged) emit("input");
           if (update.selectionSet || update.docChanged) emit("selectionchange");
         }),
@@ -232,7 +253,23 @@ export function createEditor(textarea, { onFoldToggle, foldRanges }) {
       return view.state.doc.toString();
     },
     set value(next) {
-      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: next } });
+      saveFolds();
+      foldKey = documentKey();
+      let saved = [];
+      try { saved = JSON.parse(localStorage.getItem(storageKey(foldKey)) || "[]"); } catch {}
+      replacingDocument = true;
+      try {
+        view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: next } });
+        if (foldKey && Array.isArray(saved)) {
+          const available = foldRanges(next);
+          const effects = available.filter((range) => saved.some((item) =>
+            item && item.from === range.from && item.to === range.to &&
+            item.marker === view.state.doc.lineAt(range.from).text &&
+            item.ending === next.slice(Math.max(range.from, range.to - 40), range.to)
+          )).map(({ from, to }) => foldEffect.of({ from, to }));
+          if (effects.length) view.dispatch({ effects });
+        }
+      } finally { replacingDocument = false; }
     },
     // Replaces just [from, to) and leaves the caret after the insertion.
     // Assigning `value` swaps the whole document, and CodeMirror drops every
@@ -371,6 +408,14 @@ export function createEditor(textarea, { onFoldToggle, foldRanges }) {
     // Folds the view to match the markers. Called after anything that can
     // change them; a no-op when the view already agrees, which is what keeps
     // it from fighting the user mid-edit.
+    foldAll() {
+      const effects = foldRanges(adapter.value).map(({ from, to }) => foldEffect.of({ from, to }));
+      if (effects.length) view.dispatch({ effects });
+    },
+    unfoldAll() {
+      const effects = currentFolds().map((range) => unfoldEffect.of(range));
+      if (effects.length) view.dispatch({ effects });
+    },
     syncThreadFolds(ranges) {
       const folded = [];
       foldedRanges(view.state).between(0, view.state.doc.length, (from, to) => folded.push({ from, to }));
