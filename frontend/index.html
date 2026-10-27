@@ -162,8 +162,12 @@
                only) - see toggleEditorViewMode in app.js. Its own "pressed"
                look means "currently rendered", same convention as
                #split-toggle-btn above. -->
-          <button id="fold-all-a" class="secondary-btn" type="button" data-i18n="editor.foldAll"></button>
-          <button id="unfold-all-a" class="secondary-btn" type="button" data-i18n="editor.unfoldAll"></button>
+          <button id="fold-all-a" class="secondary-btn" type="button" data-i18n-title="editor.foldAll">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 4 6 5 6-5 M6 20l6-5 6 5"/></svg>
+          </button>
+          <button id="unfold-all-a" class="secondary-btn" type="button" data-i18n-title="editor.unfoldAll">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6-5 6 5 M6 15l6 5 6-5"/></svg>
+          </button>
           <button id="view-mode-btn" class="secondary-btn" type="button" disabled aria-pressed="false" data-i18n-title="editor.viewModeTitle">
             <span class="btn-icon" aria-hidden="true">📖</span>
             <span id="view-mode-label" class="btn-label" data-i18n="editor.viewModeSource"></span>
@@ -292,8 +296,12 @@
           <span id="editor-filename-b" class="pane-filename" data-i18n="editor.selectDocument"></span>
         </div>
         <div class="editor-actions">
-          <button id="fold-all-b" class="secondary-btn" type="button" data-i18n="editor.foldAll"></button>
-          <button id="unfold-all-b" class="secondary-btn" type="button" data-i18n="editor.unfoldAll"></button>
+          <button id="fold-all-b" class="secondary-btn" type="button" data-i18n-title="editor.foldAll">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 4 6 5 6-5 M6 20l6-5 6 5"/></svg>
+          </button>
+          <button id="unfold-all-b" class="secondary-btn" type="button" data-i18n-title="editor.unfoldAll">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6-5 6 5 M6 15l6 5 6-5"/></svg>
+          </button>
           <button id="save-btn-b" class="secondary-btn" disabled data-i18n-title="editor.save">
             <span class="btn-icon" aria-hidden="true">💾</span>
           </button>
