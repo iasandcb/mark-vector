@@ -1,4 +1,6 @@
 import { requestWorkspaceName } from "./workspace-dialog.js";
+import { articleFromHtml } from "./x-article-content.mjs";
+import { openXArticleDialog } from "./x-article.js";
 import { icon, symbolIcon, mountIcons } from "./icons.js";
 import * as api from "./api.js";
 import { createDocumentFollower } from "./document-sync.mjs";
@@ -172,6 +174,7 @@ const el = {
   editorScrollTopBtnB: document.getElementById("editor-scroll-top-btn-b"),
   editorScrollBottomBtnB: document.getElementById("editor-scroll-bottom-btn-b"),
   publishBtn: document.getElementById("publish-btn"),
+  exportXArticleBtn: document.getElementById("export-x-article-btn"),
   publishLabel: document.getElementById("publish-label"),
   publishIcon: document.getElementById("publish-icon"),
   inlineCompleteBtn: document.getElementById("inline-complete-btn"),
@@ -2494,6 +2497,9 @@ function updatePublishButton() {
   const publishable = !!active && !NON_SENDABLE_ROLES.has(active.role);
   el.publishBtn.hidden = !publishable;
   el.publishBtn.disabled = !publishable || streaming;
+  el.exportXArticleBtn.hidden = !publishable;
+  el.exportXArticleBtn.disabled = !publishable || streaming;
+  el.exportXArticleBtn.setAttribute("aria-label", t("xArticle.title"));
   const published = !!(active && active.publishToken);
   el.publishLabel.textContent = published ? t("editor.publishing") : t("editor.publish");
   // Also the "copied" tick's way back (see copyLinkWithFeedback, which
@@ -8593,6 +8599,14 @@ el.setDefaultModelBtn.addEventListener("click", setDefaultModel);
 el.contextScopeSelect.addEventListener("change", persistDraftChoice);
 el.saveBtn.addEventListener("click", saveActive);
 el.publishBtn.addEventListener("click", togglePublish);
+el.exportXArticleBtn.addEventListener("click", () => {
+  if (!active || streaming || NON_SENDABLE_ROLES.has(active.role)) return;
+  // Match the main editor's Publish action; snapshot unsaved content and
+  // always strip private inline threads, even ones expanded in the preview.
+  const content = collapseEditBlocks(stripInlineThreads(el.editor.value), `> ✏️ ${t("docEdit.blockNote")}`);
+  const html = renderMarkdown(content, sessionMathDialect(active.projectId, active.sessionId));
+  openXArticleDialog(articleFromHtml(html, active.filename, { imageLabel: t("xArticle.image") }));
+});
 el.toolbarToggleBtn.addEventListener("click", toggleEditorToolbar);
 el.inlineCompleteBtn.addEventListener("click", sendInlineCompletion);
 restoreDictationLang();

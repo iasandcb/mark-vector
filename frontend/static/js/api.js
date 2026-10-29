@@ -1,5 +1,15 @@
 const BASE = "/api";
 
+export function getXArticleConfig() {
+  return fetch(`${BASE}/x-articles/config`).then(asJson);
+}
+
+export function createXArticleDraft(body) {
+  return fetch(`${BASE}/x-articles/drafts`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  }).then(asJson);
+}
+
 // A session that expired (or was never established) mid-use surfaces here
 // as any API call suddenly 401ing, not as a page-load redirect (see
 // auth.AuthMiddleware, which only redirects a top-level navigation - an

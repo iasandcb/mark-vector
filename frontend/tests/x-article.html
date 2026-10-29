@@ -1,0 +1,65 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>X Article conversion tests</title>
+<h1>X Article conversion tests</h1>
+<pre id="result">Running…</pre>
+<script type="module">
+import { articleFromHtml } from "../static/js/x-article-content.mjs";
+const results = [];
+function test(name, run) {
+  try { run(); results.push(`PASS ${name}`); }
+  catch (error) { results.push(`FAIL ${name}: ${error.message}`); }
+}
+function assert(value, message = "assertion failed") { if (!value) throw new Error(message); }
+test("title is separated; unsaved rendered body uses API field names", () => {
+  const article = articleFromHtml("<h1>제목</h1><p>😀 <strong>굵게</strong> <a href='https://example.com'>link</a></p>", "file.md");
+  const block = article.content_state.blocks[0];
+  assert(article.title === "제목");
+  assert(block.text === "😀 굵게 link");
+  assert(block.inline_style_ranges[0].offset === 3, "emoji must count as two UTF-16 units");
+  assert(block.inline_style_ranges[0].style === "bold");
+  assert(block.entity_ranges[0].offset === 6);
+  assert(article.content_state.entities[0].value.type === "link");
+});
+test("headings, nested formatting and lists", () => {
+  const article = articleFromHtml("<h2>Section</h2><p><strong>A<em>B</em></strong><del>C</del></p><ol><li>One<ul><li>Two</li></ul></li></ol><blockquote><p>Quote</p></blockquote>", "report.md");
+  assert(article.title === "report");
+  assert(article.content_state.blocks.map(b => b.type).join() === "header-two,unstyled,ordered-list-item,unordered-list-item,blockquote");
+  assert(article.warnings.includes("nestedLists"));
+  assert(article.content_state.blocks[1].inline_style_ranges.length === 3);
+});
+test("tables and code use native markdown atomic entities", () => {
+  const article = articleFromHtml("<table><tr><th>A</th><th>B</th></tr><tr><td>1|2</td><td>3</td></tr></table><pre><code class='language-js'>const a = `x`;</code></pre><hr>", "test.md");
+  const entities = article.content_state.entities;
+  assert(entities[0].value.data.markdown.includes("| A | B |\n| --- | --- |\n| 1\\|2 | 3 |"));
+  assert(entities[1].value.data.markdown === "```js\nconst a = `x`;\n```");
+  assert(entities[2].value.type === "divider");
+  assert(article.content_state.blocks.every(b => b.type === "atomic" && b.entity_ranges[0].length === 1));
+});
+test("math preserves TeX once instead of duplicated KaTeX DOM", () => {
+  const katex = '<span class="katex"><span class="katex-mathml"><math><semantics><annotation encoding="application/x-tex">E=mc^2</annotation></semantics></math></span><span class="katex-html">duplicate</span></span>';
+  const article = articleFromHtml(`<div class="katex-display">${katex}</div><p>Inline ${katex}</p>`, "math.md");
+  assert(article.content_state.blocks[0].text === "E=mc^2");
+  assert(article.content_state.entities[0].value.type === "latex");
+  assert(article.content_state.blocks[1].text === "Inline $E=mc^2$");
+  assert(article.warnings.includes("inlineMath"));
+});
+test("images never include URLs; internal links never leave the app", () => {
+  const article = articleFromHtml('<p><img src="/private/image.png" alt="Chart"><a href="/p/private-token">Private</a><a href="javascript:evil()">Unsafe</a></p>', "test.md");
+  const serialized = JSON.stringify(article.content_state);
+  assert(!serialized.includes("private-token") && !serialized.includes("private/image"));
+  assert(!serialized.includes("javascript:"));
+  assert(article.warnings.includes("images") && article.warnings.includes("localLinks"));
+});
+test("scratch threads, scripts, HTML comments are not exported", () => {
+  const article = articleFromHtml('<h1>Title</h1><!-- math: latex --><div class="inline-thread"><p>PRIVATE SCRATCH</p></div><script>dangerous()<\/script><p>Public</p>', "test.md");
+  assert(article.content_state.blocks.length === 1);
+  assert(article.content_state.blocks[0].text === "Public");
+});
+test("empty document remains empty", () => {
+  const article = articleFromHtml("<!-- comment -->", "empty.md");
+  assert(article.title === "empty" && article.content_state.blocks.length === 0);
+});
+document.querySelector("#result").textContent = results.join("\n");
+document.title = results.some(r => r.startsWith("FAIL")) ? "FAILED: X Article tests" : `PASS: ${results.length} X Article tests`;
+</script>

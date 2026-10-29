@@ -24,6 +24,7 @@ from .routers import (
     system_prompt,
     transcribe,
     worker,
+    x_articles,
 )
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -55,6 +56,7 @@ app.include_router(stt.router)
 app.include_router(recordings.router)
 app.include_router(ingest.router)
 app.include_router(worker.router)
+app.include_router(x_articles.router)
 
 
 class NoCacheStaticFiles(StaticFiles):

@@ -291,6 +291,20 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .workspace-dialog input:focus { outline: 2px solid #176b5b20; border-color: var(--accent); }
 .workspace-dialog-actions { display: flex; justify-content: flex-end; gap: 7px; margin-top: 23px; }
 .workspace-dialog-actions button { min-height: 36px; padding: 8px 16px; font-size: 12px; }
+.x-article-dialog { width: min(620px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow: auto; }
+.x-article-dialog p, .x-article-dialog li { font-size: 13px; line-height: 1.7; color: var(--muted); }
+.x-article-dialog [data-warnings] { padding-left: 20px; }
+.x-article-preview { margin-top: 16px; padding: 16px; border: 1px solid var(--border); border-radius: 8px; max-height: 260px; overflow: auto; font-size: 14px; overflow-wrap: anywhere; }
+.x-article-block { white-space: pre-wrap; margin-bottom: 10px; }
+.x-article-header-one, .x-article-header-two, .x-article-header-three { font-weight: 600; }
+.x-article-header-one { font-size: 20px; }
+.x-article-header-two { font-size: 18px; }
+.x-article-unordered-list-item::before { content: '• '; }
+.x-article-ordered-list-item::before { content: '– '; }
+.x-article-blockquote { border-left: 3px solid var(--border); padding-left: 12px; }
+.x-article-atomic { font-family: monospace; font-size: 12px; }
+.x-article-dialog [data-open] { display: inline-flex; align-items: center; text-decoration: none; min-height: 36px; padding: 8px 16px; font-size: 12px; }
+.x-article-dialog .workspace-dialog-actions { flex-wrap: wrap; }
 
 /* Primary actions now have their own row, leaving room for the filename on phones. */
 #editor-filename { display: block; }

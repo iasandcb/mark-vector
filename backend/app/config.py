@@ -54,6 +54,13 @@ class Settings:
     # mints a short-lived temporary key. Unset = Soniox is not offered.
     soniox_api_key: str | None = os.getenv("SONIOX_API_KEY") or None
     xai_api_key: str | None = os.getenv("XAI_API_KEY") or None
+    # X Articles (separate from xAI/Grok). OAuth 1.0a user credentials,
+    # or an OAuth 2.0 user-context access token with tweet.write.
+    x_api_key: str | None = os.getenv("X_API_KEY") or None
+    x_api_secret: str | None = os.getenv("X_API_SECRET") or None
+    x_access_token: str | None = os.getenv("X_ACCESS_TOKEN") or None
+    x_access_token_secret: str | None = os.getenv("X_ACCESS_TOKEN_SECRET") or None
+    x_user_access_token: str | None = os.getenv("X_USER_ACCESS_TOKEN") or None
     custom_providers: list[dict] = field(default_factory=_load_custom_providers)
     # Google sign-in is off entirely until both of these are set (see
     # auth.AuthMiddleware) - so a fresh checkout keeps working with no auth,
