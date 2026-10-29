@@ -7,29 +7,30 @@
   <meta name="description" content="mark-vector is a writing-first LLM client where every prompt and every reply is a complete Markdown document, with first-class math, per-turn model choice, and sign in with ChatGPT.">
   <meta property="og:title" content="mark-vector">
   <meta property="og:description" content="A Markdown-native LLM workspace: every turn is a document.">
+  <link rel="icon" type="image/svg+xml" href="/static/images/mark.svg">
   <style>
     :root {
-      --bg: #f7f7f5;
+      --bg: #f4f6f5;
       --panel: #ffffff;
-      --border: #e3e2de;
-      --text: #1f1e1c;
-      --muted: #6b6964;
-      --accent: #b45309;
-      --accent-soft: #fdf3e7;
+      --border: #e2e8e5;
+      --text: #202e2b;
+      --muted: #6a7974;
+      --accent: #176b5b;
+      --accent-soft: #e6f0eb;
       --accent-contrast: #ffffff;
-      --code-bg: #f1f0ec;
+      --code-bg: #f2f5f3;
     }
     @media (prefers-color-scheme: dark) {
       :root {
-        --bg: #171614;
-        --panel: #201f1c;
-        --border: #34322e;
-        --text: #ecebe8;
-        --muted: #a19e97;
-        --accent: #f59e0b;
-        --accent-soft: #2c2214;
-        --accent-contrast: #1a1204;
-        --code-bg: #2a2925;
+        --bg: #10251e;
+        --panel: #183028;
+        --border: #2e493c;
+        --text: #e6f1eb;
+        --muted: #adc1b4;
+        --accent: #72c7a8;
+        --accent-soft: #203d30;
+        --accent-contrast: #10251e;
+        --code-bg: #203c30;
       }
     }
     * { box-sizing: border-box; }
@@ -133,11 +134,12 @@
       .hero { padding-top: 32px; }
     }
   </style>
+  <link rel="stylesheet" href="/static/css/product-pages.css">
 </head>
-<body id="landing" data-lang="en">
+<body class="landing-page" id="landing" data-lang="en">
   <div class="wrap">
     <header class="top">
-      <a class="brand" href="/about">mark<span>-</span>vector</a>
+      <a class="brand" href="/about"><img src="/static/images/mark.svg" width="32" height="32" alt="">mark-vector</a>
       <nav class="top-actions">
         <button class="lang-toggle" id="lang-toggle" type="button">한국어</button>
         <a class="btn btn-ghost btn-small" href="/login"><span class="en">Sign in</span><span class="ko">로그인</span></a>
@@ -145,21 +147,22 @@
     </header>
 
     <div class="hero">
+      <p class="hero-eyebrow"><span class="eyebrow-dot"></span><span class="en">A WORKSPACE FOR CLEARER THINKING</span><span class="ko">더 선명한 생각을 위한 작업 공간</span></p>
       <h1>
-        <span class="en">Every turn is a document.</span>
-        <span class="ko">모든 턴이 하나의 문서입니다.</span>
+        <span class="en">Good ideas deserve<br>a place to grow.</span>
+        <span class="ko">좋은 생각을,<br>오래 남는 문서로.</span>
       </h1>
       <p class="lede">
         <span class="en">mark-vector is a writing-first LLM workspace. You write a prompt the way you'd write a note — in Markdown, with real math — and every reply comes back as a complete Markdown document you can edit, re-send, publish, or keep.</span>
         <span class="ko">mark-vector는 글쓰기 중심의 LLM 작업 공간입니다. 노트를 쓰듯 마크다운과 수식으로 질문을 쓰면, 답변도 편집·재전송·공개·보관할 수 있는 완전한 마크다운 문서로 돌아옵니다.</span>
       </p>
       <div class="ctas">
-        <a class="btn btn-primary" href="/login"><span class="en">Sign in</span><span class="ko">로그인</span></a>
+        <a class="btn btn-primary" href="/login"><span class="en">Open your workspace →</span><span class="ko">내 작업 공간으로 →</span></a>
         <a class="btn btn-ghost" href="#chatgpt"><span class="en">Use your ChatGPT plan</span><span class="ko">ChatGPT 플랜으로 쓰기</span></a>
       </div>
 
       <div class="mock" aria-hidden="true">
-        <div class="mock-bar"><i></i><i></i><i></i></div>
+        <div class="mock-bar"><span class="mock-brand"><img src="/static/images/mark.svg" width="18" height="18" alt="">mark-vector</span><span class="en">A little space. A lot of possibility.</span><span class="ko">생각이 자라는 작은 공간.</span></div>
         <div class="mock-body">
           <div class="mock-pane tree-pane">
             <div class="mock-label">Projects</div>
@@ -207,32 +210,32 @@ the matrix is singular…</pre>
       </p>
       <div class="grid">
         <div class="card">
-          <span class="icon">📝</span>
+          <span class="icon" data-icon="document" aria-hidden="true"></span>
           <h3><span class="en">Edit, then send</span><span class="ko">편집하고 보내기</span></h3>
           <p><span class="en">Draft in a full editor with live preview. Every past turn stays an editable document you can revisit and build on.</span><span class="ko">실시간 미리보기가 있는 편집기에서 초안을 쓰고, 지난 턴도 언제든 다시 열어 고치고 이어 쓸 수 있는 문서로 남습니다.</span></p>
         </div>
         <div class="card">
-          <span class="icon">∑</span>
+          <span class="icon" data-icon="sparkles" aria-hidden="true"></span>
           <h3><span class="en">Math that stays readable</span><span class="ko">읽히는 수식</span></h3>
           <p><span class="en">LaTeX in replies can be converted to AsciiMath2 automatically, so the source stays as readable as the rendered KaTeX.</span><span class="ko">답변 속 LaTeX를 AsciiMath2로 자동 변환해, 렌더링된 KaTeX뿐 아니라 원문도 읽기 쉽게 유지합니다.</span></p>
         </div>
         <div class="card">
-          <span class="icon">🔀</span>
+          <span class="icon" data-icon="columns" aria-hidden="true"></span>
           <h3><span class="en">Model per turn</span><span class="ko">턴마다 모델 선택</span></h3>
           <p><span class="en">Pick provider, model and reasoning effort per message — ask GPT, follow up with Claude, in the same thread.</span><span class="ko">메시지마다 프로바이더·모델·사고 수준을 고릅니다. 같은 스레드에서 GPT에 묻고 Claude로 이어갈 수 있습니다.</span></p>
         </div>
         <div class="card">
-          <span class="icon">🧭</span>
+          <span class="icon" data-icon="folder" aria-hidden="true"></span>
           <h3><span class="en">Layered system prompts</span><span class="ko">계층형 시스템 프롬프트</span></h3>
           <p><span class="en">App-wide, project and folder prompts cascade down the tree, so context is set once and inherited.</span><span class="ko">앱 전체 → 프로젝트 → 폴더 순으로 프롬프트가 이어져, 한 번 정한 맥락이 아래로 상속됩니다.</span></p>
         </div>
         <div class="card">
-          <span class="icon">🔗</span>
+          <span class="icon" data-icon="share" aria-hidden="true"></span>
           <h3><span class="en">Share a single turn</span><span class="ko">턴 단위 공유</span></h3>
           <p><span class="en">Publish any document to a read-only link — no account needed to read it.</span><span class="ko">어떤 문서든 읽기 전용 링크로 공개할 수 있고, 읽는 사람은 계정이 필요 없습니다.</span></p>
         </div>
         <div class="card">
-          <span class="icon">📱</span>
+          <span class="icon" data-icon="eye" aria-hidden="true"></span>
           <h3><span class="en">Phone and glasses</span><span class="ko">휴대폰과 안경</span></h3>
           <p><span class="en">A dedicated mobile layout, plus a live preview screen for smart-glasses displays.</span><span class="ko">휴대폰 전용 레이아웃과 스마트 안경 디스플레이용 실시간 미리보기 화면을 제공합니다.</span></p>
         </div>
@@ -298,6 +301,10 @@ the matrix is singular…</pre>
     </div>
   </footer>
 
+  <script type="module">
+    import { mountIcons } from "/static/js/icons.js";
+    mountIcons();
+  </script>
   <script>
     (function () {
       const body = document.body;

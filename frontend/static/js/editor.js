@@ -241,6 +241,8 @@ export function createEditor(textarea, { onFoldToggle, foldRanges, documentKey =
     }),
   });
 
+  // Keep the surface in the textarea's original slot, before status/footer UI.
+  textarea.after(view.dom);
   textarea.hidden = true;
 
   const dispatchSelection = (anchor, head) => {

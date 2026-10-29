@@ -1,3 +1,5 @@
+import { requestWorkspaceName } from "./workspace-dialog.js";
+import { icon, symbolIcon, mountIcons } from "./icons.js";
 import * as api from "./api.js";
 import { createDocumentFollower } from "./document-sync.mjs";
 import {
@@ -1070,8 +1072,12 @@ function setMobileView(view) {
 function iconButton(label, title) {
   const btn = document.createElement("button");
   btn.className = "icon-btn";
-  btn.textContent = label;
+  const markup = symbolIcon(label);
+  if (markup) btn.innerHTML = markup;
+  else btn.textContent = label;
+  btn.type = "button";
   btn.title = title;
+  btn.setAttribute("aria-label", title);
   return btn;
 }
 
@@ -1141,7 +1147,9 @@ function openRowMenu(at, items) {
     btn.setAttribute("role", "menuitem");
     const icon = document.createElement("span");
     icon.className = "row-menu-icon";
-    icon.textContent = item.icon;
+    const markup = symbolIcon(item.icon);
+    if (markup) icon.innerHTML = markup;
+    else icon.textContent = item.icon;
     const label = document.createElement("span");
     label.textContent = item.label;
     btn.append(icon, label);
@@ -1258,6 +1266,17 @@ function isDirty() {
 // selecting a different document, saving, a send completing), so it's
 // simplest to fold that in here rather than repeat it at each call site.
 function updateFilenameLabel() {
+  const welcome = document.getElementById("workspace-welcome");
+  welcome.hidden = !!active;
+  el.editor.rootElement.hidden = !active || editorViewMode === "rendered";
+  document.getElementById("editor-column").classList.toggle("no-document", !active);
+  document.getElementById("document-status").hidden = !active;
+  if (active) {
+    const state = document.getElementById("document-save-state");
+    state.textContent = t(isDirty() ? "workspace.unsaved" : "workspace.saved");
+    state.classList.toggle("unsaved", isDirty());
+    document.getElementById("document-character-count").textContent = t("workspace.characters", { count: new Intl.NumberFormat(getLanguage()).format(Array.from(el.editor.value).length) });
+  }
   updateViewModeButton();
   if (!active) {
     el.editorFilename.textContent = t("editor.selectDocument");
@@ -1738,10 +1757,10 @@ async function copyGlassesUrl() {
     el.glassesUrlInput.select();
     return;
   }
-  const original = el.glassesCopyBtn.textContent;
-  el.glassesCopyBtn.textContent = "✅";
+  const original = el.glassesCopyBtn.innerHTML;
+  el.glassesCopyBtn.innerHTML = icon("check");
   setTimeout(() => {
-    el.glassesCopyBtn.textContent = original;
+    el.glassesCopyBtn.innerHTML = original;
   }, 1200);
 }
 
@@ -2044,6 +2063,8 @@ function paintSharedPreview(text, dialect) {
   // ones are rendered in their own box (see renderDocumentWithThreads). The
   // buffer keeps all of them either way, and a published page gets none.
   el.preview.innerHTML = renderDocumentWithThreads(text, dialect);
+  document.getElementById("preview-empty").hidden = !!text.trim();
+  el.preview.hidden = !text.trim();
 }
 
 function renderPreview() {
@@ -2128,7 +2149,7 @@ function updateViewModeButton() {
 // rendered view showing a stale render of whatever used to be open.
 function renderEditorView() {
   const rendered = editorViewMode === "rendered" && !!active;
-  el.editor.rootElement.hidden = rendered;
+  el.editor.rootElement.hidden = rendered || !active;
   el.editorRendered.hidden = !rendered;
   if (!rendered) return;
   el.editorRendered.innerHTML = renderDocumentWithThreads(
@@ -2477,7 +2498,7 @@ function updatePublishButton() {
   el.publishLabel.textContent = published ? t("editor.publishing") : t("editor.publish");
   // Also the "copied" tick's way back (see copyLinkWithFeedback, which
   // restores through this function on a timer).
-  el.publishIcon.textContent = "🔗";
+  el.publishIcon.innerHTML = icon("share");
   // Tooltip on the button itself, so the wording survives on a phone, where
   // the label span is hidden and only the 🔗 icon is left (see .btn-label).
   el.publishBtn.title = el.publishLabel.textContent;
@@ -3209,7 +3230,11 @@ function updateDictationButton() {
   el.dictationBtn.classList.toggle("transcribing-file", view.transcribingFile);
   el.dictationBtn.setAttribute("aria-pressed", view.pressed ? "true" : "false");
   const icon = el.dictationBtn.querySelector(".btn-icon");
-  if (icon) icon.textContent = view.icon;
+  if (icon) {
+    const markup = symbolIcon(view.icon);
+    if (markup) icon.innerHTML = markup;
+    else icon.textContent = view.icon;
+  }
   el.dictationLabel.textContent = t(view.labelKey);
   updateRecordButton();
   updateAudioFileBar();
@@ -5374,9 +5399,22 @@ function updateExportPdfButton() {
   el.downloadMdBtn.disabled = !active;
 }
 
+function makeTreeRowAccessible(row, label, expanded) {
+  row.tabIndex = 0;
+  row.setAttribute("role", "button");
+  row.setAttribute("aria-label", label);
+  if (expanded !== undefined) row.setAttribute("aria-expanded", String(expanded));
+  row.addEventListener("keydown", (event) => {
+    if (event.target !== row || !["Enter", " "].includes(event.key)) return;
+    event.preventDefault();
+    row.click();
+  });
+}
+
 function buildDocumentRow(projectId, sessionId, doc) {
   const row = document.createElement("div");
   row.className = "document-row";
+  makeTreeRowAccessible(row, doc.filename);
   if (
     active &&
     active.projectId === projectId &&
@@ -5514,10 +5552,10 @@ async function copyDocumentLink(btn, sessionId, filename, heading) {
     prompt(t("prompt.copyShareLink"), ref);
     return;
   }
-  const original = btn.textContent;
-  btn.textContent = "✅";
+  const original = btn.innerHTML;
+  btn.innerHTML = icon("check");
   setTimeout(() => {
-    btn.textContent = original;
+    btn.innerHTML = original;
   }, 1200);
 }
 
@@ -5535,13 +5573,14 @@ function buildSessionNode(projectId, id, session, allSessions) {
 
   const row = document.createElement("div");
   row.className = "session-row";
+  makeTreeRowAccessible(row, session.meta.title, session.expanded);
   if (active && active.projectId === projectId && active.sessionId === id && active.role === "system") {
     row.classList.add("active");
   }
 
   const disclosure = document.createElement("span");
   disclosure.className = "disclosure" + (session.expanded ? " expanded" : "");
-  disclosure.textContent = "▶";
+  disclosure.innerHTML = icon("chevron-right");
 
   const title = document.createElement("span");
   title.className = "session-title";
@@ -5632,13 +5671,14 @@ function buildProjectNode(id, project) {
 
   const row = document.createElement("div");
   row.className = "project-row";
+  makeTreeRowAccessible(row, project.meta.title, project.expanded);
   if (active && active.projectId === id && active.role === "project-system") {
     row.classList.add("active");
   }
 
   const disclosure = document.createElement("span");
   disclosure.className = "disclosure" + (project.expanded ? " expanded" : "");
-  disclosure.textContent = "▶";
+  disclosure.innerHTML = icon("chevron-right");
 
   const title = document.createElement("span");
   title.className = "project-title";
@@ -5709,7 +5749,15 @@ function buildProjectNode(id, project) {
 }
 
 function renderTree() {
+  document.getElementById("project-count").textContent = projects.size;
+  if (active && ["global-system", "global-custom-symbols", "global-spoken-math"].includes(active.role)) document.getElementById("workspace-settings").open = true;
   el.sessionTree.innerHTML = "";
+  if (!projects.size) {
+    const empty = document.createElement("p");
+    empty.className = "tree-empty";
+    empty.textContent = t("workspace.emptyProjects");
+    el.sessionTree.appendChild(empty);
+  }
   for (const [id, project] of projects) {
     el.sessionTree.appendChild(buildProjectNode(id, project));
   }
@@ -7066,7 +7114,7 @@ function showRecordings(projectId, sessionId, filename) {
 async function renameProject(id) {
   const project = projects.get(id);
   if (!project) return;
-  const input = prompt(t("prompt.renameProject"), project.meta.title);
+  const input = await requestWorkspaceName(t("prompt.renameProject"), project.meta.title);
   if (input === null) return;
   const title = input.trim();
   if (!title || title === project.meta.title) return;
@@ -7091,7 +7139,7 @@ async function renameSession(projectId, id) {
   const project = projects.get(projectId);
   const session = project && project.sessions && project.sessions.get(id);
   if (!session) return;
-  const input = prompt(t("prompt.renameFolder"), session.meta.title);
+  const input = await requestWorkspaceName(t("prompt.renameFolder"), session.meta.title);
   if (input === null) return;
   const title = input.trim();
   if (!title || title === session.meta.title) return;
@@ -7223,7 +7271,7 @@ async function createConversationFile(projectId, sessionId, filename) {
 
 async function renameDocument(projectId, sessionId, filename) {
   const base = filename.replace(/\.md$/i, "");
-  const input = prompt(t("prompt.renameDocument"), base);
+  const input = await requestWorkspaceName(t("prompt.renameDocument"), base);
   if (input === null) return;
   const trimmed = input.trim();
   if (!trimmed) return;
@@ -7388,7 +7436,7 @@ async function copyLinkWithFeedback(url) {
   // The icon carries the confirmation too - on a phone the label span is
   // hidden, so a text-only "copied" would be invisible exactly where the
   // clipboard is least obvious.
-  el.publishIcon.textContent = "✅";
+  el.publishIcon.innerHTML = icon("check");
   el.publishLabel.textContent = t("editor.linkCopied");
   setTimeout(updatePublishButton, 1500);
 }
@@ -8469,7 +8517,7 @@ async function loadProviders() {
 }
 
 async function createProject() {
-  const input = prompt(t("prompt.createProject"), "");
+  const input = await requestWorkspaceName(t("prompt.createProject"), "");
   if (input === null) return;
   const meta = await api.createProject(input.trim() || undefined);
   await loadProjects();
@@ -8484,7 +8532,7 @@ async function createProject() {
 // turn (see the send toolbar, shown once a sendable document is open), so
 // creating a session now only needs a title.
 async function createSession(projectId) {
-  const input = prompt(t("prompt.createFolder"), "");
+  const input = await requestWorkspaceName(t("prompt.createFolder"), "");
   if (input === null) return;
   const meta = await api.createConversation(projectId, input.trim() || undefined);
   await refreshProjectSessions(projectId);
@@ -8504,7 +8552,7 @@ async function createSession(projectId) {
 // created under, so it's immediately visible instead of hiding inside a
 // still-collapsed parent row.
 async function createSubfolder(projectId, parentId) {
-  const input = prompt(t("prompt.createFolder"), "");
+  const input = await requestWorkspaceName(t("prompt.createFolder"), "");
   if (input === null) return;
   const meta = await api.createConversation(projectId, input.trim() || undefined, parentId);
   await refreshProjectSessions(projectId);
@@ -9047,6 +9095,15 @@ discussionPane = mountDiscussion({
   expandedTreeState = loadExpandedTreeState();
 
   applyStaticTranslations();
+  mountIcons();
+  el.editor.rootElement.querySelector(".cm-content")?.setAttribute("aria-label", t("workspace.editor"));
+  el.editorB.rootElement.querySelector(".cm-content")?.setAttribute("aria-label", t("editor.splitView"));
+  for (const row of [el.globalSystemRow, el.globalCustomSymbolsRow, el.globalSpokenMathRow]) makeTreeRowAccessible(row, row.textContent.trim());
+  document.getElementById("welcome-create-btn").addEventListener("click", createProject);
+  document.getElementById("welcome-open-btn").addEventListener("click", openQuickOpen);
+  const commandKey = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘ K" : "Ctrl K";
+  document.getElementById("search-shortcut").textContent = commandKey;
+  document.querySelector("#welcome-open-btn kbd").textContent = commandKey;
   // The editor was built before this ran, so it picked up an untranslated
   // placeholder (index.html carries only the data-i18n-placeholder key).
   el.editor.setPlaceholder(t("editor.placeholder"));

@@ -96,15 +96,17 @@
       margin-top: 20px;
     }
   </style>
+  <link rel="icon" type="image/svg+xml" href="/static/images/mark.svg">
+  <link rel="stylesheet" href="/static/css/product-pages.css">
 </head>
-<body>
+<body class="login-page">
   <div class="login-card">
-    <h1>mark-vector</h1>
+    <a class="login-brand" href="/about"><img src="/static/images/mark.svg" width="44" height="44" alt=""></a><h1>mark-vector</h1><p class="login-intro" data-i18n="workspace.loginIntro"></p>
     <p id="login-error" class="login-error" hidden></p>
     <a id="google-btn" class="google-btn" href="/auth/login" data-i18n="login.signInWithGoogle" hidden></a>
     <div id="login-divider" class="login-divider" hidden data-i18n="login.orDivider"></div>
     <form id="passcode-form" class="passcode-form" hidden>
-      <input id="passcode-input" class="passcode-input" type="tel" inputmode="numeric" pattern="[0-9]*"
+      <input id="passcode-input" data-i18n-aria-label="workspace.passcode" class="passcode-input" type="tel" inputmode="numeric" pattern="[0-9]*"
         maxlength="4" autocomplete="off" data-i18n-placeholder="login.passcodePlaceholder">
       <button type="submit" class="passcode-btn" data-i18n="login.passcodeSubmit"></button>
     </form>

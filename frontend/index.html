@@ -4,37 +4,25 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>mark-vector</title>
+  <meta name="theme-color" content="#f4f6f5">
+  <meta name="description" content="A thoughtful workspace for Markdown, ideas, and AI.">
+  <link rel="icon" type="image/svg+xml" href="/static/images/mark.svg">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.18.4/dist/katex.min.css">
   <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="stylesheet" href="/static/css/workspace.css">
 </head>
 <body data-mobile-view="tree" class="app-shell">
   <div id="layout" class="layout">
     <aside id="tree-pane" class="tree-pane">
       <div class="tree-header">
         <div class="tree-header-row">
-          <h1>mark-vector</h1>
-          <div class="header-actions">
-            <button id="quick-open-btn" class="icon-btn" type="button" data-i18n-title="quickOpen.openTitle">🔍</button>
-            <button id="shortcuts-btn" class="icon-btn" type="button" data-i18n-title="shortcuts.openTitle">⌨</button>
-            <span id="lang-select-slot"></span>
-            <button id="tree-collapse-btn" class="icon-btn pane-collapse-btn" data-i18n-title="ui.collapsePanel">«</button>
-          </div>
+          <a href="/about" class="workspace-brand" data-i18n-title="workspace.about"><img src="/static/images/mark.svg" width="30" height="30" alt=""><h1>mark-vector<span data-i18n="workspace.tagline"></span></h1></a>
+          <button id="tree-collapse-btn" class="icon-btn pane-collapse-btn" data-icon="panel-left" data-i18n-title="ui.collapsePanel"></button>
         </div>
+        <button id="quick-open-btn" class="workspace-search" type="button" data-i18n-title="quickOpen.openTitle"><span data-icon="search" aria-hidden="true"></span><span data-i18n="workspace.search"></span><kbd id="search-shortcut">⌘ K</kbd></button>
         <button id="new-project-btn" class="primary-btn full-width" data-i18n="ui.newProject"></button>
-        <div id="auth-info" class="auth-info" hidden></div>
       </div>
-      <div id="global-system-row" class="document-row global-row">
-        <span class="doc-role-badge role-system">G</span>
-        <span class="doc-filename" data-i18n="tree.globalSystemPrompt"></span>
-      </div>
-      <div id="global-custom-symbols-row" class="document-row global-row">
-        <span class="doc-role-badge role-system">C</span>
-        <span class="doc-filename" data-i18n="tree.globalCustomSymbols"></span>
-      </div>
-      <div id="global-spoken-math-row" class="document-row global-row">
-        <span class="doc-role-badge role-system">S</span>
-        <span class="doc-filename" data-i18n="tree.globalSpokenMath"></span>
-      </div>
+      <div class="tree-section-label"><span data-i18n="workspace.projects"></span><span id="project-count" class="section-count">0</span></div>
       <div id="hermes-section" class="hermes-section" hidden>
         <div id="hermes-header" class="hermes-header">
           <span id="hermes-disclosure" class="disclosure">▶</span>
@@ -43,6 +31,25 @@
         <div id="hermes-list" class="hermes-list" hidden></div>
       </div>
       <div id="session-tree" class="session-tree"></div>
+      <div class="tree-footer">
+        <details id="workspace-settings" class="workspace-settings">
+          <summary><span data-icon="settings" aria-hidden="true"></span><span data-i18n="workspace.settings"></span><span data-icon="chevron-down" aria-hidden="true"></span></summary>
+          <div id="global-system-row" class="document-row global-row">
+            <span class="doc-role-badge role-system">G</span>
+            <span class="doc-filename" data-i18n="tree.globalSystemPrompt"></span>
+          </div>
+          <div id="global-custom-symbols-row" class="document-row global-row">
+            <span class="doc-role-badge role-system">C</span>
+            <span class="doc-filename" data-i18n="tree.globalCustomSymbols"></span>
+          </div>
+          <div id="global-spoken-math-row" class="document-row global-row">
+            <span class="doc-role-badge role-system">S</span>
+            <span class="doc-filename" data-i18n="tree.globalSpokenMath"></span>
+          </div>
+        </details>
+        <div class="workspace-footer-row"><span id="lang-select-slot"></span><button id="shortcuts-btn" class="icon-btn" type="button" data-icon="keyboard" data-i18n-title="shortcuts.openTitle"></button></div>
+        <div id="auth-info" class="auth-info" hidden></div>
+      </div>
     </aside>
 
     <div id="tree-resizer" class="pane-resizer" data-i18n-title="ui.dragToResize"></div>
@@ -86,6 +93,23 @@
           <span id="editor-filename" class="pane-filename" data-i18n="editor.selectDocument"></span>
           <span id="tool-status" class="tool-status" hidden></span>
         </div>
+        <div class="editor-primary-actions">
+          <button id="save-btn" class="secondary-btn" disabled data-i18n-title="editor.save">
+            <span class="btn-icon" aria-hidden="true"><span data-icon="save"></span></span>
+            <span class="btn-label" data-i18n="editor.save"></span>
+          </button>
+          <button id="publish-btn" class="secondary-btn" disabled hidden>
+            <span id="publish-icon" class="btn-icon" aria-hidden="true"><span data-icon="share"></span></span>
+            <span id="publish-label" class="btn-label"></span>
+          </button>
+          <button id="send-btn" class="primary-btn" disabled data-i18n-title="editor.send">
+            <span class="btn-icon" aria-hidden="true"><span data-icon="arrow-up"></span></span>
+            <span class="btn-label" data-i18n="editor.send"></span>
+          </button>
+        </div>
+      </div>
+      <div class="editor-commandbar">
+        <span class="commandbar-label" data-i18n="workspace.editor"></span>
         <div class="editor-actions">
           <div class="editor-actions-scroll">
           <!-- Each of these carries its icon and its wording as separate
@@ -94,16 +118,8 @@
                .btn-label in style.css). The publish button's own wording is
                swapped in JS, which is why only its label span is scripted -
                see updatePublishButton. -->
-          <button id="save-btn" class="secondary-btn" disabled data-i18n-title="editor.save">
-            <span class="btn-icon" aria-hidden="true">💾</span>
-            <span class="btn-label" data-i18n="editor.save"></span>
-          </button>
-          <button id="publish-btn" class="secondary-btn" disabled hidden>
-            <span id="publish-icon" class="btn-icon" aria-hidden="true">🔗</span>
-            <span id="publish-label" class="btn-label"></span>
-          </button>
           <button id="inline-complete-btn" class="secondary-btn" disabled hidden data-i18n-title="editor.inlineCompleteTitle">
-            <span class="btn-icon" aria-hidden="true">✨</span>
+            <span class="btn-icon" aria-hidden="true"><span data-icon="sparkles"></span></span>
             <span class="btn-label" data-i18n="editor.inlineComplete"></span>
           </button>
           <!-- Live dictation into the editor at the caret (see the dictation
@@ -113,7 +129,7 @@
                Korean UI can still take English dictation. -->
           <span id="dictation-group" class="dictation-group" hidden>
             <button id="dictation-btn" class="secondary-btn" type="button" disabled aria-pressed="false" data-i18n-title="editor.dictationTitle">
-              <span class="btn-icon" aria-hidden="true">🎤</span>
+              <span class="btn-icon" aria-hidden="true"><span data-icon="mic"></span></span>
               <span id="dictation-label" class="btn-label" data-i18n="editor.dictation"></span>
             </button>
             <select id="dictation-lang" class="dictation-lang" data-i18n-title="editor.dictationLangTitle">
@@ -137,25 +153,21 @@
                controller is connected; the controller itself drives the
                presenter actions (see the presenter section in app.js). -->
           <button id="remote-btn" class="secondary-btn" type="button" hidden>
-            <span class="btn-icon" aria-hidden="true">🎮</span>
+            <span class="btn-icon" aria-hidden="true"><span data-icon="gamepad"></span></span>
           </button>
           <!-- Appears only with the caret inside an inline thread (see
                updateInlineThreadButton) - a control for something that isn't
                there would just be another disabled button in a row that's
                already tight on a phone. -->
           <button id="thread-toggle-btn" class="secondary-btn" type="button" disabled hidden data-i18n-title="editor.threadToggle">
-            <span class="btn-icon" aria-hidden="true">👁</span>
+            <span class="btn-icon" aria-hidden="true"><span data-icon="eye"></span></span>
             <span class="btn-label" data-i18n="editor.thread"></span>
           </button>
           <!-- Shown while split view has a document open: on, messages sent
                from here carry that document and may write to it - see the
                "document editing" section in app.js. -->
           <button id="edit-target-btn" class="secondary-btn" type="button" hidden aria-pressed="false">
-            <span class="btn-icon" aria-hidden="true">✏️</span>
-          </button>
-          <button id="send-btn" class="primary-btn" disabled data-i18n-title="editor.send">
-            <span class="btn-icon" aria-hidden="true">💬</span>
-            <span class="btn-label" data-i18n="editor.send"></span>
+            <span class="btn-icon" aria-hidden="true"><span data-icon="edit"></span></span>
           </button>
           <!-- Swaps the editor pane itself between the raw Markdown source
                (editable) and the same rendering the preview pane shows (read-
@@ -169,7 +181,7 @@
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6-5 6 5 M6 15l6 5 6-5"/></svg>
           </button>
           <button id="view-mode-btn" class="secondary-btn" type="button" disabled aria-pressed="false" data-i18n-title="editor.viewModeTitle">
-            <span class="btn-icon" aria-hidden="true">📖</span>
+            <span class="btn-icon" aria-hidden="true"><span data-icon="book"></span></span>
             <span id="view-mode-label" class="btn-label" data-i18n="editor.viewModeSource"></span>
           </button>
           <!-- Opens a second, lighter editor pane (view/edit/save only - no
@@ -179,11 +191,11 @@
                the second pane at all (a phone, or a tablet - hidden there
                entirely, see the max-width: 900px block in style.css). -->
           <button id="discuss-toggle-btn" class="secondary-btn" type="button" aria-pressed="false" data-i18n-title="discuss.toggleTitle">
-            <span class="btn-icon" aria-hidden="true">🗣</span>
+            <span class="btn-icon" aria-hidden="true"><span data-icon="audio"></span></span>
             <span class="btn-label" data-i18n="discuss.toggle"></span>
           </button>
           <button id="split-toggle-btn" class="secondary-btn" type="button" aria-pressed="false" data-i18n-title="editor.splitView">
-            <span class="btn-icon" aria-hidden="true">◫</span>
+            <span class="btn-icon" aria-hidden="true"><span data-icon="columns"></span></span>
             <span class="btn-label" data-i18n="editor.splitView"></span>
           </button>
           </div>
@@ -191,7 +203,7 @@
                width (see .editor-toolbar in style.css) so the header stays
                one line. -->
           <button id="toolbar-toggle-btn" class="secondary-btn toolbar-toggle" type="button" aria-expanded="false" data-i18n-title="editor.toggleToolbar">
-            <span class="btn-icon" aria-hidden="true">⚙</span>
+            <span class="btn-icon" aria-hidden="true"><span data-icon="settings"></span></span>
           </button>
         </div>
       </div>
@@ -217,8 +229,8 @@
           <option value="asciimath" data-i18n="editor.formatAsciimath"></option>
           <option value="hybrid" data-i18n="editor.formatHybrid"></option>
         </select>
-        <select id="provider-select"></select>
-        <select id="model-select"></select>
+        <select id="provider-select" data-i18n-aria-label="workspace.provider"></select>
+        <select id="model-select" data-i18n-aria-label="workspace.model"></select>
         <!-- Only "off" is static (so the selector is never empty before the
              provider list loads) - the levels themselves are rebuilt per
              model from /api/providers' reasoning_efforts, since they differ
@@ -266,6 +278,17 @@
         <button id="audio-file-rate-btn" class="secondary-btn audio-file-rate" type="button" data-i18n-title="editor.audioFileRate">1×</button>
         <button id="audio-file-close-btn" class="icon-btn audio-file-close" type="button" data-i18n-title="editor.audioFileClose">✕</button>
       </div>
+      <section id="workspace-welcome" class="workspace-welcome" aria-labelledby="welcome-title">
+        <div class="welcome-content">
+          <div class="welcome-art" aria-hidden="true"><div class="welcome-sheet back"></div><div class="welcome-sheet front"><span data-icon="document"></span><i></i><i></i><i></i><span class="welcome-spark" data-icon="sparkles"></span></div></div>
+          <span class="welcome-eyebrow" data-i18n="workspace.welcomeEyebrow"></span>
+          <h2 id="welcome-title" data-i18n="workspace.welcomeTitle"></h2>
+          <p data-i18n="workspace.welcomeDescription"></p>
+          <button id="welcome-create-btn" class="primary-btn welcome-create" type="button"><span data-icon="plus" aria-hidden="true"></span><span data-i18n="workspace.startProject"></span><span data-icon="arrow-right" aria-hidden="true"></span></button>
+          <button id="welcome-open-btn" class="welcome-open" type="button"><span data-i18n="workspace.openDocument"></span><kbd>⌘ K</kbd></button>
+          <div class="welcome-note"><span data-icon="markdown" aria-hidden="true"></span><span data-i18n="workspace.welcomeNote"></span></div>
+        </div>
+      </section>
       <textarea id="editor" class="editor" data-i18n-placeholder="editor.placeholder" disabled></textarea>
       <!-- The "rendered" half of #view-mode-btn's toggle: an absolutely-
            positioned cover over the editor (.editor-pane already establishes
@@ -275,9 +298,10 @@
            preview pane, so it picks up the exact same typography/math/thread
            styling for free. -->
       <div id="editor-rendered" class="markdown-body editor-rendered" hidden></div>
+      <footer id="document-status" class="document-status" hidden><span id="document-save-state"></span><span id="document-character-count"></span><span class="document-format">Markdown <span>·</span> UTF-8</span></footer>
       <div class="scroll-nav">
-        <button id="editor-scroll-top-btn" class="icon-btn scroll-nav-btn" type="button" data-i18n-title="ui.scrollToTop">↑</button>
-        <button id="editor-scroll-bottom-btn" class="icon-btn scroll-nav-btn" type="button" data-i18n-title="ui.scrollToBottom">↓</button>
+        <button id="editor-scroll-top-btn" class="icon-btn scroll-nav-btn" type="button" data-i18n-title="ui.scrollToTop" data-icon="arrow-up"></button>
+        <button id="editor-scroll-bottom-btn" class="icon-btn scroll-nav-btn" type="button" data-i18n-title="ui.scrollToBottom" data-icon="arrow-down"></button>
       </div>
       </div>
     </main>
@@ -303,9 +327,9 @@
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6-5 6 5 M6 15l6 5 6-5"/></svg>
           </button>
           <button id="save-btn-b" class="secondary-btn" disabled data-i18n-title="editor.save">
-            <span class="btn-icon" aria-hidden="true">💾</span>
+            <span class="btn-icon" aria-hidden="true"><span data-icon="save"></span></span>
           </button>
-          <button id="close-split-btn" class="icon-btn" type="button" data-i18n-title="ui.closeSplit">×</button>
+          <button id="close-split-btn" class="icon-btn" type="button" data-i18n-title="ui.closeSplit" data-icon="close"></button>
         </div>
       </div>
       <!-- What the conversation in the other pane just changed here, with a
@@ -317,8 +341,8 @@
       </div>
       <textarea id="editor-b" class="editor" data-i18n-placeholder="editor.placeholder" disabled></textarea>
       <div class="scroll-nav">
-        <button id="editor-scroll-top-btn-b" class="icon-btn scroll-nav-btn" type="button" data-i18n-title="ui.scrollToTop">↑</button>
-        <button id="editor-scroll-bottom-btn-b" class="icon-btn scroll-nav-btn" type="button" data-i18n-title="ui.scrollToBottom">↓</button>
+        <button id="editor-scroll-top-btn-b" class="icon-btn scroll-nav-btn" type="button" data-i18n-title="ui.scrollToTop" data-icon="arrow-up"></button>
+        <button id="editor-scroll-bottom-btn-b" class="icon-btn scroll-nav-btn" type="button" data-i18n-title="ui.scrollToBottom" data-icon="arrow-down"></button>
       </div>
     </main>
 
@@ -329,9 +353,9 @@
         <!-- Preview, or one of two LLM readings of the same document - see
              analysis.js. The actions after it belong to Preview only. -->
         <div id="preview-tabs" class="preview-tabs" role="tablist">
-          <button type="button" class="preview-tab active" role="tab" data-view="preview" data-i18n="preview.title"></button>
-          <button type="button" class="preview-tab" role="tab" data-view="evaluate" data-i18n="analysis.evaluate" data-i18n-title="analysis.evaluateTitle"></button>
-          <button type="button" class="preview-tab" role="tab" data-view="formalize" data-i18n="analysis.formalize" data-i18n-title="analysis.formalizeTitle"></button>
+          <button type="button" class="preview-tab active" role="tab" aria-selected="true" data-view="preview" data-i18n="preview.title"></button>
+          <button type="button" class="preview-tab" role="tab" aria-selected="false" data-view="evaluate" data-i18n="analysis.evaluate" data-i18n-title="analysis.evaluateTitle"></button>
+          <button type="button" class="preview-tab" role="tab" aria-selected="false" data-view="formalize" data-i18n="analysis.formalize" data-i18n-title="analysis.formalizeTitle"></button>
         </div>
         <div class="preview-actions">
           <label class="checkbox-row sync-scroll-row preview-only">
@@ -344,15 +368,16 @@
           </label>
           <button id="download-md-btn" class="icon-btn preview-only" disabled data-i18n-title="preview.downloadMdTitle">⤓ MD</button>
           <button id="export-pdf-btn" class="icon-btn preview-only" disabled data-i18n-title="preview.exportPdfTitle">⤓ PDF</button>
-          <button id="preview-collapse-btn" class="icon-btn pane-collapse-btn" data-i18n-title="ui.collapsePanel">»</button>
+          <button id="preview-collapse-btn" class="icon-btn pane-collapse-btn" data-i18n-title="ui.collapsePanel" data-icon="panel-right"></button>
         </div>
       </div>
       <div id="glasses-toolbar" class="glasses-toolbar" hidden>
         <span id="glasses-status-dot" class="live-status-dot"></span>
         <span class="glasses-toolbar-label" data-i18n="preview.glassesUrlLabel"></span>
         <input id="glasses-url-input" class="glasses-url-input" type="text" readonly data-i18n-title="preview.glassesUrlTitle">
-        <button id="glasses-copy-btn" class="icon-btn" type="button" data-i18n-title="preview.glassesCopyTitle">⧉</button>
+        <button id="glasses-copy-btn" class="icon-btn" type="button" data-i18n-title="preview.glassesCopyTitle" data-icon="copy"></button>
       </div>
+      <div id="preview-empty" class="preview-empty"><span class="preview-empty-icon" data-icon="document" aria-hidden="true"></span><h2 data-i18n="workspace.previewTitle"></h2><p data-i18n="workspace.previewDescription"></p><span class="preview-empty-caption" data-i18n="workspace.previewCaption"></span></div>
       <div id="preview" class="preview markdown-body"></div>
       <div id="analysis-view" class="analysis-view" hidden>
         <div class="analysis-toolbar">
@@ -372,14 +397,14 @@
         <div id="analysis-body" class="analysis-body markdown-body"></div>
       </div>
       <div class="scroll-nav">
-        <button id="preview-scroll-top-btn" class="icon-btn scroll-nav-btn" type="button" data-i18n-title="ui.scrollToTop">↑</button>
-        <button id="preview-scroll-bottom-btn" class="icon-btn scroll-nav-btn" type="button" data-i18n-title="ui.scrollToBottom">↓</button>
+        <button id="preview-scroll-top-btn" class="icon-btn scroll-nav-btn" type="button" data-i18n-title="ui.scrollToTop" data-icon="arrow-up"></button>
+        <button id="preview-scroll-bottom-btn" class="icon-btn scroll-nav-btn" type="button" data-i18n-title="ui.scrollToBottom" data-icon="arrow-down"></button>
       </div>
     </section>
   </div>
 
-  <button id="tree-expand-btn" class="pane-expand-btn" hidden data-i18n-title="ui.expandPanel">»</button>
-  <button id="preview-expand-btn" class="pane-expand-btn" hidden data-i18n-title="ui.expandPanel">«</button>
+  <button id="tree-expand-btn" class="pane-expand-btn" hidden data-i18n-title="ui.expandPanel" data-icon="panel-left"></button>
+  <button id="preview-expand-btn" class="pane-expand-btn" hidden data-i18n-title="ui.expandPanel" data-icon="panel-right"></button>
 
   <!-- Populated with a snapshot of #preview's rendered HTML right before
        window.print() (see exportPreviewToPdf in app.js) - kept separate
@@ -390,9 +415,9 @@
   <div id="print-target" class="markdown-body"></div>
 
   <nav id="mobile-tabs" class="mobile-tabs">
-    <button type="button" class="mobile-tab active" data-view="tree" data-i18n="mobile.tree"></button>
-    <button type="button" class="mobile-tab" data-view="editor" data-i18n="mobile.editor"></button>
-    <button type="button" class="mobile-tab" data-view="preview" data-i18n="mobile.preview"></button>
+    <button type="button" class="mobile-tab active" data-view="tree"><span data-icon="folder" aria-hidden="true"></span><span data-i18n="mobile.tree"></span></button>
+    <button type="button" class="mobile-tab" data-view="editor"><span data-icon="edit" aria-hidden="true"></span><span data-i18n="mobile.editor"></span></button>
+    <button type="button" class="mobile-tab" data-view="preview"><span data-icon="eye" aria-hidden="true"></span><span data-i18n="mobile.preview"></span></button>
   </nav>
 
   <!-- Fuzzy jump-to-document across every project/folder, not just the open
@@ -400,9 +425,10 @@
        already cover) - see openQuickOpen in app.js. Hidden by default;
        opened with ⌘/Ctrl+P or ⌘/Ctrl+K, or the 🔍 button above the tree. -->
   <div id="quick-open-overlay" class="quick-open-overlay" hidden>
-    <div class="quick-open-panel" role="dialog" aria-modal="true">
+    <div class="quick-open-panel" role="dialog" aria-modal="true" data-i18n-aria-label="quickOpen.openTitle">
       <input
         id="quick-open-input"
+        data-i18n-aria-label="quickOpen.openTitle"
         class="quick-open-input"
         type="text"
         data-i18n-placeholder="quickOpen.placeholder"
@@ -423,10 +449,10 @@
        "?" (outside any text field - see the shortcuts-help keydown listener)
        or the ⌨ button above the tree. -->
   <div id="shortcuts-overlay" class="quick-open-overlay" hidden>
-    <div class="quick-open-panel shortcuts-panel" role="dialog" aria-modal="true">
+    <div class="quick-open-panel shortcuts-panel" role="dialog" aria-modal="true" data-i18n-aria-label="shortcuts.title">
       <div class="shortcuts-header">
         <span data-i18n="shortcuts.title"></span>
-        <button id="shortcuts-close-btn" class="icon-btn" type="button" data-i18n-title="ui.close">×</button>
+        <button id="shortcuts-close-btn" class="icon-btn" type="button" data-i18n-title="ui.close" data-icon="close"></button>
       </div>
       <div id="shortcuts-groups" class="shortcuts-groups"></div>
     </div>
