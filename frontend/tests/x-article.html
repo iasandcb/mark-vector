@@ -41,22 +41,29 @@ test("math preserves TeX once instead of duplicated KaTeX DOM", () => {
   const article = articleFromHtml(`<div class="katex-display">${katex}</div><p>Inline ${katex}</p>`, "math.md");
   assert(article.content_state.blocks[0].text === "E=mc^2");
   assert(article.content_state.entities[0].value.type === "latex");
-  assert(article.content_state.blocks[1].text === "Inline ");
-  assert(article.content_state.blocks[2].text === "E=mc^2");
-  assert(article.content_state.blocks[2].type === "atomic");
+  assert(article.content_state.blocks.length === 2);
+  assert(article.content_state.blocks[1].text === "Inline E=mc^2");
+  assert(article.content_state.blocks[1].type === "unstyled");
+  assert(article.content_state.entities.length === 1);
   assert(article.warnings.includes("inlineMath"));
 });
-test("inline equations split text without breaking UTF-16 styles and links", () => {
+test("inline equations stay in the sentence with UTF-16 styles and links", () => {
   const math = '<span class="katex"><annotation encoding="application/x-tex">x</annotation></span>';
   const article = articleFromHtml(`<p><strong>😀 ${math}가 있다.</strong> <a href="https://example.com">앞${math}뒤</a></p>`, "math.md");
   const blocks = article.content_state.blocks;
-  assert(blocks.map(b => b.text).join("|") === "😀 |x|가 있다. 앞|x|뒤");
-  assert(blocks[0].inline_style_ranges[0].length === 3);
-  assert(blocks[2].inline_style_ranges[0].length === 5);
-  assert(blocks[2].entity_ranges[0].offset === 6);
-  assert(blocks[4].entity_ranges[0].offset === 0);
-  assert(blocks[4].entity_ranges[0].length === 1);
-  assert(article.content_state.entities.filter(e => e.value.type === "latex").length === 2);
+  assert(blocks.length === 1);
+  assert(blocks[0].text === "😀 x가 있다. 앞x뒤");
+  assert(blocks[0].inline_style_ranges[0].length === 9);
+  assert(blocks[0].entity_ranges[0].offset === 10);
+  assert(blocks[0].entity_ranges[0].length === 3);
+  assert(article.content_state.entities.every(e => e.value.type === "link"));
+});
+test("inline TeX keeps commands but removes delimiters in paragraphs and tables", () => {
+  const math = '<span class="katex"><annotation encoding="application/x-tex">\\frac{1}{2}</annotation></span>';
+  const article = articleFromHtml(`<p>확률은 ${math}이다.</p><table><tr><th>확률</th></tr><tr><td>${math}</td></tr></table>`, "math.md");
+  assert(article.content_state.blocks[0].text === "확률은 \\frac{1}{2}이다.");
+  assert(article.content_state.entities[0].value.data.markdown.includes("\\frac{1}{2}"));
+  assert(!JSON.stringify(article.content_state).includes("$"));
 });
 test("display math inside a paragraph remains native math", () => {
   const article = articleFromHtml('<p><span class="katex-display"><span class="katex"><annotation encoding="application/x-tex">x</annotation></span></span></p>', "math.md");

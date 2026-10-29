@@ -29,9 +29,10 @@ export function articleFromHtml(html, filename, { imageLabel = "Image" } = {}) {
       if (node.nodeType !== 1 || ["UL", "OL"].includes(node.tagName)) return;
       if (node.matches(".katex, .katex-display")) {
         const source = latex(node);
-        maths.push({ offset: text.length, length: source.length + 2, source });
-        text += `$${source}$`;
-        if (!node.matches(".katex-display")) warnings.add("inlineMath");
+        if (node.matches(".katex-display")) {
+          maths.push({ offset: text.length, length: source.length, source });
+        } else warnings.add("inlineMath");
+        text += source;
         return;
       }
       if (node.tagName === "IMG") {
@@ -62,9 +63,9 @@ export function articleFromHtml(html, filename, { imageLabel = "Image" } = {}) {
   }
   function addInline(node, type) {
     const { text, styles, ranges, maths } = inline(node.childNodes);
-    // The Articles API renders TeX through atomic latex blocks. Plain $...$
-    // text is not interpreted as inline math. Keep text and formatting on
-    // either side, and move each equation into its own native math block.
+    // Keep inline TeX as text within its sentence. Split only display math
+    // nested in a paragraph into native latex blocks, preserving surrounding
+    // text, formatting, and UTF-16 ranges.
     const clip = (spans, start, end) => spans.flatMap((span) => {
       const from = Math.max(span.offset, start);
       const to = Math.min(span.offset + span.length, end);
