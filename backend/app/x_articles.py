@@ -3,6 +3,7 @@
 import base64
 import hashlib
 import hmac
+import logging
 import secrets
 import time
 from urllib.parse import quote, urlencode
@@ -11,6 +12,8 @@ import httpx2
 from fastapi import HTTPException
 
 from .config import settings
+
+logger = logging.getLogger(__name__)
 
 DRAFT_URL = "https://api.x.com/2/articles/draft"
 
@@ -63,7 +66,10 @@ def create_draft(payload: dict) -> dict:
     except httpx2.RequestError:
         raise HTTPException(502, "connectionFailed") from None
     if response.status_code >= 300:
-        code = {401: "authentication", 402: "credits", 403: "permission", 429: "rateLimit"}.get(response.status_code, "rejected")
+        code = {400: "invalidContent", 401: "authentication", 402: "credits", 403: "permission",
+                404: "endpointUnavailable", 413: "articleTooLarge", 422: "invalidContent",
+                429: "rateLimit"}.get(response.status_code, "upstreamUnavailable" if response.status_code >= 500 else "rejected")
+        logger.warning("X article draft failed: status=%d category=%s", response.status_code, code)
         # Do not echo upstream response bodies (which may contain private data).
         raise HTTPException(502, code)
     try:

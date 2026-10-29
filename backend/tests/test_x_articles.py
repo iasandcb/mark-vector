@@ -125,7 +125,7 @@ def test_oauth2_user_token_supported(client, upstream, monkeypatch):
     assert upstream[0][1] == {"Authorization": "Bearer user-context-token"}
 
 
-@pytest.mark.parametrize("status,code", [(401, "authentication"), (402, "credits"), (403, "permission"), (429, "rateLimit"), (500, "rejected")])
+@pytest.mark.parametrize("status,code", [(401, "authentication"), (402, "credits"), (403, "permission"), (429, "rateLimit"), (400, "invalidContent"), (404, "endpointUnavailable"), (413, "articleTooLarge"), (422, "invalidContent"), (500, "upstreamUnavailable"), (503, "upstreamUnavailable"), (409, "rejected")])
 def test_upstream_errors_are_safe_and_do_not_redirect_to_app_login(configured, monkeypatch, status, code):
     respond(monkeypatch, httpx2.Response(status, json={"detail": "secret upstream content"}))
     response = configured.post("/api/x-articles/drafts", json=draft_body())
