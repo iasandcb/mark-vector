@@ -23,13 +23,15 @@ export function articleFromHtml(html, filename, { imageLabel = "Image" } = {}) {
   const latex = (node) => node.querySelector('annotation[encoding="application/x-tex"]')?.textContent || node.textContent;
   function inline(nodes) {
     let text = "";
-    const styles = [], ranges = [];
+    const styles = [], ranges = [], maths = [];
     function visit(node) {
       if (node.nodeType === 3) { text += node.textContent.replace(/\s+/g, " "); return; }
       if (node.nodeType !== 1 || ["UL", "OL"].includes(node.tagName)) return;
-      if (node.matches(".katex")) {
-        text += `$${latex(node)}$`;
-        warnings.add("inlineMath");
+      if (node.matches(".katex, .katex-display")) {
+        const source = latex(node);
+        maths.push({ offset: text.length, length: source.length + 2, source });
+        text += `$${source}$`;
+        if (!node.matches(".katex-display")) warnings.add("inlineMath");
         return;
       }
       if (node.tagName === "IMG") {
@@ -56,11 +58,29 @@ export function articleFromHtml(html, filename, { imageLabel = "Image" } = {}) {
       }
     }
     for (const node of nodes) visit(node);
-    return { text, styles, ranges };
+    return { text, styles, ranges, maths };
   }
   function addInline(node, type) {
-    const { text, styles, ranges } = inline(node.childNodes);
-    if (text.trim()) append(type, text, styles, ranges);
+    const { text, styles, ranges, maths } = inline(node.childNodes);
+    // The Articles API renders TeX through atomic latex blocks. Plain $...$
+    // text is not interpreted as inline math. Keep text and formatting on
+    // either side, and move each equation into its own native math block.
+    const clip = (spans, start, end) => spans.flatMap((span) => {
+      const from = Math.max(span.offset, start);
+      const to = Math.min(span.offset + span.length, end);
+      return to > from ? [{ ...span, offset: from - start, length: to - from }] : [];
+    });
+    const segment = (start, end) => {
+      const value = text.slice(start, end);
+      if (value.trim()) append(type, value, clip(styles, start, end), clip(ranges, start, end));
+    };
+    let start = 0;
+    for (const math of maths) {
+      segment(start, math.offset);
+      atomic("latex", {}, math.source);
+      start = math.offset + math.length;
+    }
+    segment(start, text.length);
   }
   function visit(node, quote = false) {
     if (node.nodeType === 3) {
