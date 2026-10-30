@@ -8,6 +8,7 @@ import logging
 import re
 import secrets
 import time
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from urllib.parse import quote, urlencode
 
@@ -99,26 +100,114 @@ def _error_diagnostic(response, payload: dict) -> str:
     return encoded
 
 
+# x-rate-limit-* is the short request window. x-*-limit-* also covers the
+# 24-hour user/app counters (x-user-limit-24hour-*, x-app-limit-24hour-*).
+_LIMIT_HEADER = re.compile(
+    r"^x-(?:rate-limit-[a-z0-9]+(?:-[a-z0-9]+)*|[a-z0-9]+(?:-[a-z0-9]+)*-limit-[a-z0-9]+(?:-[a-z0-9]+)*)$"
+)
+_ACCESS_LEVEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,63}$")
+_TRANSACTION_ID = re.compile(r"^[A-Za-z0-9+/=_.-]{1,200}$")
+_SENSITIVE_TEXT = re.compile(
+    r"authorization|oauth_|\bbearer\s|api[_ -]?(?:key|secret)|access[_ -]?token", re.I,
+)
+_SECRET_FIELDS = (
+    "x_api_key", "x_api_secret", "x_access_token", "x_access_token_secret", "x_user_access_token",
+    "soniox_api_key", "ingest_token", "worker_token", "anthropic_api_key", "openai_api_key",
+    "xai_api_key", "google_client_secret", "app_passcode",
+)
+_PREFERRED_LIMITS = {
+    "x-rate-limit-limit", "x-rate-limit-remaining", "x-rate-limit-reset",
+    "x-user-limit-24hour-limit", "x-user-limit-24hour-remaining", "x-user-limit-24hour-reset",
+    "x-app-limit-24hour-limit", "x-app-limit-24hour-remaining", "x-app-limit-24hour-reset",
+}
+_LOG_SKIP = {"X-X-Error-Info", "Cache-Control", "X-X-Error-Type", "X-X-Auth-Mode"}
+_KST = timezone(timedelta(hours=9))
+
+
+def _exposes_secret(value: str) -> bool:
+    if _SENSITIVE_TEXT.search(value):
+        return True
+    for name in _SECRET_FIELDS:
+        secret = getattr(settings, name, None)
+        # Short values such as a passcode must not hide a numeric limit that
+        # happens to use the same digits. Only a full credential matches.
+        if isinstance(secret, str) and len(secret) >= 8 and secret in value:
+            return True
+    return False
+
+
+def _bounded_int(value: str) -> str | None:
+    value = value.strip()
+    if value.isascii() and value.isdigit() and 1 <= len(value) <= 12 and not _exposes_secret(value):
+        return str(int(value))
+    return None
+
+
+def _safe_token(value: str, pattern: re.Pattern) -> str | None:
+    value = value.strip()
+    if pattern.fullmatch(value) and not _exposes_secret(value):
+        return value
+    return None
+
+
+def _outgoing_header(name: str) -> str:
+    if name == "x-rate-limit-limit":
+        return "X-RateLimit-Limit"
+    if name == "x-rate-limit-remaining":
+        return "X-RateLimit-Remaining"
+    if name == "x-rate-limit-reset":
+        return "X-RateLimit-Reset"
+    return "-".join(f"{part[:1].upper()}{part[1:]}" for part in name.split("-"))
+
+
+def _reset_clock(value: str) -> str:
+    try:
+        instant = datetime.fromtimestamp(int(value), timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return value
+    kst = instant.astimezone(_KST)
+    return f"{value} ({instant:%Y-%m-%d %H:%M:%S} UTC / {kst:%Y-%m-%d %H:%M:%S} KST)"
+
+
+def _diagnostic_log(headers: dict[str, str]) -> str:
+    parts = []
+    for name in sorted(headers):
+        if name in _LOG_SKIP:
+            continue
+        value = _reset_clock(headers[name]) if name.lower().endswith("reset") else headers[name]
+        parts.append(f"{name}={value}")
+    return " ".join(parts)
+
+
 def _limit_diagnostics(response) -> tuple[str | None, dict[str, str]]:
-    """Forward only known error types and numeric rate-limit metadata.
+    """Forward allowlisted limit metadata and a few safe response headers.
 
     Never copy the error body, request headers, URLs or credentials into an
-    application response or log. A 429 can mean a usage cap, not just a
-    short-lived rate limit.
+    application response or log. A 429 can be a 24-hour user or app cap while
+    the 15-minute x-rate-limit-* window still has remaining requests.
     """
-    headers = {}
-    for upstream, outgoing in (
-        ("x-rate-limit-limit", "X-RateLimit-Limit"),
-        ("x-rate-limit-remaining", "X-RateLimit-Remaining"),
-        ("x-rate-limit-reset", "X-RateLimit-Reset"),
-    ):
-        value = response.headers.get(upstream, "").strip()
-        if value.isascii() and value.isdigit() and len(value) <= 12:
-            headers[outgoing] = str(int(value))
-    retry_after = response.headers.get("retry-after", "").strip()
-    if retry_after.isascii() and retry_after.isdigit() and len(retry_after) <= 12:
+    numeric = {}
+    for raw_name, raw_value in response.headers.items():
+        name = raw_name.lower()
+        if len(name) > 80 or not _LIMIT_HEADER.fullmatch(name):
+            continue
+        number = _bounded_int(raw_value if isinstance(raw_value, str) else "")
+        if number is not None:
+            numeric[name] = number
+    ordered = sorted(numeric)
+    selected = [name for name in ordered if name in _PREFERRED_LIMITS]
+    selected.extend(name for name in ordered if name not in _PREFERRED_LIMITS)
+    headers = {_outgoing_header(name): numeric[name] for name in selected[:32]}
+    access = _safe_token(response.headers.get("x-access-level", "") or "", _ACCESS_LEVEL)
+    if access:
+        headers["X-Access-Level"] = access
+    transaction = _safe_token(response.headers.get("x-transaction-id", "") or "", _TRANSACTION_ID)
+    if transaction:
+        headers["X-Transaction-Id"] = transaction
+    retry_after = (response.headers.get("retry-after", "") or "").strip()
+    if retry_after.isascii() and retry_after.isdigit() and len(retry_after) <= 12 and not _exposes_secret(retry_after):
         headers["Retry-After"] = str(int(retry_after))
-    elif retry_after:
+    elif retry_after and not _exposes_secret(retry_after):
         try:
             date = parsedate_to_datetime(retry_after)
             if date.tzinfo is not None:
@@ -191,21 +280,22 @@ def create_draft(payload: dict) -> dict:
         code = {400: "invalidContent", 401: "authentication", 402: "credits", 403: "permission",
                 404: "endpointUnavailable", 413: "articleTooLarge", 422: "invalidContent",
                 429: "rateLimit"}.get(response.status_code, "upstreamUnavailable" if response.status_code >= 500 else "rejected")
-        diagnostic_headers = {}
+        problem, diagnostic_headers = _limit_diagnostics(response)
+        mode = auth_mode()
+        if mode in ("oauth1", "oauth2"):
+            diagnostic_headers["X-X-Auth-Mode"] = mode
         if response.status_code == 429:
-            problem, diagnostic_headers = _limit_diagnostics(response)
+            # The redacted body is only useful for the generic 429 problem
+            # document. Other statuses still forward the allowlisted headers.
             diagnostic_headers["X-X-Error-Info"] = _error_diagnostic(response, payload)
-            diagnostic_headers["Cache-Control"] = "no-store"
             if problem == "usage-capped":
                 code = "usageCap"
-            logger.warning(
-                "X article limit: problem=%s limit=%s remaining=%s reset=%s retry_after=%s",
-                problem, diagnostic_headers.get("X-RateLimit-Limit"),
-                diagnostic_headers.get("X-RateLimit-Remaining"),
-                diagnostic_headers.get("X-RateLimit-Reset"), diagnostic_headers.get("Retry-After"),
-            )
-        logger.warning("X article draft failed: status=%d category=%s", response.status_code, code)
-        # Only selected, redacted 429 fields reach the authenticated requester.
+        if diagnostic_headers:
+            diagnostic_headers["Cache-Control"] = "no-store"
+        logger.warning(
+            "X article draft failed: status=%d category=%s auth=%s problem=%s %s",
+            response.status_code, code, mode, problem, _diagnostic_log(diagnostic_headers),
+        )
         raise HTTPException(502, code, headers=diagnostic_headers)
     try:
         data = response.json().get("data", {})
