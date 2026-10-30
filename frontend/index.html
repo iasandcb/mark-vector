@@ -315,13 +315,25 @@
     <!-- The split-view companion to .editor-pane above: view/edit/save any
          document beside the primary one, but none of its AI toolbar (no
          send, no inline-complete, no provider/model row) - see setSplitView
-         and selectDocumentB in app.js. Starts hidden; opened from
-         #split-toggle-btn or by opening a document "to the side" from the
-         tree (⌘/Ctrl-click a row, or its own tree icon). -->
+         and selectDocumentB in app.js. When the left document is the
+         matching `.c.md` and this pane shows its `.md`, Publish and X
+         Article appear here and act on this pane's document. Starts hidden;
+         opened from #split-toggle-btn or by opening a document "to the
+         side" from the tree (⌘/Ctrl-click a row, or its own tree icon). -->
     <main id="editor-pane-b" class="editor-pane" hidden>
       <div class="pane-header">
         <div class="pane-title-group">
           <span id="editor-filename-b" class="pane-filename" data-i18n="editor.selectDocument"></span>
+        </div>
+        <div class="editor-primary-actions">
+          <button id="publish-btn-b" class="secondary-btn" type="button" disabled hidden>
+            <span id="publish-icon-b" class="btn-icon" aria-hidden="true"><span data-icon="share"></span></span>
+            <span id="publish-label-b" class="btn-label"></span>
+          </button>
+          <button id="export-x-article-btn-b" class="secondary-btn" type="button" disabled hidden data-i18n-title="xArticle.title" data-i18n-aria-label="xArticle.title">
+            <span class="btn-icon" aria-hidden="true">𝕏</span>
+            <span class="btn-label" data-i18n="xArticle.shortTitle"></span>
+          </button>
         </div>
         <div class="editor-actions">
           <button id="fold-all-b" class="secondary-btn" type="button" data-i18n-title="editor.foldAll">

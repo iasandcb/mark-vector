@@ -101,6 +101,40 @@ def test_slides_option_on_unpublished_document_is_404(isolated_data_dir, client)
     assert resp.status_code == 404
 
 
+def test_split_pair_publishes_each_document_on_its_own(isolated_data_dir, client):
+    pid = storage.create_project("p")["id"]
+    conv_id = storage.create_conversation(pid)["id"]
+    draft = storage.create_draft(pid, conv_id)
+    storage.rename_document(pid, conv_id, draft["filename"], "notes.md")
+    storage.save_document(pid, conv_id, "notes.md", "# Notes\n\nright pane")
+    base = f"/api/projects/{pid}/conversations/{conv_id}/documents"
+    created = client.post(f"{base}/notes.md/conversation-file")
+    assert created.status_code == 200
+    assert created.json()["filename"] == "notes.c.md"
+    storage.save_document(pid, conv_id, "notes.c.md", "left conversation")
+
+    right = client.post(f"{base}/notes.md/publish")
+    left = client.post(f"{base}/notes.c.md/publish")
+    assert right.status_code == 200 and left.status_code == 200
+    right_token = right.json()["token"]
+    left_token = left.json()["token"]
+    assert right_token != left_token
+
+    right_body = client.get(f"/api/public/{right_token}").json()
+    assert right_body["filename"] == "notes.md"
+    assert right_body["content"] == "# Notes\n\nright pane"
+    left_body = client.get(f"/api/public/{left_token}").json()
+    assert left_body["filename"] == "notes.c.md"
+    assert left_body["content"] == "left conversation"
+
+    assert client.delete(f"{base}/notes.c.md/publish").status_code == 200
+    assert client.get(f"/api/public/{right_token}").status_code == 200
+    assert client.get(f"/api/public/{left_token}").status_code == 404
+    docs = {doc["filename"]: doc for doc in storage.list_documents(pid, conv_id)}
+    assert docs["notes.md"]["publish_token"] == right_token
+    assert docs["notes.c.md"]["publish_token"] is None
+
+
 def test_spoken_math_vocabulary_is_readable_without_auth(isolated_data_dir, client, monkeypatch):
     # Auth on: everything outside the public paths needs a session.
     monkeypatch.setattr(settings, "app_passcode", "1234")

@@ -383,6 +383,54 @@ def test_unsafe_limit_headers_are_not_forwarded_or_logged(configured, monkeypatc
     assert "PRIVATE_" not in str(response.headers) + caplog.text
 
 
+def test_two_documents_create_separate_drafts_and_never_call_publish(configured, monkeypatch):
+    """The right-pane article and the left-pane conversation are separate drafts.
+
+    The test client stands in for X. Nothing here opens a socket to api.x.com.
+    """
+    calls = []
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def post(self, url, headers, **kwargs):
+            calls.append((url, kwargs["json"]["title"]))
+            assert url == "https://api.x.com/2/articles/draft"
+            assert "consumer-secret" not in headers.get("Authorization", "")
+            assert "user-secret" not in headers.get("Authorization", "")
+            return httpx2.Response(201, json={"data": {"id": str(1000 + len(calls))}})
+
+    monkeypatch.setattr(x_articles.httpx2, "Client", FakeClient)
+    right = draft_body()
+    right["title"] = "notes"
+    right["content_state"]["blocks"][0]["text"] = "right pane article"
+    left = draft_body()
+    left["title"] = "notes conversation"
+    left["content_state"]["blocks"][0]["text"] = "left pane conversation"
+
+    first = configured.post("/api/x-articles/drafts", json=right)
+    second = configured.post("/api/x-articles/drafts", json=left)
+    assert first.status_code == 200 and second.status_code == 200
+    assert first.json()["article_id"] == "1001"
+    assert second.json()["article_id"] == "1002"
+    assert first.json()["url"] == second.json()["url"] == "https://x.com/i/articles"
+    assert calls == [
+        ("https://api.x.com/2/articles/draft", "notes"),
+        ("https://api.x.com/2/articles/draft", "notes conversation"),
+    ]
+    assert configured.post("/api/x-articles/drafts", json=right).json() == first.json()
+    assert len(calls) == 2
+    assert configured.post(f"/api/x-articles/drafts/{right['request_id']}/publish").status_code == 404
+    assert len(calls) == 2
+
+
 def test_retry_after_http_date_is_converted_to_seconds(configured, monkeypatch):
     now = 1793332800
     monkeypatch.setattr(x_articles.time, "time", lambda: now)

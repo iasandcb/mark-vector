@@ -1,6 +1,7 @@
 import { requestWorkspaceName } from "./workspace-dialog.js";
 import { articleFromHtml } from "./x-article-content.mjs";
 import { openXArticleDialog } from "./x-article.js";
+import { conversationPair, paneShareState } from "./split-share.mjs";
 import { icon, symbolIcon, mountIcons } from "./icons.js";
 import * as api from "./api.js";
 import { createDocumentFollower } from "./document-sync.mjs";
@@ -177,6 +178,10 @@ const el = {
   exportXArticleBtn: document.getElementById("export-x-article-btn"),
   publishLabel: document.getElementById("publish-label"),
   publishIcon: document.getElementById("publish-icon"),
+  publishBtnB: document.getElementById("publish-btn-b"),
+  exportXArticleBtnB: document.getElementById("export-x-article-btn-b"),
+  publishLabelB: document.getElementById("publish-label-b"),
+  publishIconB: document.getElementById("publish-icon-b"),
   inlineCompleteBtn: document.getElementById("inline-complete-btn"),
   dictationGroup: document.getElementById("dictation-group"),
   dictationBtn: document.getElementById("dictation-btn"),
@@ -402,11 +407,12 @@ let projects = new Map();
 let active = null; // { projectId, sessionId, filename, role, savedContent }
 // The split-view pane's own, much smaller version of `active` - only ever a
 // plain document (draft/exchange/user/assistant), never a system prompt or
-// Hermes transcript (see selectDocumentB), and with no turnId/publishToken
-// because nothing here ever sends or publishes. Independent of `streaming`
-// too: pane B never generates anything, so nothing about it needs to lock
-// while pane A is mid-send.
-let activeB = null; // { projectId, sessionId, filename, role, savedContent }
+// Hermes transcript (see selectDocumentB). It keeps publishToken so the
+// pair's right-hand `.md` can be shared on its own; it still has no turnId
+// and never sends. Independent of `streaming` for editing: pane B never
+// generates anything, so its editor stays editable while pane A is mid-send.
+// Publish and X Article on this pane wait out that send, same as pane A.
+let activeB = null; // { projectId, sessionId, filename, role, savedContent, publishToken }
 // Whether a message sent from pane A carries pane B's document and may
 // edit it, and the last send's edits to it - see the "document editing from
 // the conversation" section. Declared up here, next to the pane state the
@@ -1951,10 +1957,17 @@ let previewSource = "a";
 let focusedEditorPane = "a";
 
 function conversationPairOpen() {
-  return splitViewOpen() && !!active && !!activeB &&
-    active.projectId === activeB.projectId && active.sessionId === activeB.sessionId &&
-    activeB.filename?.endsWith(".md") &&
-    active.filename === activeB.filename.slice(0, -3) + ".c.md";
+  return conversationPair({ splitOpen: splitViewOpen(), left: active, right: activeB });
+}
+
+function shareContext() {
+  return {
+    splitOpen: splitViewOpen(),
+    left: active,
+    right: activeB,
+    streaming,
+    blockedRoles: NON_SENDABLE_ROLES,
+  };
 }
 
 function setPreviewSource(source) {
@@ -2427,6 +2440,7 @@ function updateSendAvailability() {
   // would just re-enable it mid-stream.
   if (!streaming) updateReasoningAvailability(provider);
   updatePublishButton();
+  updatePublishButtonB();
   updateInlineCompleteButton();
   updateInlineThreadButton();
   updateExportPdfButton();
@@ -2490,34 +2504,55 @@ function updateReasoningAvailability(provider) {
 }
 
 // Publishing shares the same "is this a real document, not a system prompt
-// or read-only Hermes transcript" gate as sending (NON_SENDABLE_ROLES) -
-// always refreshed alongside it (see updateSendAvailability's call above)
-// since both only ever change together with `active`/`streaming`.
-function updatePublishButton() {
-  const publishable = !!active && !NON_SENDABLE_ROLES.has(active.role);
-  el.publishBtn.hidden = !publishable;
-  el.publishBtn.disabled = !publishable || streaming;
-  el.exportXArticleBtn.hidden = !publishable;
-  el.exportXArticleBtn.disabled = !publishable || streaming;
-  el.exportXArticleBtn.setAttribute("aria-label", t("xArticle.title"));
-  const published = !!(active && active.publishToken);
-  el.publishLabel.textContent = published ? t("editor.publishing") : t("editor.publish");
+// or read-only Hermes transcript" gate as sending (NON_SENDABLE_ROLES).
+// Pane A always uses the primary document. Pane B grows the same two
+// actions only for the split pair (left `.c.md`, right `.md`), and those
+// act on the right document. Refreshed with send availability, and again
+// once a pair is opened or closed.
+function applyShareButtons(state, buttons) {
+  buttons.publish.hidden = !state.visible;
+  buttons.publish.disabled = state.disabled;
+  buttons.article.hidden = !state.visible;
+  buttons.article.disabled = state.disabled;
+  buttons.article.setAttribute("aria-label", t("xArticle.title"));
+  const text = t(state.labelKey);
+  buttons.label.textContent = text;
   // Also the "copied" tick's way back (see copyLinkWithFeedback, which
-  // restores through this function on a timer).
-  el.publishIcon.innerHTML = icon("share");
-  // Tooltip on the button itself, so the wording survives on a phone, where
-  // the label span is hidden and only the 🔗 icon is left (see .btn-label).
-  el.publishBtn.title = el.publishLabel.textContent;
+  // restores through updatePublishButton / updatePublishButtonB on a timer).
+  buttons.icon.innerHTML = icon("share");
+  // Tooltip on the button itself, so the wording survives where the label
+  // span is hidden and only the icon is left (see .btn-label).
+  buttons.publish.title = text;
+  buttons.publish.setAttribute("aria-label", text);
   // Highlighted the same way the save button marks unsaved changes - without
   // it "published" and "not published" look identical in icon-only mode.
-  el.publishBtn.classList.toggle("dirty", published);
+  buttons.publish.classList.toggle("dirty", state.published);
+}
+
+function updatePublishButton() {
+  applyShareButtons(paneShareState({ pane: "left", ...shareContext() }), {
+    publish: el.publishBtn,
+    article: el.exportXArticleBtn,
+    label: el.publishLabel,
+    icon: el.publishIcon,
+  });
   // Keeps the "live" checkbox's row visibility and its socket's target
   // channel in sync with whichever document is active and whether it's
   // published - see updateLivePublicTarget's own comment above. Piggy-
   // backing on updatePublishButton (rather than a separate call at every
   // `active = {...}` site) works because both only ever need to change
-  // together with `active`/its publishToken.
+  // together with `active`/its publishToken. Pane B's share link does not
+  // drive that socket.
   updateLivePublicTarget();
+}
+
+function updatePublishButtonB() {
+  applyShareButtons(paneShareState({ pane: "right", ...shareContext() }), {
+    publish: el.publishBtnB,
+    article: el.exportXArticleBtnB,
+    label: el.publishLabelB,
+    icon: el.publishIconB,
+  });
 }
 
 // Inline completion only makes sense in a draft: an exchange is a finished
@@ -6723,6 +6758,7 @@ async function selectDocument(projectId, sessionId, filename, { focus = true } =
     if (sameRight) setSplitView(true);
     else await selectDocumentB(projectId, sessionId, pair.right, { focus: false, paired: true });
   }
+  updatePublishButtonB();
   if (focus && !PHONE_LAYOUT.matches && editorViewMode !== "rendered") {
     el.editor.setSelectionRange(0, 0);
     el.editor.focus();
@@ -6731,11 +6767,12 @@ async function selectDocument(projectId, sessionId, filename, { focus = true } =
 
 // selectDocument's split-view counterpart. Deliberately narrower: only a
 // plain document (never a system prompt, the global prompt, or a Hermes
-// transcript - see activeB's own comment), no turnId/publishToken, no
-// provider/model defaults, no send/inline-complete toolbar. Opens split
-// view if it wasn't already, and focusing the pane (which the caller does
-// right after, both from the tree and from ⌘/Ctrl-click) is what actually
-// makes the shared preview follow it - see the "focus" listeners below.
+// transcript - see activeB's own comment), no turnId, no provider/model
+// defaults, no send/inline-complete toolbar. Publish and X Article are the
+// exception, and only for the `.c.md` / `.md` pair. Opens split view if it
+// wasn't already, and focusing the pane (which the caller does right after,
+// both from the tree and from ⌘/Ctrl-click) is what actually makes the
+// shared preview follow it - see the "focus" listeners below.
 async function selectDocumentB(projectId, sessionId, filename, { focus = true, paired = false } = {}) {
   if (!paired && await documentPair(projectId, sessionId, filename)) {
     await openInTab(docRef(projectId, sessionId, filename));
@@ -6753,7 +6790,10 @@ async function selectDocumentB(projectId, sessionId, filename, { focus = true, p
   const doc = session.documents.find((d) => d.filename === filename);
   if (!doc) return;
 
-  activeB = { projectId, sessionId, filename, role: doc.role, savedContent: doc.content, version: doc.version };
+  activeB = {
+    projectId, sessionId, filename, role: doc.role, savedContent: doc.content, version: doc.version,
+    publishToken: doc.publish_token, publishSlides: !!doc.publish_slides,
+  };
   saveActiveDocRefB();
   rememberRecentDoc(projectId, sessionId, filename);
   setSplitView(true);
@@ -6763,6 +6803,7 @@ async function selectDocumentB(projectId, sessionId, filename, { focus = true, p
   updateFilenameLabelB();
   renderPreviewB();
   renderTree();
+  updatePublishButtonB();
   // Skipped on restore (see restoreActiveDocumentB) - stealing focus (and
   // with it previewSource, see the "focus" listener below) into the
   // secondary pane on every page load would be a worse default than just
@@ -6786,6 +6827,7 @@ function closeSplitView() {
   setSplitView(false);
   renderTree();
   if (previewSource === "b") setPreviewSource("a");
+  updatePublishButtonB();
 }
 
 // The open document's folder listing, without a lazy fetch - alt-hint mode
@@ -7227,6 +7269,7 @@ async function removeDocument(projectId, sessionId, filename, role) {
     el.editorB.disabled = true;
     el.saveBtnB.disabled = true;
     updateFilenameLabelB();
+    updatePublishButtonB();
     if (previewSource === "b") setPreviewSource("a");
   }
   renderTree();
@@ -7434,39 +7477,45 @@ async function copyToClipboard(text) {
 // Briefly flashes the publish button to confirm the copy, then restores its
 // normal label - only falls back to a manual-copy prompt() when neither
 // clipboard method above actually worked.
-async function copyLinkWithFeedback(url) {
+async function copyLinkWithFeedback(url, pane = "left") {
   if (!(await copyToClipboard(url))) {
     prompt(t("prompt.copyShareLink"), url);
     return;
   }
-  // The icon carries the confirmation too - on a phone the label span is
-  // hidden, so a text-only "copied" would be invisible exactly where the
-  // clipboard is least obvious.
-  el.publishIcon.innerHTML = icon("check");
-  el.publishLabel.textContent = t("editor.linkCopied");
-  setTimeout(updatePublishButton, 1500);
+  // The icon carries the confirmation too - on a phone, or in a narrow
+  // split pane, the label span is hidden, so a text-only "copied" would be
+  // invisible exactly where the clipboard is least obvious.
+  const buttons = pane === "right"
+    ? { icon: el.publishIconB, label: el.publishLabelB, restore: updatePublishButtonB }
+    : { icon: el.publishIcon, label: el.publishLabel, restore: updatePublishButton };
+  buttons.icon.innerHTML = icon("check");
+  buttons.label.textContent = t("editor.linkCopied");
+  setTimeout(buttons.restore, 1500);
 }
 
 // Publishing a doc that's already published just returns its existing token
 // (see storage.publish_document) - clicking again is therefore always safe
-// and reuses the same link.
-async function togglePublish() {
-  if (!active || streaming || NON_SENDABLE_ROLES.has(active.role)) return;
-  const { projectId, sessionId, filename } = active;
+// and reuses the same link. `pane` "right" shares the document open beside
+// the conversation; the default stays the primary editor.
+async function togglePublish(pane = "left") {
+  const state = paneShareState({ pane, ...shareContext() });
+  const holder = pane === "right" ? activeB : active;
+  if (!state.visible || state.disabled || !holder) return;
+  const { projectId, sessionId, filename } = holder;
   let url = null;
 
-  if (active.publishToken) {
-    const existingUrl = publicUrl(active.publishToken);
+  if (holder.publishToken) {
+    const existingUrl = publicUrl(holder.publishToken);
     if (confirm(t("confirm.stopSharing", { url: existingUrl }))) {
       await api.unpublishDocument(projectId, sessionId, filename);
-      active.publishToken = null;
-      active.publishSlides = false;
+      holder.publishToken = null;
+      holder.publishSlides = false;
     } else {
       url = existingUrl; // "cancel" here just means "copy it again"
     }
   } else {
     const { token } = await api.publishDocument(projectId, sessionId, filename);
-    active.publishToken = token;
+    holder.publishToken = token;
     url = publicUrl(token);
   }
 
@@ -7474,14 +7523,27 @@ async function togglePublish() {
   const session = project && project.sessions && project.sessions.get(sessionId);
   const doc = session && session.documents && session.documents.find((d) => d.filename === filename);
   if (doc) {
-    doc.publish_token = active.publishToken;
-    doc.publish_slides = active.publishSlides;
+    doc.publish_token = holder.publishToken;
+    doc.publish_slides = holder.publishSlides;
   }
 
-  updatePublishButton();
+  if (pane === "right") updatePublishButtonB();
+  else updatePublishButton();
   renderTree();
 
-  if (url) await copyLinkWithFeedback(url);
+  if (url) await copyLinkWithFeedback(url, pane);
+}
+
+function openPaneXArticle(pane) {
+  const state = paneShareState({ pane, ...shareContext() });
+  const holder = pane === "right" ? activeB : active;
+  if (!state.visible || state.disabled || !holder || state.target?.filename !== holder.filename) return;
+  const editor = pane === "right" ? el.editorB : el.editor;
+  // Match the main editor's Publish action; snapshot unsaved content and
+  // always strip private inline threads, even ones expanded in the preview.
+  const content = collapseEditBlocks(stripInlineThreads(editor.value), `> ✏️ ${t("docEdit.blockNote")}`);
+  const html = renderMarkdown(content, sessionMathDialect(holder.projectId, holder.sessionId));
+  openXArticleDialog(articleFromHtml(html, holder.filename, { imageLabel: t("xArticle.image") }));
 }
 
 // The publish-time "view as slideshow" option (see storage.set_publish_slides
@@ -8118,6 +8180,8 @@ async function sendInlineCompletion() {
   el.saveBtn.disabled = true;
   el.sendBtn.disabled = true;
   el.inlineCompleteBtn.disabled = true;
+  updatePublishButton();
+  updatePublishButtonB();
   updateDictationButton();
   el.providerSelect.disabled = true;
   el.modelSelect.disabled = true;
@@ -8346,6 +8410,8 @@ async function sendActive() {
   el.saveBtn.disabled = true;
   el.sendBtn.disabled = true;
   el.inlineCompleteBtn.disabled = true;
+  updatePublishButton();
+  updatePublishButtonB();
   updateDictationButton();
   el.providerSelect.disabled = true;
   el.modelSelect.disabled = true;
@@ -8598,15 +8664,10 @@ el.reasoningSelect.addEventListener("change", () => {
 el.setDefaultModelBtn.addEventListener("click", setDefaultModel);
 el.contextScopeSelect.addEventListener("change", persistDraftChoice);
 el.saveBtn.addEventListener("click", saveActive);
-el.publishBtn.addEventListener("click", togglePublish);
-el.exportXArticleBtn.addEventListener("click", () => {
-  if (!active || streaming || NON_SENDABLE_ROLES.has(active.role)) return;
-  // Match the main editor's Publish action; snapshot unsaved content and
-  // always strip private inline threads, even ones expanded in the preview.
-  const content = collapseEditBlocks(stripInlineThreads(el.editor.value), `> ✏️ ${t("docEdit.blockNote")}`);
-  const html = renderMarkdown(content, sessionMathDialect(active.projectId, active.sessionId));
-  openXArticleDialog(articleFromHtml(html, active.filename, { imageLabel: t("xArticle.image") }));
-});
+el.publishBtn.addEventListener("click", () => togglePublish("left"));
+el.exportXArticleBtn.addEventListener("click", () => openPaneXArticle("left"));
+el.publishBtnB.addEventListener("click", () => togglePublish("right"));
+el.exportXArticleBtnB.addEventListener("click", () => openPaneXArticle("right"));
 el.toolbarToggleBtn.addEventListener("click", toggleEditorToolbar);
 el.inlineCompleteBtn.addEventListener("click", sendInlineCompletion);
 restoreDictationLang();
