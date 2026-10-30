@@ -1,3 +1,5 @@
+import { xArticleLimitInfo } from "./x-article-errors.mjs";
+
 const BASE = "/api";
 
 export function getXArticleConfig() {
@@ -7,7 +9,13 @@ export function getXArticleConfig() {
 export function createXArticleDraft(body) {
   return fetch(`${BASE}/x-articles/drafts`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-  }).then(asJson);
+  }).then(async (response) => {
+    try { return await asJson(response); }
+    catch (error) {
+      error.xLimit = xArticleLimitInfo(response.headers);
+      throw error;
+    }
+  });
 }
 
 // A session that expired (or was never established) mid-use surfaces here

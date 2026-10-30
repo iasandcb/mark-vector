@@ -1,5 +1,6 @@
-import { t } from "./i18n.js";
+import { t, getLanguage } from "./i18n.js";
 import { getXArticleConfig, createXArticleDraft } from "./api.js";
+import { xArticleErrorMessage } from "./x-article-errors.mjs";
 
 export async function openXArticleDialog(article) {
   if (document.querySelector(".x-article-dialog")) return;
@@ -67,8 +68,7 @@ export async function openXArticleDialog(article) {
     $("[data-close]").disabled = busy;
   };
   const error = (err) => {
-    const key = `xArticle.error.${err.message}`;
-    $(".x-article-status").textContent = t(key) === key ? t("xArticle.error.failed") : t(key);
+    $(".x-article-status").textContent = xArticleErrorMessage(err, t, getLanguage());
   };
   const showResult = (result) => {
     created = true;

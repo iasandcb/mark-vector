@@ -6,6 +6,7 @@ import hmac
 import logging
 import secrets
 import time
+from email.utils import parsedate_to_datetime
 from urllib.parse import quote, urlencode
 
 import httpx2
@@ -16,6 +17,47 @@ from .config import settings
 logger = logging.getLogger(__name__)
 
 DRAFT_URL = "https://api.x.com/2/articles/draft"
+
+
+def _limit_diagnostics(response) -> tuple[str | None, dict[str, str]]:
+    """Forward only known error types and numeric rate-limit metadata.
+
+    Never copy the error body, request headers, URLs or credentials into an
+    application response or log. A 429 can mean a usage cap, not just a
+    short-lived rate limit.
+    """
+    headers = {}
+    for upstream, outgoing in (
+        ("x-rate-limit-limit", "X-RateLimit-Limit"),
+        ("x-rate-limit-remaining", "X-RateLimit-Remaining"),
+        ("x-rate-limit-reset", "X-RateLimit-Reset"),
+    ):
+        value = response.headers.get(upstream, "").strip()
+        if value.isascii() and value.isdigit() and len(value) <= 12:
+            headers[outgoing] = str(int(value))
+    retry_after = response.headers.get("retry-after", "").strip()
+    if retry_after.isascii() and retry_after.isdigit() and len(retry_after) <= 12:
+        headers["Retry-After"] = str(int(retry_after))
+    elif retry_after:
+        try:
+            date = parsedate_to_datetime(retry_after)
+            if date.tzinfo is not None:
+                headers["Retry-After"] = str(max(0, int(date.timestamp() - time.time()) + 1))
+        except (ValueError, TypeError, OverflowError):
+            pass
+    problem = None
+    try:
+        body = response.json()
+        if isinstance(body, dict):
+            value = body.get("type")
+            for candidate in ("usage-capped", "rate-limit-exceeded", "client-forbidden"):
+                if value in (f"https://api.x.com/2/problems/{candidate}", f"https://api.twitter.com/2/problems/{candidate}"):
+                    problem = candidate
+                    headers["X-X-Error-Type"] = candidate
+                    break
+    except (ValueError, TypeError):
+        pass
+    return problem, headers
 
 
 def auth_mode() -> str | None:
@@ -69,9 +111,20 @@ def create_draft(payload: dict) -> dict:
         code = {400: "invalidContent", 401: "authentication", 402: "credits", 403: "permission",
                 404: "endpointUnavailable", 413: "articleTooLarge", 422: "invalidContent",
                 429: "rateLimit"}.get(response.status_code, "upstreamUnavailable" if response.status_code >= 500 else "rejected")
+        diagnostic_headers = {}
+        if response.status_code == 429:
+            problem, diagnostic_headers = _limit_diagnostics(response)
+            if problem == "usage-capped":
+                code = "usageCap"
+            logger.warning(
+                "X article limit: problem=%s limit=%s remaining=%s reset=%s retry_after=%s",
+                problem, diagnostic_headers.get("X-RateLimit-Limit"),
+                diagnostic_headers.get("X-RateLimit-Remaining"),
+                diagnostic_headers.get("X-RateLimit-Reset"), diagnostic_headers.get("Retry-After"),
+            )
         logger.warning("X article draft failed: status=%d category=%s", response.status_code, code)
         # Do not echo upstream response bodies (which may contain private data).
-        raise HTTPException(502, code)
+        raise HTTPException(502, code, headers=diagnostic_headers)
     try:
         data = response.json().get("data", {})
         identifier = data.get("id")

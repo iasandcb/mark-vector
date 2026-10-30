@@ -1,4 +1,5 @@
 from pathlib import Path
+from email.utils import formatdate
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -175,3 +176,60 @@ def test_cross_origin_and_unauthenticated_access_rejected(configured, upstream, 
     assert configured.get("/api/x-articles/config").status_code == 401
     assert configured.post("/api/x-articles/drafts", json=draft_body()).status_code == 401
     assert not upstream
+
+
+def test_429_exposes_reset_and_counts_without_exposing_private_body_or_headers(configured, monkeypatch, caplog):
+    respond(monkeypatch, httpx2.Response(429, json={
+        "type": "https://api.x.com/2/problems/rate-limit-exceeded", "detail": "PRIVATE_BODY",
+    }, headers={
+        "x-rate-limit-limit": "10", "x-rate-limit-remaining": "0", "x-rate-limit-reset": "1793332800",
+        "Retry-After": "120", "Authorization": "PRIVATE_HEADER", "Set-Cookie": "PRIVATE_COOKIE",
+    }))
+    response = configured.post("/api/x-articles/drafts", json=draft_body())
+    assert response.status_code == 502
+    assert response.json() == {"detail": "rateLimit"}
+    assert response.headers["X-RateLimit-Limit"] == "10"
+    assert response.headers["X-RateLimit-Remaining"] == "0"
+    assert response.headers["X-RateLimit-Reset"] == "1793332800"
+    assert response.headers["Retry-After"] == "120"
+    assert response.headers["X-X-Error-Type"] == "rate-limit-exceeded"
+    assert "reset=1793332800" in caplog.text
+    combined = str(response.headers) + response.text + caplog.text
+    assert "PRIVATE_" not in combined
+
+
+@pytest.mark.parametrize("domain", ["api.x.com", "api.twitter.com"])
+def test_429_usage_cap_is_distinct_even_when_credits_may_remain(configured, monkeypatch, domain):
+    respond(monkeypatch, httpx2.Response(429, json={"type": f"https://{domain}/2/problems/usage-capped"}))
+    response = configured.post("/api/x-articles/drafts", json=draft_body())
+    assert response.json() == {"detail": "usageCap"}
+    assert response.headers["X-X-Error-Type"] == "usage-capped"
+    assert "X-RateLimit-Reset" not in response.headers
+
+
+def test_429_missing_headers_does_not_invent_a_reset(configured, monkeypatch):
+    respond(monkeypatch, httpx2.Response(429, text="upstream error"))
+    response = configured.post("/api/x-articles/drafts", json=draft_body())
+    assert response.json() == {"detail": "rateLimit"}
+    assert not any(name in response.headers for name in ["X-RateLimit-Reset", "X-RateLimit-Limit", "Retry-After"])
+
+
+def test_429_untrusted_metadata_is_not_forwarded_or_logged(configured, monkeypatch, caplog):
+    respond(monkeypatch, httpx2.Response(429, json={"type": "https://private.example/usage-capped", "detail": "PRIVATE_BODY"}, headers={
+        "x-rate-limit-reset": "PRIVATE_TOKEN", "x-rate-limit-limit": "-1", "x-rate-limit-remaining": "9e9",
+        "retry-after": "PRIVATE_DATE",
+    }))
+    response = configured.post("/api/x-articles/drafts", json=draft_body())
+    assert response.json() == {"detail": "rateLimit"}
+    assert "X-X-Error-Type" not in response.headers
+    assert "X-RateLimit-Reset" not in response.headers
+    assert "Retry-After" not in response.headers
+    assert "PRIVATE_" not in response.text + str(response.headers) + caplog.text
+
+
+def test_retry_after_http_date_is_converted_to_seconds(configured, monkeypatch):
+    now = 1793332800
+    monkeypatch.setattr(x_articles.time, "time", lambda: now)
+    respond(monkeypatch, httpx2.Response(429, json={}, headers={"Retry-After": formatdate(now + 90, usegmt=True)}))
+    response = configured.post("/api/x-articles/drafts", json=draft_body())
+    assert int(response.headers["Retry-After"]) in (90, 91)
