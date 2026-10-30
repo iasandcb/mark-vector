@@ -1,5 +1,6 @@
 from pathlib import Path
 import json
+from datetime import datetime, timedelta, timezone
 from email.utils import formatdate
 from types import SimpleNamespace
 from uuid import uuid4
@@ -86,6 +87,7 @@ def test_export_creates_only_one_draft_and_is_idempotent(configured, upstream):
     first = configured.post("/api/x-articles/drafts", json=body)
     assert first.status_code == 200
     assert first.json() == {"article_id": "12345", "url": "https://x.com/i/articles"}
+    assert "X-X-Auth-Mode" not in first.headers
     assert len(upstream) == 1
     assert upstream[0][0] == "https://api.x.com/2/articles/draft"
     assert upstream[0][2]["json"] == {"title": body["title"], "content_state": body["content_state"]}
@@ -197,7 +199,9 @@ def test_429_exposes_reset_and_counts_without_exposing_private_body_or_headers(c
     assert response.headers["X-RateLimit-Reset"] == "1793332800"
     assert response.headers["Retry-After"] == "120"
     assert response.headers["X-X-Error-Type"] == "rate-limit-exceeded"
-    assert "reset=1793332800" in caplog.text
+    assert response.headers["X-X-Auth-Mode"] == "oauth1"
+    assert "auth=oauth1" in caplog.text
+    assert _clock("1793332800") in caplog.text
     combined = str(response.headers) + response.text + caplog.text
     assert "PRIVATE_" not in combined
     assert json.loads(response.headers["X-X-Error-Info"])["detail"] == "Rejected [redacted]: [redacted]"
@@ -274,6 +278,109 @@ def test_non_json_limit_body_is_not_forwarded(configured, monkeypatch):
     response = configured.post("/api/x-articles/drafts", json=draft_body())
     assert json.loads(response.headers["X-X-Error-Info"]) == {"format": "non-json"}
     assert "PRIVATE_BODY" not in str(response.headers) + response.text
+
+
+def _clock(epoch: str) -> str:
+    instant = datetime.fromtimestamp(int(epoch), timezone.utc)
+    kst = instant.astimezone(timezone(timedelta(hours=9)))
+    return f"{epoch} ({instant:%Y-%m-%d %H:%M:%S} UTC / {kst:%Y-%m-%d %H:%M:%S} KST)"
+
+
+def test_daily_limit_headers_auth_mode_and_clocks_are_kept(configured, monkeypatch, caplog):
+    respond(monkeypatch, httpx2.Response(429, json={"title": "Too Many Requests"}, headers={
+        "x-rate-limit-limit": "40000", "x-rate-limit-remaining": "39999", "x-rate-limit-reset": "1793329200",
+        "x-user-limit-24hour-limit": "50", "x-user-limit-24hour-remaining": "0", "x-user-limit-24hour-reset": "1793415600",
+        "x-app-limit-24hour-limit": "1000", "x-app-limit-24hour-remaining": "10", "x-app-limit-24hour-reset": "1793332800",
+        "x-endpoint-limit-remaining": "7",
+        "x-access-level": "read-write",
+        "x-transaction-id": "ab+cd/ef=",
+        "x-response-time": "12",
+        "Authorization": "PRIVATE_HEADER",
+        "Set-Cookie": "PRIVATE_COOKIE",
+    }))
+    response = configured.post("/api/x-articles/drafts", json=draft_body())
+    assert response.status_code == 502
+    assert response.json() == {"detail": "rateLimit"}
+    assert response.headers["X-RateLimit-Remaining"] == "39999"
+    assert response.headers["X-User-Limit-24hour-Remaining"] == "0"
+    assert response.headers["X-User-Limit-24hour-Reset"] == "1793415600"
+    assert response.headers["X-App-Limit-24hour-Remaining"] == "10"
+    assert response.headers["X-Endpoint-Limit-Remaining"] == "7"
+    assert response.headers["X-Access-Level"] == "read-write"
+    assert response.headers["X-Transaction-Id"] == "ab+cd/ef="
+    assert response.headers["X-X-Auth-Mode"] == "oauth1"
+    assert "X-Response-Time" not in response.headers
+    log = caplog.text
+    assert "auth=oauth1" in log
+    assert _clock("1793415600") in log and _clock("1793332800") in log and _clock("1793329200") in log
+    assert "Too Many Requests" not in log
+    combined = str(response.headers) + response.text + log
+    assert "PRIVATE_" not in combined
+    assert "consumer-secret" not in combined and "user-secret" not in combined and "user-token" not in combined
+
+
+def test_known_daily_limits_are_kept_when_extra_limit_headers_overflow(configured, monkeypatch):
+    headers = {f"x-bucket{index}-limit-remaining": "1" for index in range(40)}
+    headers["x-user-limit-24hour-remaining"] = "0"
+    headers["x-user-limit-24hour-reset"] = "1793332800"
+    respond(monkeypatch, httpx2.Response(429, json={}, headers=headers))
+    response = configured.post("/api/x-articles/drafts", json=draft_body())
+    assert response.headers["X-User-Limit-24hour-Remaining"] == "0"
+    assert response.headers["X-User-Limit-24hour-Reset"] == "1793332800"
+    forwarded = [name for name in response.headers if name.lower().startswith("x-bucket")]
+    assert len(forwarded) < 40
+
+
+def test_non_429_forwards_limit_headers_without_the_error_body(configured, monkeypatch, caplog):
+    respond(monkeypatch, httpx2.Response(403, text="PRIVATE_BODY", headers={
+        "x-access-level": "read",
+        "x-transaction-id": "txn-403",
+        "x-user-limit-24hour-limit": "50",
+        "x-user-limit-24hour-remaining": "0",
+        "x-user-limit-24hour-reset": "1793332800",
+        "Authorization": "Bearer PRIVATE_TOKEN",
+    }))
+    response = configured.post("/api/x-articles/drafts", json=draft_body())
+    assert response.json() == {"detail": "permission"}
+    assert response.headers["X-Access-Level"] == "read"
+    assert response.headers["X-Transaction-Id"] == "txn-403"
+    assert response.headers["X-User-Limit-24hour-Remaining"] == "0"
+    assert response.headers["X-X-Auth-Mode"] == "oauth1"
+    assert response.headers["Cache-Control"] == "no-store"
+    assert "X-X-Error-Info" not in response.headers
+    combined = str(response.headers) + response.text + caplog.text
+    assert "PRIVATE_" not in combined
+    assert "auth=oauth1" in caplog.text
+    assert _clock("1793332800") in caplog.text
+
+
+def test_oauth2_error_records_auth_mode_without_the_token(client, monkeypatch, caplog):
+    monkeypatch.setattr(settings, "x_user_access_token", "user-context-token")
+    respond(monkeypatch, httpx2.Response(429, json={"title": "Too Many Requests"}, headers={"x-transaction-id": "txn-oauth2"}))
+    response = client.post("/api/x-articles/drafts", json=draft_body())
+    assert response.headers["X-X-Auth-Mode"] == "oauth2"
+    assert response.headers["X-Transaction-Id"] == "txn-oauth2"
+    assert "auth=oauth2" in caplog.text
+    assert "user-context-token" not in caplog.text + str(response.headers) + response.text
+
+
+def test_unsafe_limit_headers_are_not_forwarded_or_logged(configured, monkeypatch, caplog):
+    respond(monkeypatch, httpx2.Response(429, json={"detail": "consumer-secret"}, headers={
+        "x-access-level": "PRIVATE_LEVEL",
+        "x-transaction-id": "abc-consumer-secret-def",
+        "x-user-limit-24hour-remaining": "consumer-secret",
+        "x-app-limit-24hour-limit": "1 2",
+        "x-user-limit-24hour-reset": "1793332800",
+        "x-response-time": "9",
+    }))
+    response = configured.post("/api/x-articles/drafts", json=draft_body())
+    assert "X-Access-Level" not in response.headers
+    assert "X-Transaction-Id" not in response.headers
+    assert "X-User-Limit-24hour-Remaining" not in response.headers
+    assert "X-App-Limit-24hour-Limit" not in response.headers
+    assert response.headers["X-User-Limit-24hour-Reset"] == "1793332800"
+    assert "consumer-secret" not in str(response.headers) + caplog.text
+    assert "PRIVATE_" not in str(response.headers) + caplog.text
 
 
 def test_retry_after_http_date_is_converted_to_seconds(configured, monkeypatch):
