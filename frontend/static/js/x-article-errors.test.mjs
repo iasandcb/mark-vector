@@ -13,6 +13,7 @@ test("the draft API keeps safe rate metadata with the error without retrying", a
     calls++;
     return new Response(JSON.stringify({ detail: "usageCap" }), { status: 502, headers: {
       "X-RateLimit-Limit": "10", "X-RateLimit-Remaining": "0", "X-RateLimit-Reset": String((now + 60_000) / 1000),
+      "X-X-Error-Info": JSON.stringify({ title: "Too Many Requests", errors: [{ code: 88, message: "Rate limit exceeded" }] }),
     } });
   };
   try {
@@ -21,6 +22,8 @@ test("the draft API keeps safe rate metadata with the error without retrying", a
       assert.equal(error.xLimit.resetAt, now + 60_000);
       assert.equal(error.xLimit.limit, 10);
       assert.equal(error.xLimit.remaining, 0);
+      assert.equal(error.xLimit.diagnostic.errors[0].code, 88);
+      assert.match(xArticleErrorMessage(error, t, "en", now), /Too Many Requests/);
       return true;
     });
     assert.equal(calls, 1);
@@ -40,9 +43,17 @@ test("Retry-After and request-count reset stay separate", () => {
 });
 
 test("missing or malformed limit headers do not invent a reset time or zero balance", () => {
-  assert.deepEqual(xArticleLimitInfo(new Headers(), now), { resetAt: null, retryAt: null, limit: null, remaining: null });
-  assert.deepEqual(xArticleLimitInfo(new Headers({ "X-RateLimit-Reset": "NaN", "Retry-After": "-1", "X-RateLimit-Limit": "Infinity", "X-RateLimit-Remaining": "secret" }), now), { resetAt: null, retryAt: null, limit: null, remaining: null });
+  assert.deepEqual(xArticleLimitInfo(new Headers(), now), { resetAt: null, retryAt: null, limit: null, remaining: null, diagnostic: null });
+  assert.deepEqual(xArticleLimitInfo(new Headers({ "X-RateLimit-Reset": "NaN", "Retry-After": "-1", "X-RateLimit-Limit": "Infinity", "X-RateLimit-Remaining": "secret" }), now), { resetAt: null, retryAt: null, limit: null, remaining: null, diagnostic: null });
   assert.equal(xArticleLimitInfo(new Headers({ "X-RateLimit-Reset": "0" }), now).resetAt, null);
+});
+
+test("missing, malformed or oversized diagnostic headers do not replace the original error", () => {
+  for (const raw of ["not-json", "null", "[]", "true", JSON.stringify({ detail: "x".repeat(6001) })]) {
+    const xLimit = xArticleLimitInfo(new Headers({ "X-X-Error-Info": raw }));
+    assert.equal(xLimit.diagnostic, null);
+    assert.match(xArticleErrorMessage({ message: "rateLimit", xLimit }, t, "en", now), /^translated:xArticle\.error\.rateLimit/);
+  }
 });
 
 test("a 429 with requests remaining does not imply the displayed window is exhausted", () => {

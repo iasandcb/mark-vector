@@ -8,11 +8,20 @@ export function xArticleLimitInfo(headers, now = Date.now()) {
   const reset = number("X-RateLimit-Reset");
   const after = number("Retry-After");
   const validTime = (value) => Number.isFinite(value) && value > 0 && value <= 8.64e15 ? value : null;
+  let diagnostic = null;
+  const raw = headers.get("X-X-Error-Info");
+  if (raw && raw.length <= 6000) {
+    try {
+      const value = JSON.parse(raw);
+      if (value && typeof value === "object" && !Array.isArray(value)) diagnostic = value;
+    } catch { /* A malformed diagnostic must not hide the original error. */ }
+  }
   return {
     resetAt: validTime(reset == null ? null : reset * 1000),
     retryAt: validTime(after == null ? null : now + after * 1000),
     limit: number("X-RateLimit-Limit"),
     remaining: number("X-RateLimit-Remaining"),
+    diagnostic,
   };
 }
 
@@ -41,6 +50,9 @@ export function xArticleErrorMessage(error, t, language, now = Date.now()) {
   }
   if (error.message === "rateLimit" && info?.remaining > 0) {
     parts.push(t("xArticle.limit.otherRestriction"));
+  }
+  if (info?.diagnostic) {
+    parts.push(t("xArticle.limit.diagnostic", { diagnostic: JSON.stringify(info.diagnostic) }));
   }
   return parts.join(" ");
 }

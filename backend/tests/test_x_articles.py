@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 from email.utils import formatdate
 from types import SimpleNamespace
 from uuid import uuid4
@@ -179,13 +180,16 @@ def test_cross_origin_and_unauthenticated_access_rejected(configured, upstream, 
 
 
 def test_429_exposes_reset_and_counts_without_exposing_private_body_or_headers(configured, monkeypatch, caplog):
+    body = draft_body()
     respond(monkeypatch, httpx2.Response(429, json={
-        "type": "https://api.x.com/2/problems/rate-limit-exceeded", "detail": "PRIVATE_BODY",
+        "type": "https://api.x.com/2/problems/rate-limit-exceeded",
+        "detail": f"Rejected {body['title']}: {body['content_state']['blocks'][0]['text']}",
+        "request": {"private": "PRIVATE_BODY"},
     }, headers={
         "x-rate-limit-limit": "10", "x-rate-limit-remaining": "0", "x-rate-limit-reset": "1793332800",
         "Retry-After": "120", "Authorization": "PRIVATE_HEADER", "Set-Cookie": "PRIVATE_COOKIE",
     }))
-    response = configured.post("/api/x-articles/drafts", json=draft_body())
+    response = configured.post("/api/x-articles/drafts", json=body)
     assert response.status_code == 502
     assert response.json() == {"detail": "rateLimit"}
     assert response.headers["X-RateLimit-Limit"] == "10"
@@ -196,6 +200,8 @@ def test_429_exposes_reset_and_counts_without_exposing_private_body_or_headers(c
     assert "reset=1793332800" in caplog.text
     combined = str(response.headers) + response.text + caplog.text
     assert "PRIVATE_" not in combined
+    assert json.loads(response.headers["X-X-Error-Info"])["detail"] == "Rejected [redacted]: [redacted]"
+    assert response.headers["Cache-Control"] == "no-store"
 
 
 @pytest.mark.parametrize("domain", ["api.x.com", "api.twitter.com"])
@@ -215,7 +221,7 @@ def test_429_missing_headers_does_not_invent_a_reset(configured, monkeypatch):
 
 
 def test_429_untrusted_metadata_is_not_forwarded_or_logged(configured, monkeypatch, caplog):
-    respond(monkeypatch, httpx2.Response(429, json={"type": "https://private.example/usage-capped", "detail": "PRIVATE_BODY"}, headers={
+    respond(monkeypatch, httpx2.Response(429, json={"type": "https://private.example/usage-capped", "detail": "consumer-secret", "request": "PRIVATE_BODY"}, headers={
         "x-rate-limit-reset": "PRIVATE_TOKEN", "x-rate-limit-limit": "-1", "x-rate-limit-remaining": "9e9",
         "retry-after": "PRIVATE_DATE",
     }))
@@ -225,6 +231,49 @@ def test_429_untrusted_metadata_is_not_forwarded_or_logged(configured, monkeypat
     assert "X-RateLimit-Reset" not in response.headers
     assert "Retry-After" not in response.headers
     assert "PRIVATE_" not in response.text + str(response.headers) + caplog.text
+
+
+def test_limit_diagnostic_selects_error_fields_and_redacts_credentials(configured, monkeypatch, caplog):
+    respond(monkeypatch, httpx2.Response(429, json={
+        "title": "Too Many Requests", "type": "about:blank",
+        "detail": "consumer-key consumer-secret user-token user-secret",
+        "errors": [{"code": 88, "message": "Rate limit exceeded"},
+                   {"code": 123, "message": "Authorization: OAuth private-signature"},
+                   {"code": 456, "message": "PRIVATE_EXTRA_ERROR"}],
+        "access_token": "PRIVATE_EXTRA_FIELD",
+    }))
+    response = configured.post("/api/x-articles/drafts", json=draft_body())
+    info = json.loads(response.headers["X-X-Error-Info"])
+    assert info == {
+        "title": "Too Many Requests", "type": "about:blank",
+        "detail": "[redacted] [redacted] [redacted] [redacted]",
+        "errors": [{"code": 88, "message": "Rate limit exceeded"},
+                   {"code": 123, "message": "[redacted authentication data]"}],
+    }
+    assert "PRIVATE_" not in str(response.headers) + caplog.text
+    assert "Too Many Requests" not in caplog.text
+    assert not Path(settings.data_dir, "x-articles.json").exists()
+
+
+def test_limit_diagnostic_is_bounded_ascii_and_ignores_malformed_fields(configured, monkeypatch):
+    respond(monkeypatch, httpx2.Response(429, json={
+        "title": "😀" * 1000, "detail": "😀" * 1000,
+        "errors": [{"message": "😀" * 1000}, {"detail": "😀" * 1000}],
+    }))
+    response = configured.post("/api/x-articles/drafts", json=draft_body())
+    raw = response.headers["X-X-Error-Info"]
+    assert raw.isascii() and len(raw) <= 6000
+    assert json.loads(raw)["title"]
+    respond(monkeypatch, httpx2.Response(429, json={"title": [], "detail": {}, "code": True, "errors": [None]}))
+    response = configured.post("/api/x-articles/drafts", json=draft_body())
+    assert json.loads(response.headers["X-X-Error-Info"]) == {"format": "no-error-fields"}
+
+
+def test_non_json_limit_body_is_not_forwarded(configured, monkeypatch):
+    respond(monkeypatch, httpx2.Response(429, text="<html>PRIVATE_BODY</html>"))
+    response = configured.post("/api/x-articles/drafts", json=draft_body())
+    assert json.loads(response.headers["X-X-Error-Info"]) == {"format": "non-json"}
+    assert "PRIVATE_BODY" not in str(response.headers) + response.text
 
 
 def test_retry_after_http_date_is_converted_to_seconds(configured, monkeypatch):

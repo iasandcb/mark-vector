@@ -3,7 +3,9 @@
 import base64
 import hashlib
 import hmac
+import json
 import logging
+import re
 import secrets
 import time
 from email.utils import parsedate_to_datetime
@@ -17,6 +19,84 @@ from .config import settings
 logger = logging.getLogger(__name__)
 
 DRAFT_URL = "https://api.x.com/2/articles/draft"
+
+
+def _error_diagnostic(response, payload: dict) -> str:
+    """Bounded, redacted error fields for the authenticated requester only.
+
+    Never log or persist these descriptions. Do not forward arbitrary body
+    fields, headers, URLs, HTML responses or echoed request objects.
+    """
+    private = [getattr(settings, name) for name in (
+        "x_api_key", "x_api_secret", "x_access_token", "x_access_token_secret", "x_user_access_token",
+    )]
+    private.append(payload.get("title"))
+    content = payload.get("content_state", {})
+    private.extend(block.get("text") for block in content.get("blocks", []))
+    for entity in content.get("entities", []):
+        private.extend(entity.get("value", {}).get("data", {}).values())
+    variants = set()
+    for value in private:
+        if isinstance(value, str) and value:
+            variants.update((value, quote(value, safe=""), json.dumps(value, ensure_ascii=True)[1:-1]))
+
+    def text(value, length):
+        if not isinstance(value, str):
+            return None
+        # An upstream error can echo authentication data. Drop such a field.
+        if re.search(r"authorization|oauth_|\bbearer\s|api[_ -]?(?:key|secret)|access[_ -]?token", value, re.I):
+            return "[redacted authentication data]"
+        for secret in sorted(variants, key=len, reverse=True):
+            value = value.replace(secret, "[redacted]")
+        return " ".join(value.split())[:length] or None
+
+    def code(value):
+        if type(value) is int and 0 <= value <= 999_999:
+            return value
+        return None
+
+    try:
+        body = response.json()
+    except (ValueError, TypeError):
+        return '{"format":"non-json"}'
+    if not isinstance(body, dict):
+        return '{"format":"unexpected-json"}'
+    info = {}
+    # A type URI may contain private query strings. Only canonical problem URIs.
+    problem = body.get("type")
+    if isinstance(problem, str) and (problem == "about:blank" or re.fullmatch(
+        r"https://api\.(?:x|twitter)\.com/2/problems/[a-z-]{1,64}", problem,
+    )):
+        info["type"] = problem
+    for name, value in (("title", text(body.get("title"), 120)),
+                        ("detail", text(body.get("detail"), 500)), ("code", code(body.get("code")))):
+        if value is not None:
+            info[name] = value
+    errors = body.get("errors")
+    if isinstance(errors, list):
+        summaries = []
+        for error in errors[:2]:
+            if not isinstance(error, dict):
+                continue
+            summary = {key: value for key, value in (
+                ("code", code(error.get("code"))), ("message", text(error.get("message"), 240)),
+                ("detail", text(error.get("detail"), 240)),
+            ) if value is not None}
+            if summary:
+                summaries.append(summary)
+        if summaries:
+            info["errors"] = summaries
+    if not info:
+        info["format"] = "no-error-fields"
+    encoded = json.dumps(info, ensure_ascii=True, separators=(",", ":"))
+    if len(encoded) > 6000:
+        # Keep the response header below common HTTP header size limits.
+        info.pop("errors", None)
+        for key in ("title", "detail"):
+            if key in info:
+                info[key] = info[key][:160]
+        encoded = json.dumps(info, ensure_ascii=True, separators=(",", ":"))
+    return encoded
 
 
 def _limit_diagnostics(response) -> tuple[str | None, dict[str, str]]:
@@ -114,6 +194,8 @@ def create_draft(payload: dict) -> dict:
         diagnostic_headers = {}
         if response.status_code == 429:
             problem, diagnostic_headers = _limit_diagnostics(response)
+            diagnostic_headers["X-X-Error-Info"] = _error_diagnostic(response, payload)
+            diagnostic_headers["Cache-Control"] = "no-store"
             if problem == "usage-capped":
                 code = "usageCap"
             logger.warning(
@@ -123,7 +205,7 @@ def create_draft(payload: dict) -> dict:
                 diagnostic_headers.get("X-RateLimit-Reset"), diagnostic_headers.get("Retry-After"),
             )
         logger.warning("X article draft failed: status=%d category=%s", response.status_code, code)
-        # Do not echo upstream response bodies (which may contain private data).
+        # Only selected, redacted 429 fields reach the authenticated requester.
         raise HTTPException(502, code, headers=diagnostic_headers)
     try:
         data = response.json().get("data", {})
