@@ -27,15 +27,31 @@ test("the draft API keeps safe rate metadata with the error without retrying", a
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test("Retry-After is relative to receipt; the later retry instruction wins", () => {
+test("Retry-After and request-count reset stay separate", () => {
   const info = xArticleLimitInfo(new Headers({ "X-RateLimit-Reset": String(now / 1000 + 30), "Retry-After": "60" }), now);
-  assert.equal(info.resetAt, now + 60_000);
+  assert.equal(info.resetAt, now + 30_000);
+  assert.equal(info.retryAt, now + 60_000);
+  const message = xArticleErrorMessage({ message: "rateLimit", xLimit: info }, t, "ko", now);
+  assert.match(message, /xArticle\.limit\.resetAt/);
+  assert.match(message, /xArticle\.limit\.retryAfter/);
+  const retryOnly = xArticleLimitInfo(new Headers({ "Retry-After": "60" }), now);
+  assert.equal(retryOnly.resetAt, null);
+  assert.equal(retryOnly.retryAt, now + 60_000);
 });
 
 test("missing or malformed limit headers do not invent a reset time or zero balance", () => {
-  assert.deepEqual(xArticleLimitInfo(new Headers(), now), { resetAt: null, limit: null, remaining: null });
-  assert.deepEqual(xArticleLimitInfo(new Headers({ "X-RateLimit-Reset": "NaN", "Retry-After": "-1", "X-RateLimit-Limit": "Infinity", "X-RateLimit-Remaining": "secret" }), now), { resetAt: null, limit: null, remaining: null });
+  assert.deepEqual(xArticleLimitInfo(new Headers(), now), { resetAt: null, retryAt: null, limit: null, remaining: null });
+  assert.deepEqual(xArticleLimitInfo(new Headers({ "X-RateLimit-Reset": "NaN", "Retry-After": "-1", "X-RateLimit-Limit": "Infinity", "X-RateLimit-Remaining": "secret" }), now), { resetAt: null, retryAt: null, limit: null, remaining: null });
   assert.equal(xArticleLimitInfo(new Headers({ "X-RateLimit-Reset": "0" }), now).resetAt, null);
+});
+
+test("a 429 with requests remaining does not imply the displayed window is exhausted", () => {
+  const error = { message: "rateLimit", xLimit: { resetAt: now + 60_000, limit: 40000, remaining: 39999 } };
+  assert.match(xArticleErrorMessage(error, t, "ko", now), /xArticle\.limit\.otherRestriction/);
+  for (const remaining of [0, null]) {
+    error.xLimit.remaining = remaining;
+    assert.doesNotMatch(xArticleErrorMessage(error, t, "ko", now), /xArticle\.limit\.otherRestriction/);
+  }
 });
 
 test("a future reset, a past reset, and a missing reset have distinct messages", () => {
