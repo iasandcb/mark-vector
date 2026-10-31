@@ -159,7 +159,11 @@ kbd { font-family: inherit; font-weight: 450; font-size: 10px; color: var(--mute
 .preview-tabs { width: 100%; gap: 2px; padding: 3px; border-radius: 7px; background: #f1f4f1; }
 .preview-tab { flex: 1; padding: 6px 9px; border-radius: 5px; font-size: 11px; color: #66786a; }
 .preview-tab.active { color: #2d4e3a; background: white; box-shadow: 0 1px 4px #193a2610; font-weight: 550; }
+.preview-pin { padding: 2px; border-radius: 6px; background: #f1f4f1; }
+.preview-pin-btn { padding: 2px 6px; border-radius: 4px; font-size: 10px; color: #66786a; }
+.preview-pin-btn.active { color: #2d4e3a; background: white; box-shadow: 0 1px 3px #193a2610; font-weight: 550; }
 .preview-pane > .pane-header > .preview-actions { width: 100%; justify-content: flex-end; gap: 8px; flex-wrap: nowrap; }
+.preview-pane > .pane-header > .preview-actions:has(#preview-pin:not([hidden])) { flex-wrap: wrap; }
 .preview-actions .checkbox-row { font-size: 10px; gap: 4px; }
 .preview-actions .icon-btn { font-size: 10px; min-height: 25px; min-width: 25px; padding: 4px; }
 .preview-actions .ui-icon { width: 15px; height: 15px; }
@@ -260,6 +264,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
   .welcome-note { margin-top: 23px; font-size: 10px; }
   .preview-pane > .pane-header { min-height: 108px; padding-inline: 16px; }
   .preview-tab { min-height: 35px; font-size: 13px; }
+  .preview-pin-btn { min-height: 30px; font-size: 12px; padding: 4px 8px; }
   .preview-pane > .pane-header > .preview-actions { justify-content: flex-end; gap: 8px; }
   .preview-actions .icon-btn { min-height: 30px; font-size: 11px; }
   .preview-actions .checkbox-row { font-size: 11px; }

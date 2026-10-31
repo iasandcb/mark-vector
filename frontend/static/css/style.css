@@ -2272,6 +2272,47 @@ kbd.shortcut-key {
   font-weight: 600;
 }
 
+/* Split view only (hidden otherwise): which editor the preview follows.
+   Sits at the start of the actions row; the rest stay right-aligned. */
+.preview-pin {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  margin-right: auto;
+  padding: 2px;
+  border-radius: 7px;
+  background: var(--code-bg);
+  flex: 0 0 auto;
+}
+
+.preview-pin-btn {
+  border: none;
+  background: none;
+  padding: 2px 7px;
+  border-radius: 5px;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.preview-pin-btn:hover {
+  color: var(--text);
+}
+
+.preview-pin-btn.active {
+  color: var(--text);
+  background: var(--panel);
+  font-weight: 600;
+}
+
+.preview-pin-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .preview-pane[data-view="evaluate"] .preview-only,
 .preview-pane[data-view="formalize"] .preview-only,
 .preview-pane[data-view="evaluate"] #preview,
