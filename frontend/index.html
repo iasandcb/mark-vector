@@ -374,6 +374,14 @@
           <button type="button" class="preview-tab" role="tab" aria-selected="false" data-view="formalize" data-i18n="analysis.formalize" data-i18n-title="analysis.formalizeTitle"></button>
         </div>
         <div class="preview-actions">
+          <!-- Which editor this preview follows while split view is open.
+               Hidden otherwise. Auto is the focused pane, except a .c.md
+               file beside its .md file stays on the right document. -->
+          <div id="preview-pin" class="preview-pin" hidden role="radiogroup" data-i18n-aria-label="preview.pinTitle">
+            <button type="button" class="preview-pin-btn active" data-pin="auto" aria-pressed="true" data-i18n="preview.pinAuto" data-i18n-title="preview.pinAutoTitle">Auto</button>
+            <button type="button" class="preview-pin-btn" data-pin="left" aria-pressed="false" data-i18n="preview.pinLeft" data-i18n-title="preview.pinLeftTitle">Left</button>
+            <button type="button" class="preview-pin-btn" data-pin="right" aria-pressed="false" data-i18n="preview.pinRight" data-i18n-title="preview.pinRightTitle">Right</button>
+          </div>
           <label class="checkbox-row sync-scroll-row preview-only">
             <input type="checkbox" id="sync-scroll-checkbox">
             <span data-i18n="preview.syncScroll"></span>

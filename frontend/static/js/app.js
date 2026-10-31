@@ -2,6 +2,7 @@ import { requestWorkspaceName } from "./workspace-dialog.js";
 import { articleFromHtml } from "./x-article-content.mjs";
 import { openXArticleDialog } from "./x-article.js";
 import { conversationPair, paneShareState } from "./split-share.mjs";
+import { normalizePreviewPin, previewContent, PREVIEW_PIN_STORAGE_KEY } from "./preview-pin.mjs";
 import { icon, symbolIcon, mountIcons } from "./icons.js";
 import * as api from "./api.js";
 import { createDocumentFollower } from "./document-sync.mjs";
@@ -85,6 +86,7 @@ const el = {
   treePane: document.getElementById("tree-pane"),
   previewPane: document.getElementById("preview-pane"),
   previewTabs: document.getElementById("preview-tabs"),
+  previewPin: document.getElementById("preview-pin"),
   analysisView: document.getElementById("analysis-view"),
   analysisRunBtn: document.getElementById("analysis-run-btn"),
   analysisStatus: document.getElementById("analysis-status"),
@@ -270,6 +272,29 @@ function setSplitView(open) {
   el.splitResizer.hidden = !open;
   el.splitToggleBtn.setAttribute("aria-pressed", open ? "true" : "false");
   savePanelLayout();
+  updatePreviewPinControl();
+}
+
+// "auto" follows the focused pane (and a .c.md / .md pair stays on the
+// right document). "left" / "right" pin the preview to that editor.
+// Survives reloads; closing the split hides the control and ignores it.
+function readStoredPreviewPin() {
+  try {
+    return normalizePreviewPin(localStorage.getItem(PREVIEW_PIN_STORAGE_KEY));
+  } catch (err) {
+    return "auto";
+  }
+}
+
+let previewPin = readStoredPreviewPin();
+
+function updatePreviewPinControl() {
+  el.previewPin.hidden = !splitViewOpen();
+  for (const btn of el.previewPin.querySelectorAll("[data-pin]")) {
+    const on = btn.dataset.pin === previewPin;
+    btn.classList.toggle("active", on);
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+  }
 }
 
 function setTreeCollapsed(collapsed) {
@@ -1948,9 +1973,10 @@ function maybeRestoreAutosave() {
 }
 
 // Which pane the shared preview is currently rendering - "a" (the primary
-// editor) unless split view is open and pane B was the one last focused
-// (see the "focus" listeners below). Whichever pane isn't the source still
-// keeps its *own* nav buttons/autosave/etc. current (see renderPreview/
+// editor) or "b" (the split pane). Auto follows the pane focused last,
+// except a conversation pair stays on the right document. A Left/Right pin
+// (previewPin) ignores focus. Whichever pane isn't the source still keeps
+// its own nav buttons/autosave/etc. current (see renderPreview/
 // renderPreviewB below) - only the shared #preview element itself, and the
 // sync-scroll it drives, follow the source.
 let previewSource = "a";
@@ -1958,6 +1984,18 @@ let focusedEditorPane = "a";
 
 function conversationPairOpen() {
   return conversationPair({ splitOpen: splitViewOpen(), left: active, right: activeB });
+}
+
+function resolvedPreview() {
+  return previewContent({
+    pin: previewPin,
+    splitOpen: splitViewOpen(),
+    focused: focusedEditorPane,
+    pair: conversationPairOpen(),
+    hasRight: !!activeB,
+    leftText: el.editor.value,
+    rightText: el.editorB.value,
+  });
 }
 
 function shareContext() {
@@ -1970,11 +2008,24 @@ function shareContext() {
   };
 }
 
-function setPreviewSource(source) {
-  if (conversationPairOpen()) source = "b";
-  if (previewSource === source) return;
-  previewSource = source;
-  if (source === "a") renderPreview();
+function setPreviewPin(pin) {
+  const nextPin = normalizePreviewPin(pin);
+  if (nextPin === previewPin) return;
+  previewPin = nextPin;
+  try {
+    localStorage.setItem(PREVIEW_PIN_STORAGE_KEY, previewPin);
+  } catch (err) {
+    // localStorage unavailable - the choice just won't persist across reloads
+  }
+  updatePreviewPinControl();
+  setPreviewSource();
+}
+
+function setPreviewSource() {
+  const next = resolvedPreview().source;
+  if (previewSource === next) return;
+  previewSource = next;
+  if (next === "a") renderPreview();
   else renderPreviewB();
 }
 
@@ -2048,6 +2099,11 @@ el.previewTabs.addEventListener("click", (e) => {
   if (tab) setPreviewView(tab.dataset.view);
 });
 
+el.previewPin.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-pin]");
+  if (btn) setPreviewPin(btn.dataset.pin);
+});
+
 // ⌥1 / ⌥2 / ⌥3 (Alt+Shift+1/2/3 off a Mac, where Alt+digit is the document
 // jump - see hintModifierHeld): Preview / Evaluate / Formalize, bringing the
 // pane out if it's collapsed (or, on a phone, switching to it). Matched on
@@ -2085,10 +2141,14 @@ function paintSharedPreview(text, dialect) {
 
 function renderPreview() {
   syncDocumentFollowers();
-  if (conversationPairOpen()) {
-    previewSource = "b";
-    renderPreviewB();
-  }
+  const resolved = resolvedPreview();
+  const sourceChanged = previewSource !== resolved.source;
+  previewSource = resolved.source;
+  // An edit in pane A must not repaint pane B when B is already the source
+  // (a pin, or the conversation-pair lock). Repainting would reset the
+  // preview's scroll on every keystroke of the other pane. Switching *to*
+  // B still paints B's current buffer, unsaved edits included.
+  if (previewSource === "b" && sourceChanged) renderPreviewB();
   // renderPreview() is already the one function every pane-A content change
   // in this file calls right afterward (new document, streaming delta,
   // Tab/Enter, format conversion, ...), so hooking the nav/sync/autosave/
@@ -2098,7 +2158,7 @@ function renderPreview() {
   // showing - they're about the *document*, not the screen - so they always
   // run; only the shared #preview element's own content is conditional.
   if (previewSource === "a") {
-    paintSharedPreview(el.editor.value, sessionMathDialect(active && active.projectId, active && active.sessionId));
+    paintSharedPreview(resolved.text, sessionMathDialect(active && active.projectId, active && active.sessionId));
     // Has to run here too (not just on the editor's own "scroll" event)
     // because typing/streaming changes the preview's scrollHeight without
     // necessarily scrolling the editor at all, which would otherwise leave
@@ -2121,9 +2181,23 @@ function renderPreview() {
 // renderPreview above).
 function renderPreviewB() {
   syncDocumentFollowers();
-  if (conversationPairOpen()) previewSource = "b";
-  if (previewSource === "b" && activeB) {
-    paintSharedPreview(el.editorB.value, sessionMathDialect(activeB.projectId, activeB.sessionId));
+  const resolved = resolvedPreview();
+  // Pane B changed, but the preview is pinned (or has fallen back) to pane
+  // A. Paint A only when the source actually moved — an edit in B while A
+  // stays the source must leave the preview alone. Clearing B (close, or
+  // the document was deleted) takes this path: the input event lands here
+  // before setPreviewSource, and skipping the paint would leave B's last
+  // render on screen.
+  if (resolved.source !== "b") {
+    if (previewSource !== resolved.source) renderPreview();
+    else previewSource = resolved.source;
+    updateScrollNavVisibility();
+    analysisPanel.contentChanged();
+    return;
+  }
+  previewSource = "b";
+  if (activeB) {
+    paintSharedPreview(resolved.text, sessionMathDialect(activeB.projectId, activeB.sessionId));
     syncPreviewScrollFromSource("b");
   }
   updateScrollNavVisibility();
@@ -6804,10 +6878,10 @@ async function selectDocumentB(projectId, sessionId, filename, { focus = true, p
   renderPreviewB();
   renderTree();
   updatePublishButtonB();
-  // Skipped on restore (see restoreActiveDocumentB) - stealing focus (and
-  // with it previewSource, see the "focus" listener below) into the
-  // secondary pane on every page load would be a worse default than just
-  // leaving it wherever pane A's own restore puts it.
+  // Skipped on restore (see restoreActiveDocumentB). Focusing this pane
+  // moves the preview only while the pin is Auto (see the "focus"
+  // listeners). A Left or Right pin stays put, and a conversation pair
+  // still opens on the right document under Auto.
   if (focus) el.editorB.focus();
 }
 
@@ -6826,7 +6900,7 @@ function closeSplitView() {
   updateFilenameLabelB();
   setSplitView(false);
   renderTree();
-  if (previewSource === "b") setPreviewSource("a");
+  setPreviewSource();
   updatePublishButtonB();
 }
 
@@ -7270,7 +7344,7 @@ async function removeDocument(projectId, sessionId, filename, role) {
     el.saveBtnB.disabled = true;
     updateFilenameLabelB();
     updatePublishButtonB();
-    if (previewSource === "b") setPreviewSource("a");
+    setPreviewSource();
   }
   renderTree();
 }
@@ -8341,7 +8415,7 @@ function applyReplyEdits({ final = false } = {}) {
   }
   if (changed) {
     updateFilenameLabelB();
-    if (previewSource === "b") renderPreview();
+    if (previewSource === "b") renderPreviewB();
   }
   if (changed || final) showDocEditStrip();
 }
@@ -8350,7 +8424,7 @@ function undoDocEdit() {
   if (!docEdit || activeB !== docEdit.doc) return;
   el.editorB.value = docEdit.before;
   updateFilenameLabelB();
-  if (previewSource === "b") renderPreview();
+  if (previewSource === "b") renderPreviewB();
   hideDocEditStrip();
 }
 
@@ -8794,11 +8868,11 @@ el.editorB.addEventListener("input", () => {
 });
 el.editor.addEventListener("focus", () => {
   focusedEditorPane = "a";
-  setPreviewSource("a");
+  setPreviewSource();
 });
 el.editorB.addEventListener("focus", () => {
   focusedEditorPane = "b";
-  setPreviewSource("b");
+  setPreviewSource();
 });
 el.editorB.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
