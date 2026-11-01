@@ -169,3 +169,98 @@ def test_unclosed_block_does_not_swallow_the_rest_of_the_document():
     assert "1/2" in out
     assert "\\[" in out  # the unclosed opener itself is left untouched
     assert needs_directive is True
+
+
+def test_unclosed_display_dollar_does_not_swallow_the_next_paragraph():
+    text = "intro $$\n\n# Heading\n\n$\\frac{1}{2}$\n"
+    out, needs_directive = convert_math_to_asciimath(text)
+    assert out == "intro $$\n\n# Heading\n\n$1/2$\n"
+    assert needs_directive is True
+
+
+def test_two_display_formulas_do_not_swallow_the_prose_between_them():
+    # A greedy "$$...$$" match used to run from the first "$$" on the line
+    # to the last, so the Korean between two formulas was converted as math
+    # and came back with a space between every syllable ("그 리 고").
+    out = convert_document_to_asciimath(r"$$\frac{a}{b}$$ 그리고 $$\sqrt{x}$$ 와 $x^2$")
+    assert out == f"{MATH_DIRECTIVE}\n$$a/b$$ 그리고 $$sqrt(x)$$ 와 $x^2$"
+    assert "그 리" not in out
+
+
+def test_display_opener_with_text_before_it_still_converts():
+    text = "질문 $$\n\\frac{a}{b}\n$$ 끝"
+    out = convert_document_to_asciimath(text)
+    assert "질문" in out
+    assert "끝" in out
+    assert "a/b" in out
+    assert r"\frac" not in out
+
+
+def test_frac_is_not_emitted_character_by_character():
+    out = convert_document_to_asciimath(r"인라인 $\frac{a}{b}$ 와 $$\frac{1}{2}$$")
+    assert r"\ f" not in out
+    assert "f r a c" not in out
+    assert "$a/b$" in out
+    assert "1/2" in out
+
+
+def test_realistic_latex_document_with_korean_around_the_math():
+    text = (
+        "한글 설명입니다. 인라인 $\\frac{a}{b}$ 와 $\\sqrt{x}$, $x^2$, $\\alpha$.\n"
+        "\n"
+        "$$\n"
+        "\\sum_{i=1}^{n} i^2\n"
+        "$$\n"
+        "\n"
+        "적분 $\\int_{0}^{1} x^{2}\\,dx$ 그리고 $\\mathbb{R}$.\n"
+    )
+    out = convert_document_to_asciimath(text)
+    assert out.startswith(MATH_DIRECTIVE)
+    assert "한글 설명입니다." in out
+    assert "그리고" in out
+    assert "한 글" not in out
+    assert "$a/b$" in out
+    assert "$sqrt(x)$" in out
+    assert "$x^2$" in out
+    assert "$alpha$" in out
+    assert "sum_(i = 1)^n i^2" in out
+    assert "int_0^1" in out
+    assert "$RR$" in out
+    assert r"\frac" not in out
+    assert r"\sqrt" not in out
+    assert r"\alpha" not in out
+    assert r"\sum" not in out
+    assert r"\int" not in out
+    assert r"\mathbb" not in out
+
+
+def test_hangul_inside_a_formula_is_not_split_into_syllables():
+    # asciimath2 itself separates every Hangul syllable. The prose around
+    # the formula must stay untouched, and a Korean word inside the formula
+    # should not come back syllable-spaced either.
+    out, needs_directive = convert_math_to_asciimath(r"앞 $\frac{한글}{b}$ 뒤")
+    assert needs_directive is True
+    assert out == "앞 $(한글)/b$ 뒤"
+
+
+def test_character_spaced_library_output_is_rejected(monkeypatch):
+    # The reported failure mode: the converter echoes the LaTeX source with
+    # a space between every character. That is not AsciiMath, so the span
+    # stays LaTeX (still renderable) instead of being written back broken.
+    def spaced(latex, config=None):
+        return " ".join(latex)
+
+    monkeypatch.setattr("app.latex_to_asciimath._to_asciimath2", spaced)
+    out, needs_directive = convert_math_to_asciimath(r"$\frac{a}{b}$")
+    assert needs_directive is False
+    assert r"\frac{a}{b}" in out
+    assert r"\ f r a c" not in out
+
+
+def test_bare_frac_does_not_fail_the_whole_document():
+    # asciimath2 raises AttributeError (not UnsupportedLatexError) when
+    # \frac has no arguments. One bad span must not abort the conversion.
+    out, needs_directive = convert_math_to_asciimath(r"앞 $\frac$ 와 $\frac{a}{b}$ 뒤")
+    assert needs_directive is True
+    assert "a/b" in out
+    assert r"\frac" in out  # the bare one is kept as LaTeX
