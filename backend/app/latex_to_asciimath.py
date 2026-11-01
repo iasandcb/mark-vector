@@ -1,8 +1,8 @@
 import re
-from typing import Match
 
 from asciimath2 import Config, UnsupportedLatexError
 from asciimath2 import convert as _to_asciimath2
+from pylatexenc.latexwalker import LatexWalkerParseError
 
 # The directive itself is only ever meaningful at the very top of a whole
 # rendered document (see frontend/static/js/markdown.js's DIRECTIVE_RE scan)
@@ -28,15 +28,18 @@ _FENCE_RE = re.compile(r"^```")
 # indentation isn't captured, since block math always breaks out of the
 # surrounding list/paragraph flow anyway (see closeList() call sites), so
 # there's nothing meaningful to preserve it for.
-_DOLLAR_BLOCK_ONE_LINE_RE = re.compile(r"^\s*\$\$(.+)\$\$\s*$")
+# A whole line that is one display span. The interior must not itself
+# contain "$$": a greedy ".+" would run from the first "$$" on the line to
+# the last, swallowing every later formula AND the prose between them
+# ("$$\frac{a}{b}$$ 그리고 $$\sqrt{x}$$") into a single math string.
+_DOLLAR_BLOCK_ONE_LINE_RE = re.compile(r"^\s*\$\$((?:(?!\$\$).)+)\$\$\s*$")
 # Multi-line open/close markers don't need to be alone on their line - LLMs
 # often write "$$f(x)=\n...\n=g(x)$$" with content attached right after the
-# opening marker or right before the closing one.
-_DOLLAR_BLOCK_OPEN_RE = re.compile(r"^\s*\$\$(.*)$")
-_DOLLAR_BLOCK_CLOSE_RE = re.compile(r"^(.*)\$\$\s*$")
-_BRACKET_BLOCK_ONE_LINE_RE = re.compile(r"^\s*\\\[(.+)\\\]\s*$")
-_BRACKET_BLOCK_OPEN_RE = re.compile(r"^\s*\\\[(.*)$")
-_BRACKET_BLOCK_CLOSE_RE = re.compile(r"^(.*)\\\]\s*$")
+# opening marker or right before the closing one. Group 2 is whatever
+# follows the closer on that same line (prose, not math).
+_DOLLAR_BLOCK_CLOSE_RE = re.compile(r"^(.*?)\$\$(.*)$")
+_BRACKET_BLOCK_ONE_LINE_RE = re.compile(r"^\s*\\\[((?:(?!\\\]).)+)\\\]\s*$")
+_BRACKET_BLOCK_CLOSE_RE = re.compile(r"^(.*?)\\\](.*)$")
 # "$[" is a real, recurring LLM typo for either "\[" or "$$" - not
 # hypothetical, it's what triggered this whole block (see the "$[" opener
 # in a countable-additivity axiom that reached us as a genuinely broken
@@ -46,8 +49,10 @@ _BRACKET_BLOCK_CLOSE_RE = re.compile(r"^(.*)\\\]\s*$")
 # broken forever into one that converts normally.
 _DOLLAR_BRACKET_ONE_LINE_RE = re.compile(r"^\s*\$\[(.+?)(?:\$\$|\\\])\s*$")
 _DOLLAR_BRACKET_OPEN_RE = re.compile(r"^\s*\$\[(.*)$")
-_DOLLAR_BRACKET_CLOSE_RE = re.compile(r"^(.*)(?:\$\$|\\\])\s*$")
-_INLINE_MATH_RE = re.compile(r"\\\(([^\n]+?)\\\)|\$([^$\n]+)\$")
+_DOLLAR_BRACKET_CLOSE_RE = re.compile(r"^(.*?)(?:\$\$|\\\])(.*)$")
+# Hangul syllables asciimath2 emits one-per-token, joined with spaces
+# ("한글" -> "한 글"). Collapsed back after a successful conversion.
+_HANGUL_GAP_RE = re.compile(r"(?<=[가-힣]) (?=[가-힣])")
 
 # AsciiMath2 (asciimath2/SPEC.md) separates rows of a multi-line/aligned
 # expression with a blank line. That's meaningful structure - collapsing it
@@ -59,10 +64,13 @@ _ROW_BREAK_RE = re.compile(r"\n{2,}")
 
 def _scan_multiline_block(
     lines: list[str], start: int, close_re: re.Pattern[str]
-) -> tuple[int, list[str]] | None:
+) -> tuple[int, list[str], str] | None:
     """Scans forward from `lines[start]` for a line matching `close_re`,
     collecting the lines in between. Gives up (returns None) at the first
     blank line, without consuming it or anything past it.
+
+    The third value is the text after the closer on the closing line
+    (prose that must not be fed to the math converter).
 
     An opening marker with no matching close before its paragraph ends is
     almost always a malformed/typo'd delimiter in the LLM's own output (e.g.
@@ -81,10 +89,35 @@ def _scan_multiline_block(
         close = close_re.match(lines[j])
         if close:
             block.append(close.group(1))
-            return j + 1, block
+            trailing = close.group(2) if close.lastindex and close.lastindex >= 2 else ""
+            return j + 1, block, trailing
         block.append(lines[j])
         j += 1
     return None
+
+
+def _collapse_hangul_spaces(text: str) -> str:
+    """Joins Hangul syllables asciimath2 split apart ("한 글" -> "한글").
+
+    The converter tokenizes every non-ASCII letter as its own atom and
+    refuses to write them together, so a word that entered as math comes
+    back with a space between every syllable. Spaces that are not between
+    two Hangul syllables (around operators, Latin letters, ...) stay.
+    """
+    return _HANGUL_GAP_RE.sub("", text)
+
+
+def _looks_like_spaced_source(source: str, output: str) -> bool:
+    """True when `output` is `source` with spaces inserted between characters.
+
+    ``\\frac{a}{b}`` coming back as ``\\ f r a c { a } { b }`` (or the same
+    shape with only some of those spaces) is not AsciiMath - it is the
+    LaTeX source echoed token-by-token. A real conversion drops the
+    backslash commands (``a/b``, ``sqrt(x)``, ``alpha``).
+    """
+    if "\\" not in output or " " not in output:
+        return False
+    return "".join(output.split()) == "".join(source.split())
 
 
 def _try_convert(latex: str, config: Config | None) -> str | None:
@@ -95,9 +128,16 @@ def _try_convert(latex: str, config: Config | None) -> str | None:
     if not latex:
         return None
     try:
-        return _to_asciimath2(latex, config)
-    except UnsupportedLatexError:
+        converted = _to_asciimath2(latex, config)
+    except (UnsupportedLatexError, AttributeError, LatexWalkerParseError):
+        # asciimath2 raises AttributeError (not UnsupportedLatexError) for a
+        # macro whose arguments never arrived, e.g. a bare ``\frac``. One
+        # bad span must not fail the whole document.
         return None
+    converted = _collapse_hangul_spaces(converted)
+    if _looks_like_spaced_source(latex, converted):
+        return None
+    return converted
 
 
 def _normalize_block_whitespace(ascii_math: str) -> str:
@@ -173,17 +213,111 @@ def convert_math_to_asciimath(text: str, config: Config | None = None, hybrid: b
         converted_any = converted_any or ok
         return replacement
 
-    def convert_inline_and_track(match: Match[str]) -> str:
+    def convert_inline_and_track(latex: str) -> str:
         nonlocal converted_any
-        if match.group(1) is not None:  # \(...\)
-            if hybrid:
-                return match.group(0)  # left exactly as typed - see docstring
-            latex = match.group(1)
-        else:  # $...$
-            latex = match.group(2)
         replacement, ok = _convert_inline_text(latex, config)
         converted_any = converted_any or ok
         return replacement
+
+    def convert_same_line_display(latex: str) -> str:
+        """A ``$$...$$`` pair that shares its line with other text.
+
+        Kept on that line (``$$a/b$$``) rather than expanded into a block,
+        matching a single display span that was never the whole line.
+        ``$$`` is one delimiter here - it must not be re-read as two
+        inline ``$`` markers, which pairs the closing ``$$`` of one formula
+        with the opening ``$$`` of the next and feeds the prose between
+        them (``그리고``) to the converter. That prose comes back with a
+        space between every character.
+        """
+        nonlocal converted_any
+        ascii_math = _try_convert(latex, config)
+        if ascii_math is None:
+            return f"\\[{' '.join(latex.split())}\\]"
+        converted_any = True
+        return f"$${' '.join(ascii_math.split())}$$"
+
+    def convert_closed_spans(line: str) -> tuple[list[str], tuple[str, str] | None]:
+        """Closed spans on `line`, plus an unclosed ``$$`` / ``\\[`` at its end.
+
+        The unclosed value is ``(opener, math text after the opener)``.
+        Indentation that is the whole prefix of a block opener is dropped
+        (block math breaks out of the list item that indented it).
+        """
+        produced: list[str] = []
+        buf: list[str] = []
+        i = 0
+        n = len(line)
+
+        def flush() -> None:
+            if buf:
+                produced.append("".join(buf))
+                buf.clear()
+
+        while i < n:
+            if line.startswith(r"\[", i):
+                if hybrid:
+                    buf.append(r"\[")
+                    i += 2
+                    continue
+                close = line.find(r"\]", i + 2)
+                if close == -1:
+                    if not "".join(buf).strip():
+                        buf.clear()
+                    else:
+                        produced.append("".join(buf).rstrip())
+                        buf.clear()
+                    return produced, (r"\[", line[i + 2 :])
+                flush()
+                produced.extend(convert_block_and_track(line[i + 2 : close]).split("\n"))
+                i = close + 2
+                continue
+            if line.startswith(r"\(", i):
+                close = line.find(r"\)", i + 2)
+                if close == -1:
+                    buf.append(line[i:])
+                    flush()
+                    return produced, None
+                if hybrid:
+                    buf.append(line[i : close + 2])
+                else:
+                    buf.append(convert_inline_and_track(line[i + 2 : close]))
+                i = close + 2
+                continue
+            if line.startswith("$$", i):
+                close = line.find("$$", i + 2)
+                if close == -1:
+                    if not "".join(buf).strip():
+                        buf.clear()
+                    else:
+                        produced.append("".join(buf).rstrip())
+                        buf.clear()
+                    return produced, ("$$", line[i + 2 :])
+                buf.append(convert_same_line_display(line[i + 2 : close]))
+                i = close + 2
+                continue
+            if line.startswith("$", i):
+                close = line.find("$", i + 1)
+                if close == -1:
+                    buf.append(line[i:])
+                    flush()
+                    return produced, None
+                buf.append(convert_inline_and_track(line[i + 1 : close]))
+                i = close + 1
+                continue
+            nxt = n
+            for token in (r"\[", r"\(", "$$", "$"):
+                found = line.find(token, i)
+                if found != -1:
+                    nxt = min(nxt, found)
+            if nxt == i:
+                buf.append(line[i])
+                i += 1
+            else:
+                buf.append(line[i:nxt])
+                i = nxt
+        flush()
+        return produced, None
 
     while i < len(lines):
         line = lines[i]
@@ -205,18 +339,6 @@ def convert_math_to_asciimath(text: str, config: Config | None = None, hybrid: b
             i += 1
             continue
 
-        dollar_open = _DOLLAR_BLOCK_OPEN_RE.match(line)
-        if dollar_open:
-            scanned = _scan_multiline_block(lines, i + 1, _DOLLAR_BLOCK_CLOSE_RE)
-            if scanned is not None:
-                next_i, rest = scanned
-                block = [dollar_open.group(1), *rest]
-                out.append(convert_block_and_track("\n".join(block)))
-                i = next_i
-                continue
-            # No closing "$$" before the paragraph ends - not a real block;
-            # fall through and process this line as ordinary text instead.
-
         one_line_dollar_bracket = _DOLLAR_BRACKET_ONE_LINE_RE.match(line)
         if one_line_dollar_bracket:
             out.append(convert_block_and_track(one_line_dollar_bracket.group(1)))
@@ -227,39 +349,57 @@ def convert_math_to_asciimath(text: str, config: Config | None = None, hybrid: b
         if dollar_bracket_open:
             scanned = _scan_multiline_block(lines, i + 1, _DOLLAR_BRACKET_CLOSE_RE)
             if scanned is not None:
-                next_i, rest = scanned
+                next_i, rest, trailing = scanned
                 block = [dollar_bracket_open.group(1), *rest]
                 out.append(convert_block_and_track("\n".join(block)))
                 i = next_i
+                if trailing.strip():
+                    lines.insert(i, trailing.strip())
                 continue
             # No closing "$$"/"\]" before the paragraph ends either - genuinely
             # not recoverable; fall through and process as ordinary text.
 
         # \[...\] blocks are skipped entirely in hybrid mode (see the
-        # `hybrid` param's docstring) - `one_line_bracket`/`bracket_open`
-        # just stay falsy, so the line falls through to the plain
-        # `_INLINE_MATH_RE` pass below untouched, same as any other text.
+        # `hybrid` param's docstring) - a whole-line "\[ ... \]" stays
+        # falsy, so the line falls through to the span scan below
+        # untouched, same as any other text.
         one_line_bracket = None if hybrid else _BRACKET_BLOCK_ONE_LINE_RE.match(line)
         if one_line_bracket:
             out.append(convert_block_and_track(one_line_bracket.group(1)))
             i += 1
             continue
 
-        bracket_open = None if hybrid else _BRACKET_BLOCK_OPEN_RE.match(line)
-        if bracket_open:
-            scanned = _scan_multiline_block(lines, i + 1, _BRACKET_BLOCK_CLOSE_RE)
-            if scanned is not None:
-                next_i, rest = scanned
-                block = [bracket_open.group(1), *rest]
-                out.append(convert_block_and_track("\n".join(block)))
-                i = next_i
-                continue
-            # No closing "\]" before the paragraph ends - not a real block;
-            # fall through and process this line as ordinary text instead.
+        produced, unclosed = convert_closed_spans(line)
+        if unclosed is None:
+            # A line with no delimiters yields one piece; a blank line yields
+            # none. Keep the blank line - dropping it would join the
+            # paragraphs on either side.
+            out.extend(produced if produced else [line])
+            i += 1
+            continue
 
-        new_line = _INLINE_MATH_RE.sub(convert_inline_and_track, line)
-        out.append(new_line)
-        i += 1
+        kind, rest = unclosed
+        close_re = _DOLLAR_BLOCK_CLOSE_RE if kind == "$$" else _BRACKET_BLOCK_CLOSE_RE
+        scanned = _scan_multiline_block(lines, i + 1, close_re)
+        if scanned is None:
+            # The opener never closed before the paragraph ended. If nothing
+            # before it on this line was math, leave the line exactly as
+            # typed ("intro $$"). Otherwise keep the converted prefix.
+            prefix = line[: len(line) - len(kind + rest)] if line.endswith(kind + rest) else None
+            if prefix is not None and "$" not in prefix and r"\(" not in prefix:
+                out.append(line)
+            else:
+                out.extend(produced)
+                out.append(kind + rest)
+            i += 1
+            continue
+        next_i, rest_lines, trailing = scanned
+        block = [rest, *rest_lines]
+        out.extend(produced)
+        out.append(convert_block_and_track("\n".join(block)))
+        i = next_i
+        if trailing.strip():
+            lines.insert(i, trailing.strip())
 
     return "\n".join(out), converted_any
 
