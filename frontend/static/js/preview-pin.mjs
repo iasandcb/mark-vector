@@ -43,3 +43,22 @@ export function previewContent({
   const source = resolvePreviewSource({ pin, splitOpen, focused, pair, hasRight });
   return { source, text: source === "b" ? rightText : leftText };
 }
+
+// The Markdown "Download as MD" writes out, and "Copy to clipboard" copies.
+// It is the buffer the preview is showing: the pinned pane while split view
+// is open, otherwise the primary editor. The text is that buffer as it
+// stands, so unsaved edits are included. `open` is false when no document
+// is loaded, which is also when those buttons are disabled. The filename
+// follows the same pane, so a right pin does not save the right buffer
+// under the left document's name.
+export function previewMarkdownDownload({
+  open = false,
+  leftFilename = "",
+  rightFilename = "",
+  ...source
+} = {}) {
+  if (!open) return null;
+  const resolved = previewContent(source);
+  const filename = resolved.source === "b" && rightFilename ? rightFilename : leftFilename;
+  return { source: resolved.source, text: resolved.text, filename: filename || "" };
+}

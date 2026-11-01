@@ -5,6 +5,7 @@ import {
   PREVIEW_PIN_STORAGE_KEY,
   normalizePreviewPin,
   previewContent,
+  previewMarkdownDownload,
   resolvePreviewSource,
 } from "./preview-pin.mjs";
 
@@ -114,6 +115,49 @@ test("the editor page offers Auto, Left, and Right and routes through this modul
   assert.match(app, /PREVIEW_PIN_STORAGE_KEY/);
   assert.equal(app.includes('if (conversationPairOpen()) source = "b"'), false);
   assert.equal(app.includes('if (conversationPairOpen()) previewSource = "b"'), false);
+});
+
+test("download and copy use the buffer the preview is showing, including unsaved edits", () => {
+  const base = {
+    open: true,
+    splitOpen: true,
+    hasRight: true,
+    leftText: "left unsaved",
+    rightText: "right unsaved",
+    leftFilename: "left.md",
+    rightFilename: "right.md",
+  };
+  assert.deepEqual(previewMarkdownDownload({ ...base, pin: "auto", focused: "a", pair: false }), {
+    source: "a",
+    text: "left unsaved",
+    filename: "left.md",
+  });
+  assert.deepEqual(previewMarkdownDownload({ ...base, pin: "right", focused: "a", pair: false, rightText: "right plus more" }), {
+    source: "b",
+    text: "right plus more",
+    filename: "right.md",
+  });
+  assert.equal(
+    previewMarkdownDownload({ ...base, pin: "left", focused: "b", pair: true, leftText: "left plus more" }).text,
+    "left plus more",
+  );
+  assert.equal(previewMarkdownDownload({ ...base, pin: "auto", focused: "a", pair: true }).filename, "right.md");
+  assert.equal(previewMarkdownDownload({ ...base, open: false, pin: "right" }), null);
+  assert.deepEqual(
+    previewMarkdownDownload({
+      open: true,
+      pin: "right",
+      splitOpen: false,
+      focused: "b",
+      pair: false,
+      hasRight: true,
+      leftText: "only editor",
+      rightText: "hidden",
+      leftFilename: "notes.md",
+      rightFilename: "other.md",
+    }),
+    { source: "a", text: "only editor", filename: "notes.md" },
+  );
 });
 
 test("pin labels exist in every UI language, including Korean", () => {

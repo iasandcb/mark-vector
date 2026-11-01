@@ -2,7 +2,8 @@ import { requestWorkspaceName } from "./workspace-dialog.js";
 import { articleFromHtml } from "./x-article-content.mjs";
 import { openXArticleDialog } from "./x-article.js";
 import { conversationPair, paneShareState } from "./split-share.mjs";
-import { normalizePreviewPin, previewContent, PREVIEW_PIN_STORAGE_KEY } from "./preview-pin.mjs";
+import { normalizePreviewPin, previewContent, previewMarkdownDownload, PREVIEW_PIN_STORAGE_KEY } from "./preview-pin.mjs";
+import { copyText } from "./clipboard-copy.mjs";
 import { icon, symbolIcon, mountIcons } from "./icons.js";
 import * as api from "./api.js";
 import { createDocumentFollower } from "./document-sync.mjs";
@@ -129,6 +130,7 @@ const el = {
   printTarget: document.getElementById("print-target"),
   exportPdfBtn: document.getElementById("export-pdf-btn"),
   downloadMdBtn: document.getElementById("download-md-btn"),
+  copyMdBtn: document.getElementById("copy-md-btn"),
   syncScrollCheckbox: document.getElementById("sync-scroll-checkbox"),
   glassesCheckbox: document.getElementById("glasses-checkbox"),
   glassesToolbar: document.getElementById("glasses-toolbar"),
@@ -5512,6 +5514,7 @@ el.syncKeepBtn.addEventListener("click", () => {
 function updateExportPdfButton() {
   el.exportPdfBtn.disabled = !active;
   el.downloadMdBtn.disabled = !active;
+  el.copyMdBtn.disabled = !active;
 }
 
 function makeTreeRowAccessible(row, label, expanded) {
@@ -7517,35 +7520,13 @@ function publicUrl(token) {
 }
 
 // navigator.clipboard.writeText needs a secure context (https:// or
-// localhost) - this app is typically reached over plain http:// via
-// Tailscale, so it's silently unavailable there. document.execCommand
-// ("copy" on a temporary offscreen textarea) is deprecated but still the
-// one copy path that works over plain http, so it's the fallback rather
-// than the primary method's error path.
+// localhost). Over plain http (typical on Tailscale) it is unavailable,
+// and iPhone Safari/Orion will not copy a textarea parked off-screen.
+// copyText tries writeText, then an in-viewport textarea and
+// execCommand("copy"). Share links and the preview's Copy button both
+// go through here.
 async function copyToClipboard(text) {
-  if (navigator.clipboard && window.isSecureContext) {
-    try {
-      await navigator.clipboard.writeText(text);
-      return true;
-    } catch (err) {
-      // fall through to the legacy method below
-    }
-  }
-  const textarea = document.createElement("textarea");
-  textarea.value = text;
-  textarea.style.position = "fixed";
-  textarea.style.opacity = "0";
-  document.body.appendChild(textarea);
-  textarea.focus();
-  textarea.select();
-  let copied = false;
-  try {
-    copied = document.execCommand("copy");
-  } catch (err) {
-    copied = false;
-  }
-  document.body.removeChild(textarea);
-  return copied;
+  return copyText(text);
 }
 
 // Briefly flashes the publish button to confirm the copy, then restores its
@@ -7708,22 +7689,62 @@ function downloadFilenameFor(filename) {
   return /\.[A-Za-z0-9]+$/.test(filename) ? filename : `${filename}.md`;
 }
 
-// Downloads the editor's current buffer verbatim - exactly what the
-// preview is rendering, unsaved edits included, same as printing to PDF
-// above does. A plain Blob + temporary <a download> click, not a fetch to
-// some backend endpoint - there's nothing server-side to ask for, the
-// content is already sitting right here in the editor.
+// The Markdown the preview is showing right now. Split view follows the
+// Auto/Left/Right pin (see previewMarkdownDownload); otherwise it is the
+// primary editor. The text is that buffer, unsaved edits included.
+// Download as MD and Copy to clipboard both call this so they stay the
+// same document.
+function markdownDownloadForPreview() {
+  return previewMarkdownDownload({
+    open: !!active,
+    pin: previewPin,
+    splitOpen: splitViewOpen(),
+    focused: focusedEditorPane,
+    pair: conversationPairOpen(),
+    hasRight: !!activeB,
+    leftText: el.editor.value,
+    rightText: el.editorB.value,
+    leftFilename: active ? active.filename : "",
+    rightFilename: activeB ? activeB.filename : "",
+  });
+}
+
+// Saves that Markdown. A plain Blob + temporary <a download> click, not a
+// fetch - the content is already in the editor the preview is following.
 function downloadActiveAsMarkdown() {
-  if (!active) return;
-  const blob = new Blob([el.editor.value], { type: "text/markdown;charset=utf-8" });
+  const doc = markdownDownloadForPreview();
+  if (!doc) return;
+  const blob = new Blob([doc.text], { type: "text/markdown;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = downloadFilenameFor(active.filename);
+  link.download = downloadFilenameFor(doc.filename);
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
+}
+
+const COPY_FEEDBACK_MS = 1500;
+let copyFeedbackTimer = 0;
+
+function restoreCopyMarkdownButton() {
+  copyFeedbackTimer = 0;
+  el.copyMdBtn.textContent = t("preview.copyMd");
+  el.copyMdBtn.title = t("preview.copyMdTitle");
+}
+
+function flashCopyMarkdownButton(messageKey) {
+  if (copyFeedbackTimer) window.clearTimeout(copyFeedbackTimer);
+  el.copyMdBtn.textContent = t(messageKey);
+  el.copyMdBtn.title = t(messageKey);
+  copyFeedbackTimer = window.setTimeout(restoreCopyMarkdownButton, COPY_FEEDBACK_MS);
+}
+
+async function copyPreviewMarkdown() {
+  const doc = markdownDownloadForPreview();
+  if (!doc) return;
+  flashCopyMarkdownButton((await copyToClipboard(doc.text)) ? "preview.copyMdDone" : "preview.copyMdFailed");
 }
 
 // An "exchange" document whose last recognized heading is a user heading
@@ -8798,6 +8819,7 @@ el.editorRendered.addEventListener("click", (e) => collapseThreadOnClick(e, el.e
 el.editorRendered.addEventListener("click", openInternalDocumentLink);
 el.exportPdfBtn.addEventListener("click", exportPreviewToPdf);
 el.downloadMdBtn.addEventListener("click", downloadActiveAsMarkdown);
+el.copyMdBtn.addEventListener("click", copyPreviewMarkdown);
 el.editorScrollTopBtn.addEventListener("click", () => el.editor.scrollTo({ top: 0, behavior: "smooth" }));
 el.editorScrollBottomBtn.addEventListener("click", () => {
   streamFollow.editor = true;

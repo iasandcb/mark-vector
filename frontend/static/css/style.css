@@ -1216,6 +1216,13 @@ body.row-dragging {
   flex-shrink: 0;
 }
 
+/* The label is a full phrase (Copy to clipboard / 클립보드에 복사 /
+   クリップボードにコピー), so it stays one line and wraps with the row
+   instead of breaking inside the button. */
+#copy-md-btn {
+  white-space: nowrap;
+}
+
 .tool-status {
   padding: 3px 10px;
   border-radius: 999px;
