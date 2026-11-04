@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date
 
 import pytest
 
@@ -172,8 +172,7 @@ def test_two_drafts_created_before_either_is_sent_get_distinct_numbers(isolated_
 
 
 class TestDailyLogDraftNaming:
-    """A folder used as a daily log - its last document named
-    "YYYY-MM-DD.md" - has create_draft name the new one after today instead
+    """A folder containing date-named documents names new drafts for today instead
     of the usual NNNN.md numbering (see storage._next_draft_filename)."""
 
     def test_new_document_is_named_for_today(self, isolated_data_dir, pid):
@@ -186,9 +185,9 @@ class TestDailyLogDraftNaming:
         draft = storage.create_draft(pid, conv["id"], today=date(2026, 1, 20))
         assert draft["filename"] == "2026-01-20.md"
 
-        # A second one the same day still needs a name: the day after the last.
+        # A second one the same day still needs a unique name.
         again = storage.create_draft(pid, conv["id"], today=date(2026, 1, 20))
-        assert again["filename"] == "2026-01-21.md"
+        assert again["filename"] == "2026-01-20-2.md"
 
     def test_today_defaults_to_the_servers_date(self, isolated_data_dir, pid):
         conv = storage.create_conversation(pid)
@@ -197,7 +196,7 @@ class TestDailyLogDraftNaming:
         storage.rename_document(pid, conv["id"], filename, "2026-01-05.md")
         assert storage.create_draft(pid, conv["id"])["filename"] == f"{date.today():%Y-%m-%d}.md"
 
-    def test_continues_from_the_last_dated_document(self, isolated_data_dir, pid):
+    def test_collision_keeps_today(self, isolated_data_dir, pid):
         conv = storage.create_conversation(pid)
         storage.save_document(pid, conv["id"], storage.create_draft(pid, conv["id"])["filename"], "")
         # Rename the fresh 0001.md draft into today's dated entry by hand -
@@ -207,17 +206,17 @@ class TestDailyLogDraftNaming:
         today_name = f"{today:%Y-%m-%d}.md"
         storage.rename_document(pid, conv["id"], "0001.md", today_name)
 
-        # Today's entry exists already, so the next one is tomorrow's.
+        # Today's entry exists already, so keep today and add a counter.
         draft = storage.create_draft(pid, conv["id"], today=today)
 
-        assert draft["filename"] == f"{today + timedelta(days=1):%Y-%m-%d}.md"
+        assert draft["filename"] == "2026-01-05-2.md"
 
     def test_ignores_a_folder_not_yet_all_dated_documents(self, isolated_data_dir, pid):
         conv = storage.create_conversation(pid)
         draft = storage.create_draft(pid, conv["id"])
         assert draft["filename"] == "0001.md"
 
-    def test_only_looks_at_the_last_filename_not_every_dated_one(self, isolated_data_dir, pid):
+    def test_collision_with_multiple_dates_keeps_today(self, isolated_data_dir, pid):
         conv = storage.create_conversation(pid)
         earlier = date(2026, 1, 1)
         later = date(2026, 1, 10)
@@ -226,11 +225,10 @@ class TestDailyLogDraftNaming:
             storage.save_document(pid, conv["id"], filename, "")
             storage.rename_document(pid, conv["id"], filename, f"{d:%Y-%m-%d}.md")
 
-        # `later` is the last file and today's is taken (it is `later`):
-        # the day after the last, not the day after some earlier one.
+        # Today is taken, so use a counter instead of changing the date.
         draft = storage.create_draft(pid, conv["id"], today=later)
 
-        assert draft["filename"] == f"{later + timedelta(days=1):%Y-%m-%d}.md"
+        assert draft["filename"] == "2026-01-10-2.md"
 
     def test_a_dated_filename_does_not_pollute_plain_numbering_in_the_same_folder(self, isolated_data_dir, pid):
         # A dated file's leading digits (its year) must never be mistaken
@@ -1242,3 +1240,27 @@ def test_legacy_promoted_project_root_is_recognized(pid):
 def test_normal_same_name_folder_is_not_a_project_root(pid):
     storage.create_conversation(pid, storage.get_project(pid)["title"])
     assert next(p for p in storage.list_projects() if p["id"] == pid)["root_folder_id"] is None
+
+
+@pytest.mark.parametrize(("names", "expected"), [
+    (["2026-11-01.md", "zzz.md", "0001.md"], "2026-11-04.md"),
+    (["20261101.md", "notes.md"], "20261104.md"),
+    (["journal_20261101_notes.md", "journal_20261102_notes.md"], "journal_20261104_notes.md"),
+    (["daily-2026_11_01-log.md"], "daily-2026_11_04-log.md"),
+    (["2026.11.01.md"], "2026.11.04.md"),
+    (["2026-02-30.md", "20261301.md", "notes.md"], "20261302.md"),
+    (["2026-11-01.md", "20261102.md", "20261103.md"], "20261104.md"),
+    (["2026-11-01.md", "20261102.md"], "20261104.md"),
+    (["20261101.md", "20261104.md", "20261104-2.md"], "20261104-3.md"),
+    (["log-20261101-end.md", "log-20261104-end.md", "log-20261104-end-2.md"], "log-20261104-end-3.md"),
+])
+def test_draft_infers_date_pattern_from_all_documents(isolated_data_dir, pid, names, expected):
+    conv = storage.create_conversation(pid)
+    folder = isolated_data_dir / "projects" / pid / "conversations" / conv["id"]
+    for name in names:
+        (folder / name).write_text("existing content", encoding="utf-8")
+    draft = storage.create_draft(pid, conv["id"], today=date(2026, 11, 4))
+    assert draft["filename"] == expected
+    assert draft["content"] == ""
+    for name in names:
+        assert (folder / name).read_text(encoding="utf-8") == "existing content"
