@@ -161,7 +161,7 @@ export function listDocuments(projectId, id) {
 }
 
 export function createDraft(projectId, id) {
-  // Today as this browser sees it: a folder of YYYY-MM-DD.md documents
+  // Today as this browser sees it: a folder of date-named documents
   // names its next one after it (see storage._next_draft_filename), and the
   // server's own clock is UTC.
   const now = new Date();

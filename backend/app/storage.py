@@ -2,7 +2,7 @@ import json
 import re
 import shutil
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from .config import settings
@@ -1093,33 +1093,48 @@ def revert_turn_to_draft(project_id: str, conv_id: str, filename: str) -> dict:
     return {"filename": filename, "role": "draft", "turn_id": None, "content": content, "updated_at": _now()}
 
 
-_DATE_FILENAME_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})\.md$")
+# Year-first calendar dates, with the separator captured verbatim. Markdown
+# is the document extension supported by list_documents and filename validation.
+_DATE_FILENAME_RE = re.compile(
+    r"(?<![0-9])(?P<year>[0-9]{4})(?P<sep>[-_.]?)(?P<month>[0-9]{2})"
+    r"(?P=sep)(?P<day>[0-9]{2})(?![0-9])"
+)
 
 
 def _next_draft_filename(meta: dict, conv_dir: Path, today: date) -> str:
-    """A folder used as a daily log/journal - its last document named
-    "YYYY-MM-DD.md" - gets a new document named for today instead of the
-    usual NNNN.md numbering, so "새 문서" starts today's entry whatever day
-    the last one was written. When today's already exists, it continues
-    with the day after the last entry instead (a second entry "for today"
-    still needs a name of its own). Only the *last* filename (plain alphabetical order,
-    same as list_documents' own sort - system.md is never date-named so
-    never interferes) is checked, not every file in the folder: a folder
-    that's mixed NNNN.md and date-named documents, or has gaps, should only
-    ever continue from whatever's actually most recent, not the first date
-    that happens to match. Falls back to the plain numbered scheme when the
-    last file isn't date-named, or (this should only ever matter for a
-    concurrent double-call) when both candidate names are somehow taken
-    already."""
-    existing = sorted(p.name for p in conv_dir.glob("*.md") if p.name != SYSTEM_FILENAME)
-    if existing:
-        match = _DATE_FILENAME_RE.match(existing[-1])
-        if match:
-            last_date = date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
-            for candidate in (today, last_date + timedelta(days=1)):
-                next_filename = f"{candidate:%Y-%m-%d}.md"
-                if not (conv_dir / next_filename).exists():
-                    return next_filename
+    """Use the most common valid date pattern, even in mixed-name folders.
+
+    Ties prefer the pattern with the latest calendar date, then lexical
+    order for determinism. Collision counters do not form a new pattern.
+    """
+    patterns = {}
+    for path in sorted(conv_dir.glob("*.md")):
+        if not path.is_file() or path.name == SYSTEM_FILENAME:
+            continue
+        match = _DATE_FILENAME_RE.search(path.stem)
+        if not match:
+            continue
+        try:
+            day = date(int(match["year"]), int(match["month"]), int(match["day"]))
+        except ValueError:
+            continue
+        prefix = path.stem[:match.start()]
+        suffix = path.stem[match.end():]
+        suffix = re.sub(r"-(?:[2-9]|[1-9][0-9]+)$", "", suffix)
+        pattern = (prefix, match["sep"], suffix, path.suffix)
+        count, latest = patterns.get(pattern, (0, day))
+        patterns[pattern] = (count + 1, max(latest, day))
+    if patterns:
+        prefix, sep, suffix, extension = max(
+            patterns, key=lambda pattern: (*patterns[pattern], pattern)
+        )
+        stem = f"{prefix}{today.year:04d}{sep}{today.month:02d}{sep}{today.day:02d}{suffix}"
+        filename = f"{stem}{extension}"
+        counter = 2
+        while (conv_dir / filename).exists():
+            filename = f"{stem}-{counter}{extension}"
+            counter += 1
+        return filename
     return f"{_next_document_index(meta, conv_dir):04d}.md"
 
 
@@ -1129,7 +1144,7 @@ def create_draft(project_id: str, conv_id: str, today: date | None = None) -> di
     draft's filename never has to change when it's later sent - it's simply
     registered as a turn in place, still under the same number. See
     _next_draft_filename for the one exception, a folder already in
-    "YYYY-MM-DD.md per document" form - `today` is the date to name the new
+    date-based naming form - `today` is the date to name the new
     entry after there (the caller's own calendar day; this server's if not
     given)."""
     conv_dir = _conversations_dir(project_id) / conv_id
