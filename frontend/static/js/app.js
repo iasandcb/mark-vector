@@ -2651,7 +2651,7 @@ function updateInlineCompleteButton() {
 //     audio goes to the browser vendor's recognizer, not to this app.
 //     This stays the default. It only hears the microphone, so a file
 //     never uses it.
-//   - Soniox realtime (soniox-stt.js, stt-rt-v5) when Web Speech does not
+//   - Soniox realtime (soniox-stt.js, stt-rt-v6) when Web Speech does not
 //     work, when a file is played with the built-in choice, and whenever
 //     the select says so. Needs SONIOX_API_KEY. About $0.12 per hour.
 //     The long-lived key stays on the server; the page gets a temporary one.

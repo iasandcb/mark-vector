@@ -160,7 +160,7 @@ uv run python -m app.chatgpt_auth status  # 확인 / logout: 세션 해지
 |---|---|---|
 | 🌐 내장 | Web Speech API가 되는 브라우저의 **마이크**(데스크톱 크롬·엣지, 사파리, 안드로이드 크롬). 파일 재생에는 쓰이지 않습니다. | 무료 |
 | ⚡ OpenAI | 실시간 전사 `gpt-live-transcribe`(WebRTC). ⚡를 직접 고른 마이크와 파일. Web Speech도 Soniox도 없을 때의 다음 선택. | 켜 둔 동안 분당 약 $0.017 (`OPENAI_API_KEY`) |
-| ✦ Soniox | 실시간 전사 `stt-rt-v5`(WebSocket). Web Speech가 안 되는 마이크의 기본, 그리고 🌐일 때 파일의 기본. `SONIOX_API_KEY`가 있을 때만 나옵니다. | 실시간 시간당 약 $0.12 |
+| ✦ Soniox | 실시간 전사 `stt-rt-v6`(WebSocket). Web Speech가 안 되는 마이크의 기본, 그리고 🌐일 때 파일의 기본. `SONIOX_API_KEY`가 있을 때만 나옵니다. | 실시간 시간당 약 $0.12 |
 
 `SONIOX_API_KEY`가 없으면 Soniox는 선택지에 나오지 않고, 동작은 이전과 같습니다. 그 키는 서버에만 있습니다. 받아쓰기를 시작하면 서버가 Soniox에 짧은 임시 키를 받아 브라우저에 넘깁니다(`POST /api/stt/soniox/key`, `usage_type`은 `transcribe_websocket`, 일회용, 새 연결은 60초 안에, 한 세션은 최대 3시간). 브라우저는 그 키로 `wss://stt-rt.soniox.com/transcribe-websocket`에 직접 붙습니다. 오디오는 이 서버를 거치지 않습니다(`backend/app/routers/stt.py`, `frontend/static/js/soniox-stt.js`). 받아쓰기 언어가 한국어면 힌트는 `ko`이고, EN/JA를 고르면 그 언어입니다. 중간 결과는 그때그때 바꿔 보여주고, 확정된 토큰만 한 번 이어 붙입니다.
 
