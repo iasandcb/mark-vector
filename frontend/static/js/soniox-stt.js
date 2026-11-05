@@ -1,4 +1,4 @@
-// Soniox realtime speech-to-text (stt-rt-v5) over a raw WebSocket. The
+// Soniox realtime speech-to-text (stt-rt-v6) over a raw WebSocket. The
 // page has no build step, so this does not use @soniox/client. The
 // long-lived key stays on the server; /api/stt/soniox/key mints a
 // temporary one, sent as the websocket subprotocol

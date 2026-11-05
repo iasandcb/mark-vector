@@ -6,7 +6,7 @@
 // current non-final hypothesis (replaced every message). Joining token.text
 // as-is keeps the space tokens Soniox sends on their own.
 
-export const SONIOX_MODEL = "stt-rt-v5";
+export const SONIOX_MODEL = "stt-rt-v6";
 export const SONIOX_WS_URL = "wss://stt-rt.soniox.com/transcribe-websocket";
 export const SONIOX_SAMPLE_RATE = 16000;
 // Stay under Soniox's context cap (~10k characters / ~8k tokens).

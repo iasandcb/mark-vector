@@ -2,7 +2,7 @@
 //
 // `builtin` is the browser's Web Speech API. It only hears the microphone,
 // so a file never uses it. `openai` is gpt-live-transcribe (the value
-// previously stored as "realtime"). `soniox` is stt-rt-v5. Stored "realtime"
+// previously stored as "realtime"). `soniox` is stt-rt-v6. Stored "realtime"
 // still means OpenAI, so a browser that picked it before keeps that choice.
 // The default stored value is builtin. Where Web Speech does not work, the
 // microphone uses Soniox if that key exists, and OpenAI only otherwise.

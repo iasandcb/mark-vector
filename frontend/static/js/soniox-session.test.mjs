@@ -107,7 +107,7 @@ test("finals that only confirm the phrase already on screen are dropped once", (
 
 test("the start message hints Korean by default and never carries an api key", () => {
   const config = sonioxStartConfig({ language: "ko", terms: ["수식시작", "분의"] });
-  assert.equal(config.model, "stt-rt-v5");
+  assert.equal(config.model, "stt-rt-v6");
   assert.equal(config.audio_format, "pcm_s16le");
   assert.equal(config.sample_rate, 16000);
   assert.deepEqual(config.language_hints, ["ko"]);
