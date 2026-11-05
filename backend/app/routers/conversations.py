@@ -48,6 +48,21 @@ def create_conversation(project_id: str, req: CreateConversationRequest):
         raise HTTPException(status_code=404, detail="Project or parent folder not found")
 
 
+@router.get("/suggest-title")
+def suggest_conversation_title(
+    project_id: str, parent_id: str | None = None, today: str | None = None
+):
+    # Match draft naming: use the browser's calendar day when supplied.
+    try:
+        day = date.fromisoformat(today) if today else None
+    except ValueError:
+        day = None
+    try:
+        return {"title": storage.suggest_conversation_title(project_id, parent_id, today=day)}
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Project or parent folder not found")
+
+
 @router.get("/{conv_id}")
 def get_conversation(project_id: str, conv_id: str):
     try:

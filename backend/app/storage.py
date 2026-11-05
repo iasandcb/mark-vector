@@ -1093,46 +1093,77 @@ def revert_turn_to_draft(project_id: str, conv_id: str, filename: str) -> dict:
     return {"filename": filename, "role": "draft", "turn_id": None, "content": content, "updated_at": _now()}
 
 
-# Year-first calendar dates, with the separator captured verbatim. Markdown
-# is the document extension supported by list_documents and filename validation.
+# Shared by document filenames (without .md) and conversation titles.
 _DATE_FILENAME_RE = re.compile(
     r"(?<![0-9])(?P<year>[0-9]{4})(?P<sep>[-_.]?)(?P<month>[0-9]{2})"
     r"(?P=sep)(?P<day>[0-9]{2})(?![0-9])"
 )
 
 
-def _next_draft_filename(meta: dict, conv_dir: Path, today: date) -> str:
-    """Use the most common valid date pattern, even in mixed-name folders.
+def _date_name_stem(names: list[str], today: date) -> str | None:
+    """Infer a valid date pattern, preserving its prefix and suffix.
 
-    Ties prefer the pattern with the latest calendar date, then lexical
-    order for determinism. Collision counters do not form a new pattern.
+    Compact dates take precedence over hyphenated dates when both occur.
+    Otherwise prefer frequency, latest calendar date, then lexical order.
+    Collision counters do not form a new pattern.
     """
     patterns = {}
-    for path in sorted(conv_dir.glob("*.md")):
-        if not path.is_file() or path.name == SYSTEM_FILENAME:
-            continue
-        match = _DATE_FILENAME_RE.search(path.stem)
+    for name in names:
+        match = _DATE_FILENAME_RE.search(name)
         if not match:
             continue
         try:
             day = date(int(match["year"]), int(match["month"]), int(match["day"]))
         except ValueError:
             continue
-        prefix = path.stem[:match.start()]
-        suffix = path.stem[match.end():]
+        prefix = name[:match.start()]
+        suffix = name[match.end():]
         suffix = re.sub(r"-(?:[2-9]|[1-9][0-9]+)$", "", suffix)
-        pattern = (prefix, match["sep"], suffix, path.suffix)
+        pattern = (prefix, match["sep"], suffix)
         count, latest = patterns.get(pattern, (0, day))
         patterns[pattern] = (count + 1, max(latest, day))
-    if patterns:
-        prefix, sep, suffix, extension = max(
-            patterns, key=lambda pattern: (*patterns[pattern], pattern)
-        )
-        stem = f"{prefix}{today.year:04d}{sep}{today.month:02d}{sep}{today.day:02d}{suffix}"
-        filename = f"{stem}{extension}"
+    if not patterns:
+        return None
+    if any(pattern[1] == "" for pattern in patterns):
+        patterns = {pattern: stats for pattern, stats in patterns.items() if pattern[1] != "-"}
+    prefix, sep, suffix = max(patterns, key=lambda pattern: (*patterns[pattern], pattern))
+    return f"{prefix}{today.year:04d}{sep}{today.month:02d}{sep}{today.day:02d}{suffix}"
+
+
+def suggest_conversation_title(
+    project_id: str, parent_id: str | None = None, today: date | None = None
+) -> str:
+    """Suggest a date title from logical siblings, or an empty dialog value."""
+    if parent_id is not None:
+        _read_meta(project_id, parent_id)
+    titles = [
+        conv["title"] for conv in list_conversations(project_id)
+        if conv["parent_id"] == parent_id
+    ]
+    stem = _date_name_stem(titles, today or date.today())
+    if stem is None:
+        return ""
+    existing = set(titles)
+    title = stem
+    counter = 2
+    while title in existing:
+        title = f"{stem}-{counter}"
+        counter += 1
+    return title
+
+
+def _next_draft_filename(meta: dict, conv_dir: Path, today: date) -> str:
+    """Use the shared date pattern preference, or ordinary NNNN.md numbering."""
+    names = [
+        path.stem for path in conv_dir.glob("*.md")
+        if path.is_file() and path.name != SYSTEM_FILENAME
+    ]
+    stem = _date_name_stem(names, today)
+    if stem is not None:
+        filename = f"{stem}.md"
         counter = 2
         while (conv_dir / filename).exists():
-            filename = f"{stem}-{counter}{extension}"
+            filename = f"{stem}-{counter}.md"
             counter += 1
         return filename
     return f"{_next_document_index(meta, conv_dir):04d}.md"
