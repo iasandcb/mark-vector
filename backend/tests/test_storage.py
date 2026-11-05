@@ -1251,6 +1251,8 @@ def test_normal_same_name_folder_is_not_a_project_root(pid):
     (["2026-02-30.md", "20261301.md", "notes.md"], "20261302.md"),
     (["2026-11-01.md", "20261102.md", "20261103.md"], "20261104.md"),
     (["2026-11-01.md", "20261102.md"], "20261104.md"),
+    (["20261101.md", "2026-11-03.md"], "20261104.md"),
+    (["20261101.md", "2026-11-02.md", "2026-11-03.md"], "20261104.md"),
     (["20261101.md", "20261104.md", "20261104-2.md"], "20261104-3.md"),
     (["log-20261101-end.md", "log-20261104-end.md", "log-20261104-end-2.md"], "log-20261104-end-3.md"),
 ])
@@ -1264,3 +1266,57 @@ def test_draft_infers_date_pattern_from_all_documents(isolated_data_dir, pid, na
     assert draft["content"] == ""
     for name in names:
         assert (folder / name).read_text(encoding="utf-8") == "existing content"
+
+
+@pytest.mark.parametrize(("titles", "expected"), [
+    ([], ""),
+    (["Notes", "2026-02-30", "20261301", "1202611019"], ""),
+    (["Notes", "2026-11-01"], "2026-11-05"),
+    (["20261101"], "20261105"),
+    (["journal_2026-11-01_notes"], "journal_2026-11-05_notes"),
+    (["journal_20261101_notes"], "journal_20261105_notes"),
+    (["20261101", "2026-11-04"], "20261105"),
+    (["20261101", "2026-11-03", "2026-11-04"], "20261105"),
+    (["20261105", "20261105-2", "20261105-3"], "20261105-4"),
+    (["log-20261105-end", "log-20261105-end-2"], "log-20261105-end-3"),
+    (["a-20261101", "a-20261102", "b-20261104"], "a-20261105"),
+    (["a-20261101", "b-20261104"], "b-20261105"),
+])
+def test_suggest_conversation_title(pid, titles, expected):
+    for title in titles:
+        storage.create_conversation(pid, title)
+    before = storage.list_conversations(pid)
+    assert storage.suggest_conversation_title(pid, today=date(2026, 11, 5)) == expected
+    assert storage.list_conversations(pid) == before
+
+
+def test_title_suggestion_uses_only_logical_siblings_in_same_project(pid):
+    parent = storage.create_conversation(pid, "Parent")["id"]
+    other_parent = storage.create_conversation(pid, "Other")["id"]
+    storage.create_conversation(pid, "20261105")
+    storage.create_conversation(pid, "20261105", parent_id=other_parent)
+    other_project = storage.create_project("Other project")["id"]
+    storage.create_conversation(other_project, "20261105")
+    storage.create_conversation(pid, "2026-11-01", parent_id=parent)
+    storage.create_conversation(pid, "2026-11-05", parent_id=parent)
+    nested = storage.create_conversation(pid, "Nested", parent_id=parent)["id"]
+    storage.create_conversation(pid, "20261105", parent_id=nested)
+
+    assert storage.suggest_conversation_title(pid, parent, date(2026, 11, 5)) == "2026-11-05-2"
+    assert storage.suggest_conversation_title(pid, today=date(2026, 11, 5)) == "20261105-2"
+
+
+def test_title_suggestion_supports_legacy_top_level_folders(pid):
+    conv = storage.create_conversation(pid, "20261101")
+    del conv["parent_id"]
+    storage._write_meta(pid, conv["id"], conv)
+    assert storage.suggest_conversation_title(pid, today=date(2026, 11, 5)) == "20261105"
+
+
+def test_title_suggestion_defaults_to_server_date_and_validates_parent(pid):
+    storage.create_conversation(pid, "20261101")
+    assert storage.suggest_conversation_title(pid) == f"{date.today():%Y%m%d}"
+    with pytest.raises(FileNotFoundError):
+        storage.suggest_conversation_title(pid, "missing")
+    with pytest.raises(FileNotFoundError):
+        storage.suggest_conversation_title("missing")

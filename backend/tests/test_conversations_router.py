@@ -450,3 +450,45 @@ def test_promote_folder_endpoint(isolated_data_dir):
         assert result["project"]["title"] == "promoted"
         assert result["folder_ids"] == [folder]
         assert client.post(f"/api/projects/{pid}/conversations/{folder}/promote").status_code == 404
+
+
+def test_suggest_folder_title_endpoint(isolated_data_dir, client):
+    pid = storage.create_project("test")["id"]
+    url = f"/api/projects/{pid}/conversations/suggest-title"
+    assert client.get(url).json() == {"title": ""}
+    parent = storage.create_conversation(pid, "Parent")["id"]
+    storage.create_conversation(pid, "20261101")
+    storage.create_conversation(pid, "log-2026-11-01-end", parent_id=parent)
+    storage.create_conversation(pid, "log-2026-11-05-end", parent_id=parent)
+
+    response = client.get(url, params={"today": "2026-11-05"})
+    assert response.status_code == 200
+    assert response.json() == {"title": "20261105"}
+    response = client.get(url, params={"today": "2026-11-05", "parent_id": parent})
+    assert response.status_code == 200
+    assert response.json() == {"title": "log-2026-11-05-end-2"}
+    # The suggestion is editable and goes through the ordinary create API.
+    created = client.post(url.removesuffix("/suggest-title"), json={
+        "title": response.json()["title"], "parent_id": parent,
+    })
+    assert created.status_code == 200
+    assert created.json()["title"] == "log-2026-11-05-end-2"
+    assert created.json()["parent_id"] == parent
+    blank = client.post(url.removesuffix("/suggest-title"), json={})
+    assert blank.json()["title"] == "Untitled"
+    assert client.get(url, params={"parent_id": "missing"}).status_code == 404
+    assert client.get("/api/projects/missing/conversations/suggest-title").status_code == 404
+
+
+@pytest.mark.parametrize("today", [None, "invalid", "2026-02-30"])
+def test_suggest_folder_title_date_fallback(isolated_data_dir, client, today):
+    from datetime import date
+
+    pid = storage.create_project("test")["id"]
+    storage.create_conversation(pid, "20261101")
+    response = client.get(
+        f"/api/projects/{pid}/conversations/suggest-title",
+        params={"today": today} if today else {},
+    )
+    assert response.status_code == 200
+    assert response.json() == {"title": f"{date.today():%Y%m%d}"}

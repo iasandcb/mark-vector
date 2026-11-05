@@ -118,6 +118,12 @@ export function listConversations(projectId) {
   return fetch(`${BASE}/projects/${projectId}/conversations`).then(asJson);
 }
 
+export function suggestConversationTitle(projectId, parentId = null) {
+  const params = new URLSearchParams({ today: localToday() });
+  if (parentId !== null) params.set("parent_id", parentId);
+  return fetch(`${BASE}/projects/${projectId}/conversations/suggest-title?${params}`).then(asJson);
+}
+
 export function createConversation(projectId, title, parentId = null) {
   return fetch(`${BASE}/projects/${projectId}/conversations`, {
     method: "POST",
@@ -160,13 +166,16 @@ export function listDocuments(projectId, id) {
   return fetch(`${BASE}/projects/${projectId}/conversations/${id}/documents`).then(asJson);
 }
 
+function localToday() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+}
+
 export function createDraft(projectId, id) {
   // Today as this browser sees it: a folder of date-named documents
   // names its next one after it (see storage._next_draft_filename), and the
   // server's own clock is UTC.
-  const now = new Date();
-  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-  return fetch(`${BASE}/projects/${projectId}/conversations/${id}/documents?today=${today}`, { method: "POST" }).then(asJson);
+  return fetch(`${BASE}/projects/${projectId}/conversations/${id}/documents?today=${localToday()}`, { method: "POST" }).then(asJson);
 }
 
 export function createConversationFile(projectId, id, filename) {

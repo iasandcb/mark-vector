@@ -8699,7 +8699,8 @@ async function createProject() {
 // turn (see the send toolbar, shown once a sendable document is open), so
 // creating a session now only needs a title.
 async function createSession(projectId) {
-  const input = await requestWorkspaceName(t("prompt.createFolder"), "");
+  const { title } = await api.suggestConversationTitle(projectId);
+  const input = await requestWorkspaceName(t("prompt.createFolder"), title);
   if (input === null) return;
   const meta = await api.createConversation(projectId, input.trim() || undefined);
   await refreshProjectSessions(projectId);
@@ -8719,7 +8720,8 @@ async function createSession(projectId) {
 // created under, so it's immediately visible instead of hiding inside a
 // still-collapsed parent row.
 async function createSubfolder(projectId, parentId) {
-  const input = await requestWorkspaceName(t("prompt.createFolder"), "");
+  const { title } = await api.suggestConversationTitle(projectId, parentId);
+  const input = await requestWorkspaceName(t("prompt.createFolder"), title);
   if (input === null) return;
   const meta = await api.createConversation(projectId, input.trim() || undefined, parentId);
   await refreshProjectSessions(projectId);
