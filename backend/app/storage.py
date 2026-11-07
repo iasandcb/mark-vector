@@ -914,22 +914,75 @@ def _ends_with_user_message(content: str) -> bool:
     return bool(messages) and messages[-1]["role"] == "user"
 
 
+def _line_diff(before: list[str], after: list[str]) -> list[tuple[str, str]]:
+    n, m = len(before), len(after)
+    scores = [[0] * (m + 1) for _ in range(n + 1)]
+    for i in range(n - 1, -1, -1):
+        for j in range(m - 1, -1, -1):
+            if before[i] == after[j]:
+                scores[i][j] = scores[i + 1][j + 1] + 1
+            else:
+                scores[i][j] = max(scores[i + 1][j], scores[i][j + 1])
+    ops: list[tuple[str, str]] = []
+    i = j = 0
+    while i < n and j < m:
+        if before[i] == after[j]:
+            ops.append(("equal", after[j]))
+            i, j = i + 1, j + 1
+        elif scores[i + 1][j] >= scores[i][j + 1]:
+            ops.append(("delete", before[i]))
+            i += 1
+        else:
+            ops.append(("insert", after[j]))
+            j += 1
+    ops.extend(("delete", line) for line in before[i:])
+    ops.extend(("insert", line) for line in after[j:])
+    return ops
+
+
+def separate_history_and_question(baseline: str, edited: str) -> tuple[str, str]:
+    """Keep an edit inside earlier rounds in those rounds.
+
+    Lines added after the original document, or past a rewritten tail of
+    the same length, are the new question. The question is never the whole
+    buffer, so a middle edit is not copied into a new user section."""
+    base = (baseline or "").rstrip("\n")
+    text = (edited or "").rstrip("\n")
+    if text == base:
+        return base, ""
+    # A new question starts on its own line. Characters added to the last
+    # existing line are an edit of that line, not the question.
+    if base and text.startswith(base):
+        rest = text[len(base):]
+        if rest == "" or rest.startswith("\n"):
+            return base, rest.strip()
+    before = base.split("\n") if base else []
+    after = text.split("\n") if text else []
+    ops = _line_diff(before, after)
+    last_equal = max((i for i, (kind, _) in enumerate(ops) if kind == "equal"), default=-1)
+    history = [line for kind, line in ops[: last_equal + 1] if kind != "delete"]
+    tail = ops[last_equal + 1 :]
+    removed = sum(1 for kind, _ in tail if kind == "delete")
+    added = [line for kind, line in tail if kind == "insert"]
+    history.extend(added[:removed])
+    return "\n".join(history), "\n".join(added[removed:]).strip()
+
+
 def prepare_conversation_continuation(existing: str, submitted: str, language: str) -> str:
     """Make a follow-up on a `.c.md` conversation file end in one pending
-    user section. The editor often holds the previous rounds plus a new
-    question typed underneath, with no heading of its own yet. That tail
-    becomes `## 사용자` (or the sender's language) and a blank line, then
-    the question. A submission that already ends in a user section is kept
-    so retry_exchange can renormalize it. Nothing is deleted."""
+    user section. An edit in the middle of earlier rounds stays there.
+    Text added after those rounds becomes `## 사용자` (or the sender's
+    language), a blank line, and the question. A submission that already
+    ends in a user section is kept so retry_exchange can renormalize it.
+    A buffer with no new question is refused, and the file is left as it
+    was. Nothing is deleted."""
     if _ends_with_user_message(submitted):
         return submitted
-    base = existing.rstrip("\n")
-    if submitted.startswith(base):
-        question = submitted[len(base):].strip()
-        if question:
-            section = _build_user_only_content(question, language)
-            return f"{base}\n\n{section}" if base else section
-    raise ValueError("Conversation file has no pending question to answer")
+    history, question = separate_history_and_question(existing, submitted)
+    if not question:
+        raise ValueError("Conversation file has no pending question to answer")
+    section = _build_user_only_content(question, language)
+    return f"{history}\n\n{section}" if history else section
 
 
 def bind_conversation_send(

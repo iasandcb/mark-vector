@@ -347,6 +347,87 @@ def test_split_conversation_file_keeps_its_name_and_korean_headings(isolated_dat
     assert not (folder / "0002.md").exists()
 
 
+def test_middle_edit_then_submit_does_not_duplicate_conversation_history(
+    isolated_data_dir, client, recording_provider
+):
+    pid = storage.create_project("weekly")["id"]
+    conv_id = storage.create_conversation(pid, "weekly")["id"]
+    folder = isolated_data_dir / "projects" / pid / "conversations" / conv_id
+    dated = storage.create_draft(pid, conv_id)
+    storage.rename_document(pid, conv_id, dated["filename"], "2026-11-04.md")
+    storage.save_document(pid, conv_id, "2026-11-04.md", "문서 본문")
+    storage.create_conversation_file(pid, conv_id, "2026-11-04.md")
+    (folder / "0001.md").write_text("기존 번호 파일\n", encoding="utf-8")
+    opened = _post_message(client, pid, conv_id, {
+        "content": "이번 주 뭐가 달라졌지",
+        "conversation_filename": "2026-11-04.c.md",
+    })
+    assert opened.status_code == 200
+    _read_ndjson(opened)
+    original = (folder / "2026-11-04.c.md").read_text(encoding="utf-8")
+    names_before = sorted(path.name for path in folder.glob("*.md"))
+
+    edited_only = original.replace("이번 주 뭐가 달라졌지", "이번 주 뭐가 달라졌지?", 1)
+    refused = _post_message(client, pid, conv_id, {
+        "content": edited_only,
+        "conversation_filename": "2026-11-04.c.md",
+    })
+    assert refused.status_code == 400
+    assert (folder / "2026-11-04.c.md").read_text(encoding="utf-8") == original
+    assert sorted(path.name for path in folder.glob("*.md")) == names_before
+
+    edited = edited_only.rstrip("\n") + "\n가운데 다음 질문"
+    sent = _post_message(client, pid, conv_id, {
+        "content": edited,
+        "conversation_filename": "2026-11-04.c.md",
+    })
+    assert sent.status_code == 200
+    events = _read_ndjson(sent)
+    assert events[0]["turn"]["file"] == "2026-11-04.c.md"
+    assert events[-1]["turn"]["file"] == "2026-11-04.c.md"
+    user = storage.EXCHANGE_HEADINGS["ko"]["user"]
+    assistant = storage.EXCHANGE_HEADINGS["ko"]["assistant"]
+    text = (folder / "2026-11-04.c.md").read_text(encoding="utf-8")
+    assert text.count("이번 주 뭐가 달라졌지") == 1
+    assert "이번 주 뭐가 달라졌지?" in text
+    assert text.count("가운데 다음 질문") == 1
+    assert f"\n\n{user}\n\n가운데 다음 질문\n" in text
+    assert storage.parse_exchange(text) == [
+        {"role": "user", "content": "이번 주 뭐가 달라졌지?"},
+        {"role": "assistant", "content": "ok"},
+        {"role": "user", "content": "가운데 다음 질문"},
+        {"role": "assistant", "content": "ok"},
+    ]
+    assert recording_provider.received_messages == [
+        {"role": "user", "content": "이번 주 뭐가 달라졌지?"},
+        {"role": "assistant", "content": "ok"},
+        {"role": "user", "content": "가운데 다음 질문"},
+    ]
+    assert (folder / "2026-11-04.md").read_text(encoding="utf-8") == "문서 본문"
+    assert (folder / "0001.md").read_text(encoding="utf-8") == "기존 번호 파일\n"
+    assert sorted(path.name for path in folder.glob("*.md")) == names_before
+
+    again = _post_message(client, pid, conv_id, {
+        "content": text.rstrip("\n") + "\n한 번 더",
+        "conversation_filename": "2026-11-04.c.md",
+    })
+    assert again.status_code == 200
+    again_events = _read_ndjson(again)
+    assert again_events[-1]["turn"]["file"] == "2026-11-04.c.md"
+    repeated = (folder / "2026-11-04.c.md").read_text(encoding="utf-8")
+    assert repeated.count("이번 주 뭐가 달라졌지") == 1
+    assert repeated.count("가운데 다음 질문") == 1
+    assert repeated.count("한 번 더") == 1
+    assert f"\n\n{user}\n\n한 번 더\n" in repeated
+    assert storage.parse_exchange(repeated)[-2:] == [
+        {"role": "user", "content": "한 번 더"},
+        {"role": "assistant", "content": "ok"},
+    ]
+    assert [turn["file"] for turn in storage.get_conversation(pid, conv_id)["turns"]] == ["2026-11-04.c.md"]
+    assert (folder / "0001.md").read_text(encoding="utf-8") == "기존 번호 파일\n"
+    assert not (folder / "0002.md").exists()
+
+
 def test_ordinary_send_still_creates_a_numbered_turn_beside_a_conversation_file(
     isolated_data_dir, client, recording_provider
 ):

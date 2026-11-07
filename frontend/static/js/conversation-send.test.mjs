@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { conversationCompletedSnapshot, planConversationSend } from "./conversation-send.mjs";
+import { conversationCompletedSnapshot, planConversationSend, separateHistoryAndQuestion } from "./conversation-send.mjs";
 
 const USER = "## 사용자";
 const ASSISTANT = "## 어시스턴트";
@@ -97,6 +97,69 @@ test("a conversation file with nothing new does not start a send", () => {
     turnId: "turn1",
     rawContent: firstRound,
     savedContent: firstRound,
+    completedContent: finished,
+    userHeading: USER,
+    headingRole,
+  });
+  assert.equal(plan.blocked, true);
+});
+
+test("a middle edit stays in earlier rounds and only the appended line is the question", () => {
+  const edited = `${USER}\n\n이번 주 뭐가 달라졌지?\n\n${ASSISTANT}\n\nok\n새 질문`;
+  const split = separateHistoryAndQuestion(finished, edited);
+  assert.equal(split.question, "새 질문");
+  assert.equal(split.history.includes("이번 주 뭐가 달라졌지?"), true);
+  assert.equal(split.history.includes("새 질문"), false);
+  assert.equal(split.history.split("이번 주 뭐가 달라졌지").length - 1, 1);
+  const plan = planConversationSend({
+    filename: "2026-11-04.c.md",
+    role: "exchange",
+    turnId: "turn1",
+    rawContent: edited,
+    savedContent: finished,
+    completedContent: finished,
+    userHeading: USER,
+    headingRole,
+  });
+  assert.equal(plan.blocked, false);
+  assert.equal(plan.conversationFilename, "2026-11-04.c.md");
+  assert.equal(plan.draftFilename, null);
+  assert.equal(plan.retryTurnId, "turn1");
+  assert.equal(plan.pending.question, "새 질문");
+  assert.equal(plan.pending.question.includes(ASSISTANT), false);
+  assert.equal(plan.content, `${split.history}\n\n${USER}\n\n새 질문`);
+  assert.equal(plan.content.split("이번 주 뭐가 달라졌지").length - 1, 1);
+  assert.equal(plan.content.split("새 질문").length - 1, 1);
+});
+
+test("rewriting the last answer line keeps that line and still appends only the new question", () => {
+  const edited = `${USER}\n\n이번 주 뭐가 달라졌지\n\n${ASSISTANT}\n\nok입니다\n새 질문`;
+  const plan = planConversationSend({
+    filename: "2026-11-04.c.md",
+    role: "exchange",
+    turnId: "turn1",
+    rawContent: edited,
+    savedContent: finished,
+    completedContent: finished,
+    userHeading: USER,
+    headingRole,
+  });
+  assert.equal(plan.pending.question, "새 질문");
+  assert.equal(plan.pending.prefix.includes("ok입니다"), true);
+  assert.equal(plan.pending.prefix.includes("\nok\n"), false);
+  assert.equal(plan.pending.prefix.includes("새 질문"), false);
+  assert.equal(plan.content.split("이번 주 뭐가 달라졌지").length - 1, 1);
+  assert.equal(plan.content.split("새 질문").length - 1, 1);
+});
+
+test("a middle edit with no appended question does not start a new round", () => {
+  const edited = `${USER}\n\n이번 주 뭐가 달라졌지?\n\n${ASSISTANT}\n\nok`;
+  const plan = planConversationSend({
+    filename: "2026-11-04.c.md",
+    role: "exchange",
+    turnId: "turn1",
+    rawContent: edited,
+    savedContent: finished,
     completedContent: finished,
     userHeading: USER,
     headingRole,

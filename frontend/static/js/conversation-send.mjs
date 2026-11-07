@@ -24,6 +24,67 @@ function splitPending(rawContent, headingRole) {
   };
 }
 
+function lineDiff(before, after) {
+  const n = before.length;
+  const m = after.length;
+  const scores = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      scores[i][j] = before[i] === after[j]
+        ? scores[i + 1][j + 1] + 1
+        : Math.max(scores[i + 1][j], scores[i][j + 1]);
+    }
+  }
+  const ops = [];
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (before[i] === after[j]) {
+      ops.push({ type: "equal", line: after[j] });
+      i += 1;
+      j += 1;
+    } else if (scores[i + 1][j] >= scores[i][j + 1]) {
+      ops.push({ type: "delete", line: before[i] });
+      i += 1;
+    } else {
+      ops.push({ type: "insert", line: after[j] });
+      j += 1;
+    }
+  }
+  while (i < n) ops.push({ type: "delete", line: before[i++] });
+  while (j < m) ops.push({ type: "insert", line: after[j++] });
+  return ops;
+}
+
+// A change inside earlier rounds stays in those rounds. Only lines added
+// after the original document, or past a rewritten tail of the same length,
+// are the new question. The question is never the whole buffer.
+export function separateHistoryAndQuestion(baseline, edited) {
+  const base = String(baseline ?? "").replace(/\n+$/, "");
+  const text = String(edited ?? "").replace(/\n+$/, "");
+  if (text === base) return { history: base, question: "" };
+  // A new question starts on its own line. Characters added to the last
+  // existing line are an edit of that line, not the question.
+  if (base && text.startsWith(base)) {
+    const rest = text.slice(base.length);
+    if (rest === "" || rest.startsWith("\n")) return { history: base, question: rest.trim() };
+  }
+  const before = base ? base.split("\n") : [];
+  const after = text ? text.split("\n") : [];
+  const ops = lineDiff(before, after);
+  let lastEqual = -1;
+  for (let index = 0; index < ops.length; index++) if (ops[index].type === "equal") lastEqual = index;
+  const historyLines = [];
+  for (let index = 0; index <= lastEqual; index++) {
+    if (ops[index].type !== "delete") historyLines.push(ops[index].line);
+  }
+  const tail = ops.slice(lastEqual + 1);
+  const removed = tail.filter((op) => op.type === "delete").length;
+  const added = tail.filter((op) => op.type === "insert");
+  historyLines.push(...added.slice(0, removed).map((op) => op.line));
+  return { history: historyLines.join("\n"), question: added.slice(removed).map((op) => op.line).join("\n").trim() };
+}
+
 export function isConversationFilename(filename) {
   return typeof filename === "string" && filename.endsWith(".c.md");
 }
@@ -74,30 +135,14 @@ export function planConversationSend({
     };
   }
   const baselineSource = typeof completedContent === "string" ? completedContent : String(savedContent ?? "");
-  const baseline = baselineSource.replace(/\n+$/, "");
-  if (baseline && (raw === baseline || raw.replace(/\n+$/, "") === baseline)) {
-    return { blocked: true };
-  }
-  if (baseline && raw.startsWith(baseline)) {
-    const question = raw.slice(baseline.length).trim();
-    if (!question) return { blocked: true };
-    return {
-      blocked: false,
-      conversationFilename: filename,
-      draftFilename: null,
-      retryTurnId: turnId,
-      pending: { prefix: baseline, question, needsHeading: true },
-      content: `${baseline}\n\n${userHeading}\n\n${question}`,
-    };
-  }
-  const question = raw.trim();
+  const { history, question } = separateHistoryAndQuestion(baselineSource, raw);
   if (!question) return { blocked: true };
   return {
     blocked: false,
     conversationFilename: filename,
     draftFilename: null,
     retryTurnId: turnId,
-    pending: { prefix: baseline, question, needsHeading: true },
-    content: `${baseline ? `${baseline}\n\n` : ""}${userHeading}\n\n${question}`,
+    pending: { prefix: history, question, needsHeading: true },
+    content: `${history ? `${history}\n\n` : ""}${userHeading}\n\n${question}`,
   };
 }
