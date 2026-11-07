@@ -7,12 +7,17 @@ import { createDraft, suggestConversationTitle } from "./api.js";
 const source = fs.readFileSync(new URL("./app.js", import.meta.url), "utf8");
 
 test("folder suggestions and drafts send the browser's local calendar day", async (t) => {
+  // node:test's mock.method replaces the Date constructor, but instances
+  // still use the built-in getters. Overriding getDate on a subclass
+  // therefore does not run, and an ISO timestamp's calendar day follows
+  // the process timezone. Local date components are the same day in every
+  // timezone, which is what localToday reads.
   const RealDate = Date;
   t.mock.method(globalThis, "Date", class extends RealDate {
-    constructor() { super("2026-11-04T23:00:00Z"); }
-    getFullYear() { return 2026; }
-    getMonth() { return 10; }
-    getDate() { return 5; }
+    constructor(...args) {
+      if (args.length === 0) super(2026, 10, 5, 12, 0, 0);
+      else super(...args);
+    }
   });
   const urls = [];
   t.mock.method(globalThis, "fetch", async (url) => {

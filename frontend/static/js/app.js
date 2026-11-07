@@ -2,6 +2,7 @@ import { requestWorkspaceName } from "./workspace-dialog.js";
 import { articleFromHtml } from "./x-article-content.mjs";
 import { openXArticleDialog } from "./x-article.js";
 import { conversationPair, paneShareState } from "./split-share.mjs";
+import { conversationCompletedSnapshot, planConversationSend } from "./conversation-send.mjs";
 import { normalizePreviewPin, previewContent, previewMarkdownDownload, PREVIEW_PIN_STORAGE_KEY } from "./preview-pin.mjs";
 import { copyText } from "./clipboard-copy.mjs";
 import { icon, symbolIcon, mountIcons } from "./icons.js";
@@ -6815,7 +6816,11 @@ async function selectDocument(projectId, sessionId, filename, { focus = true } =
   // the app default when it has none. Re-selecting the file already open
   // leaves an in-progress dropdown edit alone.
   const documentChanged = !active || active.sessionId !== sessionId || active.projectId !== projectId || active.filename !== filename;
-  active = { projectId, sessionId, filename, role: doc.role, savedContent: doc.content, turnId: doc.turn_id, publishToken: doc.publish_token, publishSlides: !!doc.publish_slides, version: doc.version };
+  active = {
+    projectId, sessionId, filename, role: doc.role, savedContent: doc.content, turnId: doc.turn_id,
+    publishToken: doc.publish_token, publishSlides: !!doc.publish_slides, version: doc.version,
+    completedContent: conversationCompletedSnapshot(filename, doc.role, doc.content, exchangeHeadingRole),
+  };
   hideSyncConflict();
   saveActiveDocRef();
   rememberRecentDoc(projectId, sessionId, filename);
@@ -8452,8 +8457,23 @@ function undoDocEdit() {
 async function sendActive() {
   if (!active || streaming || NON_SENDABLE_ROLES.has(active.role)) return;
   const rawContent = el.editor.value;
-  const pending = detectPendingQuestion(active, rawContent);
-  const retryTurnId = pending ? active.turnId : null;
+  let pending = detectPendingQuestion(active, rawContent);
+  // A `.c.md` file is the conversation. The question and the reply stay in
+  // that file; planConversationSend never picks a numbered document.
+  // Ordinary drafts and turns leave `planned` null and keep the choice below.
+  const planned = planConversationSend({
+    filename: active.filename,
+    role: active.role,
+    turnId: active.turnId,
+    rawContent,
+    savedContent: active.savedContent,
+    completedContent: active.completedContent,
+    userHeading: t("chat.userHeading"),
+    headingRole: exchangeHeadingRole,
+  });
+  if (planned?.blocked) return;
+  if (planned?.pending) pending = planned.pending;
+  const retryTurnId = planned ? planned.retryTurnId : pending ? active.turnId : null;
   // For the "plain text, no heading typed" case, the request body needs an
   // explicit heading of its own so the backend's parse_exchange recognizes
   // a new pending question - without one, that trailing text just reads as
@@ -8462,8 +8482,9 @@ async function sendActive() {
   // `rawContent` already carries whatever it needs and is sent verbatim;
   // storage.retry_exchange renormalizes an existing heading under the
   // current language regardless of what was actually typed.
-  const content =
-    pending && pending.needsHeading
+  const content = planned
+    ? planned.content
+    : pending && pending.needsHeading
       ? `${pending.prefix ? pending.prefix + "\n\n" : ""}${t("chat.userHeading")}\n\n${pending.question}`
       : rawContent;
   const settings = {
@@ -8480,7 +8501,8 @@ async function sendActive() {
     hybridMath: el.formatSelect.value === "hybrid",
     // A send from an open draft grows that same document into the exchange
     // instead of spawning a new file - see storage.start_exchange.
-    draftFilename: active.role === "draft" ? active.filename : null,
+    draftFilename: planned ? planned.draftFilename : active.role === "draft" ? active.filename : null,
+    conversationFilename: planned ? planned.conversationFilename : null,
     // A retry of a failed send, or a new question continuing an already-
     // complete turn, completes that same turn instead of starting a new
     // one - see storage.retry_exchange. Mutually exclusive with
@@ -8532,14 +8554,20 @@ async function sendActive() {
     await api.sendMessage(projectId, sessionId, content, settings, async (event) => {
       if (event.type === "user_turn") {
         await refreshSessionDocs(projectId, sessionId);
-        if (settings.draftFilename || settings.retryTurnId) {
+        if (settings.draftFilename || settings.retryTurnId || settings.conversationFilename) {
           // The draft was just consumed and reborn as this turn's file, or
           // the retried turn's file was just rewritten with just the
           // question again (see storage.start_exchange/retry_exchange) -
           // repoint `active` at it immediately (a no-op filename change for
-          // the retry case), or a mid-stream failure below would
-          // revert/save against stale content.
-          active = { projectId, sessionId, filename: event.turn.file, role: "exchange", savedContent: event.turn.content, turnId: event.turn.id };
+          // the retry case, and for a `.c.md` conversation file), or a
+          // mid-stream failure below would revert/save against stale content.
+          // completedContent stays the previous finished exchange until the
+          // reply lands; the question-only file is not that snapshot.
+          const completedContent = active.completedContent;
+          active = {
+            projectId, sessionId, filename: event.turn.file, role: "exchange",
+            savedContent: event.turn.content, turnId: event.turn.id, completedContent,
+          };
           saveActiveDocRef();
           updateFilenameLabel();
         }
@@ -8589,7 +8617,11 @@ async function sendActive() {
         completed = true;
         applyReplyEdits({ final: true });
         await refreshSessionDocs(projectId, sessionId);
-        active = { projectId, sessionId, filename: event.turn.file, role: "exchange", savedContent: event.turn.content, turnId: event.turn.id };
+        active = {
+          projectId, sessionId, filename: event.turn.file, role: "exchange",
+          savedContent: event.turn.content, turnId: event.turn.id,
+          completedContent: conversationCompletedSnapshot(event.turn.file, "exchange", event.turn.content, exchangeHeadingRole),
+        };
         saveActiveDocRef();
         el.editor.value = event.turn.content;
         updateFilenameLabel();

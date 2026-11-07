@@ -266,6 +266,189 @@ def _read_ndjson(resp):
     return [json.loads(line) for line in resp.text.splitlines() if line.strip()]
 
 
+def _post_message(client, pid, conv_id, payload):
+    return client.post(
+        f"/api/projects/{pid}/conversations/{conv_id}/messages",
+        json={"provider": "openai", "model": "gpt-test", "language": "ko", **payload},
+    )
+
+
+def test_split_conversation_file_keeps_its_name_and_korean_headings(isolated_data_dir, client, recording_provider):
+    """weekly/2026-11-04.c.md beside weekly/2026-11-04.md.
+
+    Submitting the question, including a second time, appends to the
+    conversation file. It does not create another numbered document, and it
+    does not rewrite a numbered file that was already there. The Korean
+    user heading is its own paragraph: a blank line after `## 사용자`,
+    including when the submitted text had the heading glued to the question.
+    """
+    pid = storage.create_project("weekly")["id"]
+    conv_id = storage.create_conversation(pid, "weekly")["id"]
+    folder = isolated_data_dir / "projects" / pid / "conversations" / conv_id
+    dated = storage.create_draft(pid, conv_id)
+    storage.rename_document(pid, conv_id, dated["filename"], "2026-11-04.md")
+    storage.save_document(pid, conv_id, "2026-11-04.md", "문서 본문")
+    created = storage.create_conversation_file(pid, conv_id, "2026-11-04.md")
+    assert created["filename"] == "2026-11-04.c.md"
+    (folder / "0001.md").write_text("기존 번호 파일\n", encoding="utf-8")
+
+    def names():
+        return sorted(path.name for path in folder.glob("*.md"))
+
+    before = names()
+    assert before == ["0001.md", "2026-11-04.c.md", "2026-11-04.md", "system.md"]
+
+    first = _post_message(client, pid, conv_id, {
+        "content": "## 사용자\n이번 주 뭐가 달라졌지",
+        "conversation_filename": "2026-11-04.c.md",
+    })
+    events = _read_ndjson(first)
+    assert first.status_code == 200
+    assert events[0]["turn"]["file"] == "2026-11-04.c.md"
+    assert events[-1]["type"] == "assistant_turn"
+    assert events[-1]["turn"]["file"] == "2026-11-04.c.md"
+    assert recording_provider.received_messages == [{"role": "user", "content": "이번 주 뭐가 달라졌지"}]
+    user = storage.EXCHANGE_HEADINGS["ko"]["user"]
+    assistant = storage.EXCHANGE_HEADINGS["ko"]["assistant"]
+    first_text = (folder / "2026-11-04.c.md").read_text(encoding="utf-8")
+    assert first_text == f"{user}\n\n이번 주 뭐가 달라졌지\n\n{assistant}\n\nok\n"
+    assert (folder / "2026-11-04.md").read_text(encoding="utf-8") == "문서 본문"
+    assert (folder / "0001.md").read_text(encoding="utf-8") == "기존 번호 파일\n"
+    assert names() == before
+
+    second = _post_message(client, pid, conv_id, {
+        "content": first_text.rstrip("\n") + "\n이어서 묻기",
+        "conversation_filename": "2026-11-04.c.md",
+    })
+    second_events = _read_ndjson(second)
+    assert second.status_code == 200
+    assert second_events[0]["turn"]["file"] == "2026-11-04.c.md"
+    assert second_events[-1]["turn"]["file"] == "2026-11-04.c.md"
+    assert recording_provider.received_messages == [
+        {"role": "user", "content": "이번 주 뭐가 달라졌지"},
+        {"role": "assistant", "content": "ok"},
+        {"role": "user", "content": "이어서 묻기"},
+    ]
+    second_text = (folder / "2026-11-04.c.md").read_text(encoding="utf-8")
+    assert second_text == (
+        f"{user}\n\n이번 주 뭐가 달라졌지\n\n{assistant}\n\nok\n\n"
+        f"{user}\n\n이어서 묻기\n\n{assistant}\n\nok\n"
+    )
+    assert storage.parse_exchange(second_text) == [
+        {"role": "user", "content": "이번 주 뭐가 달라졌지"},
+        {"role": "assistant", "content": "ok"},
+        {"role": "user", "content": "이어서 묻기"},
+        {"role": "assistant", "content": "ok"},
+    ]
+    assert [turn["file"] for turn in storage.get_conversation(pid, conv_id)["turns"]] == ["2026-11-04.c.md"]
+    assert (folder / "2026-11-04.md").read_text(encoding="utf-8") == "문서 본문"
+    assert (folder / "0001.md").read_text(encoding="utf-8") == "기존 번호 파일\n"
+    assert names() == before
+    assert not (folder / "0002.md").exists()
+
+
+def test_middle_edit_then_submit_does_not_duplicate_conversation_history(
+    isolated_data_dir, client, recording_provider
+):
+    pid = storage.create_project("weekly")["id"]
+    conv_id = storage.create_conversation(pid, "weekly")["id"]
+    folder = isolated_data_dir / "projects" / pid / "conversations" / conv_id
+    dated = storage.create_draft(pid, conv_id)
+    storage.rename_document(pid, conv_id, dated["filename"], "2026-11-04.md")
+    storage.save_document(pid, conv_id, "2026-11-04.md", "문서 본문")
+    storage.create_conversation_file(pid, conv_id, "2026-11-04.md")
+    (folder / "0001.md").write_text("기존 번호 파일\n", encoding="utf-8")
+    opened = _post_message(client, pid, conv_id, {
+        "content": "이번 주 뭐가 달라졌지",
+        "conversation_filename": "2026-11-04.c.md",
+    })
+    assert opened.status_code == 200
+    _read_ndjson(opened)
+    original = (folder / "2026-11-04.c.md").read_text(encoding="utf-8")
+    names_before = sorted(path.name for path in folder.glob("*.md"))
+
+    edited_only = original.replace("이번 주 뭐가 달라졌지", "이번 주 뭐가 달라졌지?", 1)
+    refused = _post_message(client, pid, conv_id, {
+        "content": edited_only,
+        "conversation_filename": "2026-11-04.c.md",
+    })
+    assert refused.status_code == 400
+    assert (folder / "2026-11-04.c.md").read_text(encoding="utf-8") == original
+    assert sorted(path.name for path in folder.glob("*.md")) == names_before
+
+    edited = edited_only.rstrip("\n") + "\n가운데 다음 질문"
+    sent = _post_message(client, pid, conv_id, {
+        "content": edited,
+        "conversation_filename": "2026-11-04.c.md",
+    })
+    assert sent.status_code == 200
+    events = _read_ndjson(sent)
+    assert events[0]["turn"]["file"] == "2026-11-04.c.md"
+    assert events[-1]["turn"]["file"] == "2026-11-04.c.md"
+    user = storage.EXCHANGE_HEADINGS["ko"]["user"]
+    assistant = storage.EXCHANGE_HEADINGS["ko"]["assistant"]
+    text = (folder / "2026-11-04.c.md").read_text(encoding="utf-8")
+    assert text.count("이번 주 뭐가 달라졌지") == 1
+    assert "이번 주 뭐가 달라졌지?" in text
+    assert text.count("가운데 다음 질문") == 1
+    assert f"\n\n{user}\n\n가운데 다음 질문\n" in text
+    assert storage.parse_exchange(text) == [
+        {"role": "user", "content": "이번 주 뭐가 달라졌지?"},
+        {"role": "assistant", "content": "ok"},
+        {"role": "user", "content": "가운데 다음 질문"},
+        {"role": "assistant", "content": "ok"},
+    ]
+    assert recording_provider.received_messages == [
+        {"role": "user", "content": "이번 주 뭐가 달라졌지?"},
+        {"role": "assistant", "content": "ok"},
+        {"role": "user", "content": "가운데 다음 질문"},
+    ]
+    assert (folder / "2026-11-04.md").read_text(encoding="utf-8") == "문서 본문"
+    assert (folder / "0001.md").read_text(encoding="utf-8") == "기존 번호 파일\n"
+    assert sorted(path.name for path in folder.glob("*.md")) == names_before
+
+    again = _post_message(client, pid, conv_id, {
+        "content": text.rstrip("\n") + "\n한 번 더",
+        "conversation_filename": "2026-11-04.c.md",
+    })
+    assert again.status_code == 200
+    again_events = _read_ndjson(again)
+    assert again_events[-1]["turn"]["file"] == "2026-11-04.c.md"
+    repeated = (folder / "2026-11-04.c.md").read_text(encoding="utf-8")
+    assert repeated.count("이번 주 뭐가 달라졌지") == 1
+    assert repeated.count("가운데 다음 질문") == 1
+    assert repeated.count("한 번 더") == 1
+    assert f"\n\n{user}\n\n한 번 더\n" in repeated
+    assert storage.parse_exchange(repeated)[-2:] == [
+        {"role": "user", "content": "한 번 더"},
+        {"role": "assistant", "content": "ok"},
+    ]
+    assert [turn["file"] for turn in storage.get_conversation(pid, conv_id)["turns"]] == ["2026-11-04.c.md"]
+    assert (folder / "0001.md").read_text(encoding="utf-8") == "기존 번호 파일\n"
+    assert not (folder / "0002.md").exists()
+
+
+def test_ordinary_send_still_creates_a_numbered_turn_beside_a_conversation_file(
+    isolated_data_dir, client, recording_provider
+):
+    pid = storage.create_project("weekly")["id"]
+    conv_id = storage.create_conversation(pid, "weekly")["id"]
+    dated = storage.create_draft(pid, conv_id)
+    storage.rename_document(pid, conv_id, dated["filename"], "2026-11-04.md")
+    storage.save_document(pid, conv_id, "2026-11-04.md", "문서 본문")
+    storage.create_conversation_file(pid, conv_id, "2026-11-04.md")
+    storage.save_document(pid, conv_id, "2026-11-04.c.md", "대화는 그대로")
+
+    resp = _post_message(client, pid, conv_id, {"content": "새 번호 턴"})
+    events = _read_ndjson(resp)
+    assert resp.status_code == 200
+    assert events[-1]["turn"]["file"] == "0001.md"
+    folder = isolated_data_dir / "projects" / pid / "conversations" / conv_id
+    assert (folder / "2026-11-04.c.md").read_text(encoding="utf-8") == "대화는 그대로"
+    assert (folder / "2026-11-04.md").read_text(encoding="utf-8") == "문서 본문"
+    assert (folder / "0001.md").is_file()
+
+
 class TestInlineComplete:
     """app.js's inline-send mode (draft document, cursor mid-document) -
     routers/conversations.py's inline_complete. Deliberately the lightest

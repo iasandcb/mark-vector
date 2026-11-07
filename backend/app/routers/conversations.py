@@ -328,14 +328,28 @@ async def send_message(project_id: str, conv_id: str, req: CreateMessageRequest)
     # request), not looked up from session-level meta - see storage.py's
     # start_exchange docstring. If this send started from an open draft or
     # is retrying/continuing a turn whose last question has no reply yet,
-    # that same file is reused instead of spawning a new one.
+    # that same file is reused instead of spawning a new one. A `.c.md`
+    # conversation file is that file even when the client did not also
+    # pass a draft or turn id: the send must not allocate `0001.md`.
+    content = req.content
+    retry_turn_id = req.retry_turn_id
+    draft_filename = req.draft_filename
     try:
-        if req.retry_turn_id:
+        if req.conversation_filename:
+            retry_turn_id, draft_filename, content = storage.bind_conversation_send(
+                project_id,
+                conv_id,
+                req.conversation_filename,
+                content,
+                language=req.language,
+                retry_turn_id=retry_turn_id,
+            )
+        if retry_turn_id:
             turn = storage.retry_exchange(
                 project_id,
                 conv_id,
-                req.retry_turn_id,
-                req.content,
+                retry_turn_id,
+                content,
                 language=req.language,
                 provider=req.provider,
                 model=req.model,
@@ -347,14 +361,14 @@ async def send_message(project_id: str, conv_id: str, req: CreateMessageRequest)
             turn = storage.start_exchange(
                 project_id,
                 conv_id,
-                req.content,
+                content,
                 language=req.language,
                 provider=req.provider,
                 model=req.model,
                 reasoning_effort=req.reasoning_effort,
                 convert_math=req.convert_math,
                 context_scope=req.context_scope,
-                draft_filename=req.draft_filename,
+                draft_filename=draft_filename,
             )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

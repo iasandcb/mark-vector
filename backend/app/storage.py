@@ -37,6 +37,7 @@ EXCHANGE_HEADINGS = {
 _EXCHANGE_HEADING_ROLES = {
     heading: role for headings in EXCHANGE_HEADINGS.values() for role, heading in headings.items()
 }
+_USER_HEADINGS = {headings["user"] for headings in EXCHANGE_HEADINGS.values()}
 
 # Deliberately permissive (Korean, spaces, symbols all fine for renaming) —
 # the only real constraint is no path separators, so a filename can never
@@ -601,12 +602,30 @@ def delete_conversation(project_id: str, conv_id: str) -> None:
     _forget_video_jobs(project_id=project_id, conv_ids=folder_ids)
 
 
+def _question_body(user_content: str) -> str:
+    """The question text itself. A supplied user heading is not part of the
+    question: `## 사용자` glued to the next line (`## 사용자\\n질문`, with no
+    blank line) is still that heading, and the body is what follows it."""
+    text = user_content.strip()
+    lines = text.split("\n")
+    if lines and lines[0].strip() in _USER_HEADINGS:
+        return "\n".join(lines[1:]).strip()
+    return text
+
+
 def _build_user_only_content(user_content: str, language: str) -> str:
     """A brand-new turn's very first section: just the pending question, no
     reply yet - used by start_exchange, and by retry_exchange for the fresh
-    trailing section it renormalizes (see its docstring)."""
+    trailing section it renormalizes (see its docstring).
+
+    One blank line sits between the heading and the question. A heading the
+    caller already attached is not stacked on top of a second one, and a
+    missing blank line under it is put back."""
     heading = EXCHANGE_HEADINGS[language]["user"]
-    return f"{heading}\n\n{user_content.strip()}\n"
+    body = _question_body(user_content)
+    if not body and not user_content.strip():
+        return f"{heading}\n\n{user_content.strip()}\n"
+    return f"{heading}\n\n{body}\n"
 
 
 def parse_exchange(content: str) -> list[dict]:
@@ -814,8 +833,9 @@ def start_exchange(
     # "question": the exact text the LLM should see as this turn's new user
     # message - callers (routers/conversations.py) use this instead of the
     # raw request body, which for retry_exchange below can carry an entire
-    # multi-round document, not just the one new question.
-    return {**turn, "content": content, "question": user_content.strip()}
+    # multi-round document, not just the one new question. A heading the
+    # caller already wrote is not part of that question.
+    return {**turn, "content": content, "question": _question_body(user_content)}
 
 
 def retry_exchange(
@@ -887,6 +907,113 @@ def retry_exchange(
     _write_meta(project_id, conv_id, meta)
     _touch_project(project_id)
     return {**turn, "content": content, "question": user_content}
+
+
+def _ends_with_user_message(content: str) -> bool:
+    messages = parse_exchange(content)
+    return bool(messages) and messages[-1]["role"] == "user"
+
+
+def _line_diff(before: list[str], after: list[str]) -> list[tuple[str, str]]:
+    n, m = len(before), len(after)
+    scores = [[0] * (m + 1) for _ in range(n + 1)]
+    for i in range(n - 1, -1, -1):
+        for j in range(m - 1, -1, -1):
+            if before[i] == after[j]:
+                scores[i][j] = scores[i + 1][j + 1] + 1
+            else:
+                scores[i][j] = max(scores[i + 1][j], scores[i][j + 1])
+    ops: list[tuple[str, str]] = []
+    i = j = 0
+    while i < n and j < m:
+        if before[i] == after[j]:
+            ops.append(("equal", after[j]))
+            i, j = i + 1, j + 1
+        elif scores[i + 1][j] >= scores[i][j + 1]:
+            ops.append(("delete", before[i]))
+            i += 1
+        else:
+            ops.append(("insert", after[j]))
+            j += 1
+    ops.extend(("delete", line) for line in before[i:])
+    ops.extend(("insert", line) for line in after[j:])
+    return ops
+
+
+def separate_history_and_question(baseline: str, edited: str) -> tuple[str, str]:
+    """Keep an edit inside earlier rounds in those rounds.
+
+    Lines added after the original document, or past a rewritten tail of
+    the same length, are the new question. The question is never the whole
+    buffer, so a middle edit is not copied into a new user section."""
+    base = (baseline or "").rstrip("\n")
+    text = (edited or "").rstrip("\n")
+    if text == base:
+        return base, ""
+    # A new question starts on its own line. Characters added to the last
+    # existing line are an edit of that line, not the question.
+    if base and text.startswith(base):
+        rest = text[len(base):]
+        if rest == "" or rest.startswith("\n"):
+            return base, rest.strip()
+    before = base.split("\n") if base else []
+    after = text.split("\n") if text else []
+    ops = _line_diff(before, after)
+    last_equal = max((i for i, (kind, _) in enumerate(ops) if kind == "equal"), default=-1)
+    history = [line for kind, line in ops[: last_equal + 1] if kind != "delete"]
+    tail = ops[last_equal + 1 :]
+    removed = sum(1 for kind, _ in tail if kind == "delete")
+    added = [line for kind, line in tail if kind == "insert"]
+    history.extend(added[:removed])
+    return "\n".join(history), "\n".join(added[removed:]).strip()
+
+
+def prepare_conversation_continuation(existing: str, submitted: str, language: str) -> str:
+    """Make a follow-up on a `.c.md` conversation file end in one pending
+    user section. An edit in the middle of earlier rounds stays there.
+    Text added after those rounds becomes `## 사용자` (or the sender's
+    language), a blank line, and the question. A submission that already
+    ends in a user section is kept so retry_exchange can renormalize it.
+    A buffer with no new question is refused, and the file is left as it
+    was. Nothing is deleted."""
+    if _ends_with_user_message(submitted):
+        return submitted
+    history, question = separate_history_and_question(existing, submitted)
+    if not question:
+        raise ValueError("Conversation file has no pending question to answer")
+    section = _build_user_only_content(question, language)
+    return f"{history}\n\n{section}" if history else section
+
+
+def bind_conversation_send(
+    project_id: str,
+    conv_id: str,
+    filename: str,
+    content: str,
+    *,
+    language: str,
+    retry_turn_id: str | None,
+) -> tuple[str | None, str | None, str]:
+    """Send into an existing `.c.md` conversation file.
+
+    Returns `(retry_turn_id, draft_filename, content)` for the caller to
+    pass to retry_exchange or start_exchange. A draft grows in place. A
+    file that is already a turn is continued. A new `NNNN.md` is never
+    allocated, and no other file in the folder is removed or rewritten."""
+    if not filename.endswith(".c.md"):
+        raise ValueError("Select a conversation file")
+    _validate_filename(filename)
+    meta = _read_meta(project_id, conv_id)
+    path = _conversations_dir(project_id) / conv_id / filename
+    if not path.is_file():
+        raise FileNotFoundError(filename)
+    turn = next((t for t in meta["turns"] if t["file"] == filename), None)
+    if turn is None:
+        return None, filename, content
+    if retry_turn_id and retry_turn_id != turn["id"]:
+        raise ValueError("Conversation file does not match the turn")
+    prepared = prepare_conversation_continuation(path.read_text(encoding="utf-8"), content, language)
+    return turn["id"], None, prepared
 
 
 def complete_exchange(
