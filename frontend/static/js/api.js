@@ -371,6 +371,7 @@ export async function sendMessage(projectId, id, content, settings, onEvent) {
       context_scope: settings.contextScope,
       draft_filename: settings.draftFilename || null,
       retry_turn_id: settings.retryTurnId || null,
+      conversation_filename: settings.conversationFilename || null,
       language: settings.language,
       // The document beside the conversation, when the conversation is
       // editing it - see app.js's "document editing" section.

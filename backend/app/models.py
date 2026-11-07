@@ -74,6 +74,10 @@ class CreateMessageRequest(BaseModel):
     # exchange is written into that same file instead of a brand new one.
     # See storage.start_exchange's draft_filename docstring.
     draft_filename: str | None = None
+    # The split conversation's own file (`name.c.md`, beside `name.md`).
+    # The question and the reply are written into this file. A numbered
+    # document is not created for the send. See storage.bind_conversation_send.
+    conversation_filename: str | None = None
     # When retrying a turn that started but never got its reply, that turn's
     # id - so the reply lands in that same turn/file instead of a new one.
     # See storage.retry_exchange. Mutually exclusive with draft_filename.
