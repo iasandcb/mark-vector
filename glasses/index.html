@@ -187,7 +187,23 @@
     }
     #content .task-list-item-checkbox {
       margin: 0 0.35em 0 -1.25em;
-      accent-color: #f5f5f0;
+      /* Hand-drawn like the editor's (style.css): a disabled native box
+         renders greyed out, so done vs open was hard to tell. */
+      appearance: none;
+      -webkit-appearance: none;
+      box-sizing: border-box;
+      width: 0.85em;
+      height: 0.85em;
+      vertical-align: -0.1em;
+      border: 0.1em solid #8a8a84;
+      border-radius: 0.18em;
+      background: transparent center / 80% no-repeat;
+      opacity: 1;
+    }
+    #content .task-list-item-checkbox:checked {
+      border-color: #f5f5f0;
+      background-color: #f5f5f0;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 8.5l3 3 6-7' fill='none' stroke='%23000' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
     }
     #content blockquote {
       border-left: 3px solid #00d4ff;
