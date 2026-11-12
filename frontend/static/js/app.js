@@ -22,6 +22,7 @@ import {
 } from "./markdown.js";
 import { t, getLanguage, applyStaticTranslations, createLanguageSelect, exchangeHeadingRole } from "./i18n.js";
 import { createEditor } from "./editor.js";
+import { createEditorEnterController } from "./editor-enter.mjs";
 import { openTranscribeDialog } from "./transcribe.js";
 import { openRecordingsDialog } from "./recordings-dialog.js";
 import { createGamepadRemote } from "./remote.js";
@@ -8930,12 +8931,59 @@ el.editorB.addEventListener("focus", () => {
   focusedEditorPane = "b";
   setPreviewSource();
 });
+// Enter in either editor. Indent carry-over for pane A stays on the
+// execCommand path (see insertTextAtCursor). A macOS Korean IME Enter is
+// not that path: it arrives as isComposing / keyCode 229, CodeMirror drops
+// it, and preventDefault plus execCommand inserts nothing. The controller
+// breaks the line after the composition instead. See editor-enter.mjs.
+function editorEnterReader(editor) {
+  return {
+    value: editor.value,
+    selectionStart: editor.selectionStart,
+    selectionEnd: editor.selectionEnd,
+    disabled: !!editor.disabled,
+  };
+}
+function mountEditorEnter(editor) {
+  return createEditorEnterController({
+    read: () => editorEnterReader(editor),
+    insert(text) {
+      const doc = editorEnterReader(editor);
+      editor.replaceRange(doc.selectionStart, doc.selectionEnd, text);
+    },
+    now: () => performance.now(),
+    schedule: (fn) => window.setTimeout(fn, 0),
+    hold: (fn, ms) => {
+      const id = window.setTimeout(fn, ms);
+      return () => window.clearTimeout(id);
+    },
+  });
+}
+const enterA = mountEditorEnter(el.editor);
+const enterB = mountEditorEnter(el.editorB);
+function applyEditorEnter(event, controller, { carryIndent = false, insertIndent = null } = {}) {
+  const plan = controller.keydown(event);
+  // A normal indented Enter (not an IME confirm). Pane B leaves this to
+  // CodeMirror, which already carries indent; pane A keeps the execCommand
+  // insertion so its undo stack stays the one Tab uses.
+  if (plan.type === "insert" && !plan.direct) {
+    if (!carryIndent || !insertIndent) return false;
+    event.preventDefault();
+    insertIndent(plan.text);
+    return true;
+  }
+  if (plan.prevent) event.preventDefault();
+  return plan.type !== "passthrough" && plan.type !== "native";
+}
 el.editorB.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
     e.preventDefault();
     saveDocumentB();
+    return;
   }
+  applyEditorEnter(e, enterB);
 });
+el.editorB.addEventListener("compositionend", (e) => enterB.compositionend(e));
 el.viewModeBtn.addEventListener("click", toggleEditorViewMode);
 el.saveBtnB.addEventListener("click", saveDocumentB);
 el.editTargetBtn.addEventListener("click", toggleEditTarget);
@@ -9084,16 +9132,6 @@ function replaceEditorRange(start, end, text) {
   renderPreview();
 }
 
-// The leading whitespace of the line `cursorPos` sits on, whole-line based
-// (not just up to `cursorPos`) - so a cursor sitting right at column 0 of
-// an already-indented line still reports that line's real indent, not "".
-function currentLineIndent(value, cursorPos) {
-  const lineStart = value.lastIndexOf("\n", cursorPos - 1) + 1;
-  let lineEnd = value.indexOf("\n", cursorPos);
-  if (lineEnd === -1) lineEnd = value.length;
-  return value.slice(lineStart, lineEnd).match(/^[ \t]*/)[0];
-}
-
 function handleEditorTabKey(outdent) {
   const editor = el.editor;
   const { selectionStart, selectionEnd, value } = editor;
@@ -9140,20 +9178,16 @@ el.editor.addEventListener("keydown", (e) => {
   } else if (e.key === "Tab") {
     e.preventDefault();
     handleEditorTabKey(e.shiftKey);
-  } else if (e.key === "Enter") {
-    // Carries the current line's indentation onto the new one, same as any
-    // code editor - a plain <textarea> otherwise always starts the new line
-    // at column 0, losing whatever nesting level (see asciimath-markdown's
-    // nested-list support) you were just typing at. Left to the browser's
-    // own default newline when there's nothing to carry - no behavioral
-    // difference either way there, so no reason to intervene.
-    const indent = currentLineIndent(el.editor.value, el.editor.selectionStart);
-    if (indent) {
-      e.preventDefault();
-      insertTextAtCursor("\n" + indent);
-    }
+  } else if (e.key === "Enter" || e.code === "Enter" || e.code === "NumpadEnter") {
+    // Plain Enter with leading indent carries that indent onto the new
+    // line. A heading or list item with none of it is left to CodeMirror.
+    // Korean IME Enter (isComposing, or keyCode 229 — including when the
+    // key is reported as "Process") is handled inside applyEditorEnter:
+    // claiming it here used to swallow the newline.
+    applyEditorEnter(e, enterA, { carryIndent: true, insertIndent: insertTextAtCursor });
   }
 });
+el.editor.addEventListener("compositionend", (e) => enterA.compositionend(e));
 // Option/Alt+Up/Down are deliberately not bound to anything here: they're
 // the editor's own "move line up/down" (with Shift, "copy line"), and an
 // app-level document switch on the same keys took that away.
