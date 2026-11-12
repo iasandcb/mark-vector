@@ -86,10 +86,15 @@ export function editorEnterPlan(event, { value = "", selectionStart = 0, composi
   const ime = isImeEvent(event);
   if (ime && event.isComposing) return { type: "ime-defer", prevent: false };
   if (ime && isKoreanEnterContext(value, selectionStart, compositionData)) {
-    return { type: "insert", prevent: true, text, direct: true };
+    return { type: "insert", prevent: true, text, direct: true, echo: true };
   }
   if (ime) return { type: "passthrough", prevent: false };
-  if (indent) return { type: "insert", prevent: true, text, direct: false };
+  // An indented line (a nested "* " or "- " under a numbered item, or a
+  // tab) must not go through execCommand. On macOS Chrome that command
+  // returns true and inserts nothing, and preventDefault has already
+  // stopped CodeMirror from breaking the line. A numbered item has no
+  // indent, so it never entered this branch and Enter kept working.
+  if (indent) return { type: "insert", prevent: true, text, direct: true };
   return { type: "native", prevent: false };
 }
 
@@ -126,7 +131,7 @@ export function createEditorEnterController({ read, insert, now = () => 0, sched
       }
       if (plan.type === "insert" && plan.direct) {
         insert(plan.text);
-        echoUntil = now() + IME_ENTER_ECHO_MS;
+        if (plan.echo) echoUntil = now() + IME_ENTER_ECHO_MS;
       }
       return plan;
     },

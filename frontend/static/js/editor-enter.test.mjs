@@ -59,7 +59,7 @@ test("a heading, list item, or task keeps a normal Enter for the editor", () => 
 
 test("an indented line still carries its indent on a normal Enter", () => {
   const plan = editorEnterPlan(enter(), { value: NESTED, selectionStart: NESTED.length });
-  assert.deepEqual(plan, { type: "insert", prevent: true, text: "\n  ", direct: false });
+  assert.deepEqual(plan, { type: "insert", prevent: true, text: "\n  ", direct: true });
 });
 
 test("macOS Korean composition Enter is not claimed up front", () => {
@@ -207,14 +207,40 @@ test("a later real Enter is not swallowed with the IME echo", () => {
   assert.equal(plan.type, "native");
 });
 
-test("a normal indented Enter is not inserted by the IME path", () => {
-  const doc = docState(NESTED);
+test("Enter at the end of a nested bullet breaks the line and keeps the indent", () => {
+  const markers = ["*", "-"];
+  const indents = ["  ", "   ", "    ", "\t"];
+  for (const marker of markers) {
+    for (const indent of indents) {
+      const bullet = `${indent}${marker} 스스로 배우는 법`;
+      const value = `4. 인능을 어떻게 써야하는가\n${bullet}\n5. 우리의 미래`;
+      const cursor = value.indexOf("법") + "법".length;
+      const doc = docState(value, cursor);
+      const { controller } = controllerFor(doc);
+      const plan = controller.keydown(enter());
+      assert.equal(plan.type, "insert", JSON.stringify({ marker, indent }));
+      assert.equal(plan.direct, true);
+      assert.equal(plan.echo, undefined);
+      assert.equal(doc.value, `${value.slice(0, cursor)}\n${indent}${value.slice(cursor)}`);
+      assert.equal(doc.selectionStart, cursor + 1 + indent.length);
+      // A second Enter is another line, not an IME echo to swallow.
+      const again = controller.keydown(enter());
+      assert.equal(again.type, "insert");
+      assert.equal(doc.value, `${value.slice(0, cursor)}\n${indent}\n${indent}${value.slice(cursor)}`);
+    }
+  }
+});
+
+test("Enter at the end of a numbered item is left to the editor", () => {
+  const value = "4. 인능을 어떻게 써야하는가\n   * 스스로 배우는 법\n5. 우리의 미래";
+  const cursor = value.indexOf("가") + "가".length;
+  const doc = docState(value, cursor);
   const { controller, inserted } = controllerFor(doc);
   const plan = controller.keydown(enter());
-  assert.equal(plan.direct, false);
-  assert.equal(plan.text, "\n  ");
+  assert.equal(plan.type, "native");
+  assert.equal(plan.prevent, false);
   assert.deepEqual(inserted, []);
-  assert.equal(doc.value, NESTED);
+  assert.equal(doc.value, value);
 });
 
 test("an IME Enter reported as Process still waits for compositionend", () => {
