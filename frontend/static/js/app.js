@@ -8931,11 +8931,10 @@ el.editorB.addEventListener("focus", () => {
   focusedEditorPane = "b";
   setPreviewSource();
 });
-// Enter in either editor. Indent carry-over for pane A stays on the
-// execCommand path (see insertTextAtCursor). A macOS Korean IME Enter is
-// not that path: it arrives as isComposing / keyCode 229, CodeMirror drops
-// it, and preventDefault plus execCommand inserts nothing. The controller
-// breaks the line after the composition instead. See editor-enter.mjs.
+// Enter in either editor. See editor-enter.mjs. An indented line used to
+// preventDefault and insertText via execCommand; on macOS Chrome that
+// reports success and inserts nothing, so a nested bullet never broke.
+// The newline is now a CodeMirror edit. execCommand remains for Tab.
 function editorEnterReader(editor) {
   return {
     value: editor.value,
@@ -8963,9 +8962,8 @@ const enterA = mountEditorEnter(el.editor);
 const enterB = mountEditorEnter(el.editorB);
 function applyEditorEnter(event, controller, { carryIndent = false, insertIndent = null } = {}) {
   const plan = controller.keydown(event);
-  // A normal indented Enter (not an IME confirm). Pane B leaves this to
-  // CodeMirror, which already carries indent; pane A keeps the execCommand
-  // insertion so its undo stack stays the one Tab uses.
+  // direct inserts already went through the editor. A non-direct insert is
+  // the old execCommand path, kept only if a caller still asks for it.
   if (plan.type === "insert" && !plan.direct) {
     if (!carryIndent || !insertIndent) return false;
     event.preventDefault();
