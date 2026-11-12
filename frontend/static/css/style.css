@@ -1133,6 +1133,32 @@ body.row-dragging {
   content: none;
 }
 
+/* The tab currently being dragged (see startTabDrag in app.js). It stays
+   in its slot until the pointer is released; the drop line shows where it
+   will land. */
+.editor-tab.dragging {
+  opacity: 0.45;
+}
+
+body.tab-dragging {
+  cursor: grabbing;
+  user-select: none;
+}
+
+/* A fixed line in the gap under the pointer, in the same accent as the
+   current tab's top edge. Fixed, rather than a child of the strip, so it
+   does not shift tab indexes and stays put while the strip scrolls. */
+.tab-drop-indicator {
+  position: fixed;
+  z-index: 40;
+  width: 3px;
+  margin-left: -1.5px;
+  background: var(--accent);
+  border-radius: 2px;
+  pointer-events: none;
+  box-shadow: 0 0 0 1px #fff;
+}
+
 .pane-header {
   padding: 10px 16px;
   border-bottom: 1px solid var(--border);

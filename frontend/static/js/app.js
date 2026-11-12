@@ -4,6 +4,7 @@ import { openXArticleDialog } from "./x-article.js";
 import { conversationPair, paneShareState } from "./split-share.mjs";
 import { conversationCompletedSnapshot, planConversationSend } from "./conversation-send.mjs";
 import { normalizePreviewPin, previewContent, previewMarkdownDownload, PREVIEW_PIN_STORAGE_KEY } from "./preview-pin.mjs";
+import { TABS_STORAGE_KEY, dropIndicatorX, pointerPastDragThreshold, reorderTabs, snapshotTabs, tabDropTarget, tabGapIndex } from "./tab-order.mjs";
 import { copyText } from "./clipboard-copy.mjs";
 import { icon, symbolIcon, mountIcons } from "./icons.js";
 import * as api from "./api.js";
@@ -552,10 +553,16 @@ function loadActiveDocRef() {
 // tree, quick open, a link, a new draft - goes through openInTab: a tab of
 // its own, or the one it already has. Split view's pane B has no tabs.
 // The list of tabs (not their unsaved contents - autosave already keeps
-// those per document) survives a reload.
-const TABS_KEY = "mark-vector:tabs";
+// those per document) survives a reload, in the order they were left -
+// including an order chosen by dragging a tab (see startTabDrag).
 let tabs = []; // [{ ref, title, stash }]
 let currentTab = -1;
+// Set while a pointer may be dragging a tab. Nothing is reordered until
+// the pointer actually moves past the click threshold.
+let tabDrag = null;
+// A finished drag still emits a click. This swallows that one click so it
+// does not also switch tabs or press the close button under the pointer.
+let ignoreTabClick = false;
 // True while openInTab/switchToTab has a loader (selectDocument & co.)
 // filling a tab: the document being left is safe in its own tab, so the
 // loader's "unsaved changes, leave anyway?" doesn't apply.
@@ -584,7 +591,7 @@ function sameDocRef(a, b) {
 
 function saveTabs() {
   try {
-    localStorage.setItem(TABS_KEY, JSON.stringify({ tabs: tabs.map(({ ref, title }) => ({ ref, title })), current: currentTab }));
+    localStorage.setItem(TABS_STORAGE_KEY, JSON.stringify(snapshotTabs(tabs, currentTab)));
   } catch (err) {
     // localStorage unavailable - the tabs just won't survive a reload
   }
@@ -592,7 +599,7 @@ function saveTabs() {
 
 function loadTabs() {
   try {
-    const saved = JSON.parse(localStorage.getItem(TABS_KEY) || "null");
+    const saved = JSON.parse(localStorage.getItem(TABS_STORAGE_KEY) || "null");
     if (saved && Array.isArray(saved.tabs)) return saved;
   } catch (err) {
     // fall through
@@ -867,12 +874,23 @@ function renderTabs() {
       close.className = "editor-tab-close";
       close.textContent = "×";
       close.title = t("tabs.close");
+      // A press on the close button must not start a drag of the tab.
+      close.addEventListener("pointerdown", (e) => {
+        e.stopPropagation();
+      });
       close.addEventListener("click", (e) => {
         e.stopPropagation();
+        if (consumeSuppressedTabClick()) return;
         closeTab(index);
       });
       item.append(label, close);
-      item.addEventListener("click", () => switchToTab(index));
+      item.addEventListener("click", () => {
+        if (consumeSuppressedTabClick()) return;
+        switchToTab(index);
+      });
+      item.addEventListener("pointerdown", (e) => {
+        startTabDrag(e, index, item);
+      });
       item.addEventListener("contextmenu", (e) => {
         e.preventDefault();
         openRowMenu({ x: e.clientX, y: e.clientY }, [
@@ -891,8 +909,150 @@ function renderTabs() {
       return item;
     })
   );
+  // Rebuilding the row mid-drag (a background tab's dirty marker, mostly)
+  // must not drop the "this one is moving" look or scroll the row away
+  // from the pointer.
+  const dragging = tabDrag && tabDrag.moved;
   const current = strip.children[currentTab];
-  if (current) current.scrollIntoView({ block: "nearest", inline: "nearest" });
+  if (current && !dragging) current.scrollIntoView({ block: "nearest", inline: "nearest" });
+  if (dragging) {
+    const again = strip.children[tabDrag.from];
+    if (again && again.classList.contains("editor-tab")) {
+      again.classList.add("dragging");
+      tabDrag.item = again;
+    }
+  }
+}
+
+function consumeSuppressedTabClick() {
+  if (!ignoreTabClick) return false;
+  ignoreTabClick = false;
+  return true;
+}
+
+// Writes `tabs` in the dragged order and remembers it the same way a newly
+// opened or closed tab is remembered. The active document stays whatever
+// it was; only which index that is can change.
+function applyTabOrder(from, to) {
+  if (streaming) return false;
+  const result = reorderTabs(tabs, currentTab, from, to);
+  if (!result.moved) return false;
+  tabs = result.tabs;
+  currentTab = result.current;
+  saveTabs();
+  renderTabs();
+  return true;
+}
+
+// One click's worth of suppression, plus a flag the tab's own handler can
+// see if the node that was pressed has already been replaced by renderTabs
+// before the click is dispatched. The timer matches suppressClickBriefly:
+// a drag that ends without a click must not eat the next real one.
+function armTabClickSuppression() {
+  ignoreTabClick = true;
+  const swallow = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    ignoreTabClick = false;
+  };
+  document.addEventListener("click", swallow, { capture: true, once: true });
+  setTimeout(() => {
+    ignoreTabClick = false;
+    document.removeEventListener("click", swallow, true);
+  }, 500);
+}
+
+function tabStripEdges() {
+  const edges = [];
+  for (const node of el.tabStrip.children) {
+    if (!node.classList || !node.classList.contains("editor-tab")) continue;
+    const rect = node.getBoundingClientRect();
+    edges.push({ left: rect.left, right: rect.right });
+  }
+  return edges;
+}
+
+function placeTabDropIndicator(gap, edges) {
+  let indicator = tabDrag.indicator;
+  if (!indicator) {
+    indicator = document.createElement("div");
+    indicator.className = "tab-drop-indicator";
+    indicator.setAttribute("aria-hidden", "true");
+    document.body.appendChild(indicator);
+    tabDrag.indicator = indicator;
+  }
+  const strip = el.tabStrip.getBoundingClientRect();
+  const x = dropIndicatorX(gap, edges);
+  const visible = edges.length > 0 && x >= strip.left - 1 && x <= strip.right + 1;
+  indicator.hidden = !visible;
+  if (!visible) return;
+  indicator.style.left = `${x}px`;
+  indicator.style.top = `${strip.top}px`;
+  indicator.style.height = `${strip.height}px`;
+}
+
+function nudgeTabStrip(clientX) {
+  const strip = el.tabStrip;
+  const rect = strip.getBoundingClientRect();
+  const zone = 28;
+  if (clientX < rect.left + zone) strip.scrollLeft -= 14;
+  else if (clientX > rect.right - zone) strip.scrollLeft += 14;
+}
+
+// Mouse only, same as a tree-row drag. A touch pointerdown is how the
+// strip scrolls and how a long-press opens the tab menu, so it stays a
+// tap: the click handler still switches tabs, and the close button still
+// closes. A long-press drag would have to win that race.
+function startTabDrag(e, from, item) {
+  if (tabDrag || streaming || tabs.length < 2) return;
+  if (e.button !== 0 || e.pointerType !== "mouse") return;
+  if (e.target instanceof Element && e.target.closest(".editor-tab-close")) return;
+  tabDrag = {
+    from,
+    item,
+    pointerId: e.pointerId,
+    startX: e.clientX,
+    startY: e.clientY,
+    moved: false,
+    gap: null,
+    indicator: null,
+  };
+  document.addEventListener("pointermove", onTabDragMove);
+  document.addEventListener("pointerup", onTabDragEnd);
+  document.addEventListener("pointercancel", onTabDragEnd);
+}
+
+function onTabDragMove(e) {
+  if (!tabDrag || e.pointerId !== tabDrag.pointerId) return;
+  if (!tabDrag.moved) {
+    if (!pointerPastDragThreshold(e.clientX - tabDrag.startX, e.clientY - tabDrag.startY)) return;
+    tabDrag.moved = true;
+    if (tabDrag.item) tabDrag.item.classList.add("dragging");
+    document.body.classList.add("tab-dragging");
+    armTabClickSuppression();
+  }
+  e.preventDefault();
+  nudgeTabStrip(e.clientX);
+  const edges = tabStripEdges();
+  const gap = tabGapIndex(e.clientX, edges);
+  tabDrag.gap = gap;
+  placeTabDropIndicator(gap, edges);
+}
+
+function onTabDragEnd(e) {
+  if (!tabDrag || e.pointerId !== tabDrag.pointerId) return;
+  document.removeEventListener("pointermove", onTabDragMove);
+  document.removeEventListener("pointerup", onTabDragEnd);
+  document.removeEventListener("pointercancel", onTabDragEnd);
+  document.body.classList.remove("tab-dragging");
+  const drag = tabDrag;
+  tabDrag = null;
+  if (drag.item) drag.item.classList.remove("dragging");
+  if (drag.indicator) drag.indicator.remove();
+  if (e.type !== "pointerup" || !drag.moved || drag.gap === null) return;
+  const to = tabDropTarget(drag.from, drag.gap, tabs.length);
+  if (to === null) return;
+  applyTabOrder(drag.from, to);
 }
 
 // Cheap per-keystroke update of the current tab's unsaved marker (see
@@ -6416,6 +6576,7 @@ function shortcutGroups() {
         { desc: "shortcuts.analysisRun", keys: [`${alt}R`] },
         { desc: "shortcuts.jumpDoc", keys: [`${HINT_KEY_SYMBOL}1-9`] },
         { desc: "shortcuts.tabPrevNext", keys: [`${alt}[`, `${alt}]`] },
+        { desc: "shortcuts.tabMove", keys: [`${alt}⇧[`, `${alt}⇧]`] },
         { desc: "shortcuts.tabClose", keys: [`${alt}W`] },
         { desc: "shortcuts.tabCloseOthers", keys: [`${alt}O`] },
       ],
@@ -9231,9 +9392,18 @@ function toggleSplitFocus() {
   // nothing rather than moving focus into an uneditable, empty pane.
 }
 // Tabs: ⌥W (Alt+W) closes the current one, ⌥O every other one, ⌥[ / ⌥]
-// (Alt+[ / Alt+]) go to the previous / next. ⌘W and ⌃Tab belong to the browser and can't be had.
+// (Alt+[ / Alt+]) go to the previous / next, ⌥⇧[ / ⌥⇧] move the current
+// tab left / right. ⌘W and ⌃Tab belong to the browser and can't be had.
 document.addEventListener("keydown", (e) => {
-  if (!e.altKey || e.metaKey || e.ctrlKey || e.shiftKey || !el.quickOpenOverlay.hidden || !el.shortcutsOverlay.hidden) return;
+  if (!e.altKey || e.metaKey || e.ctrlKey || !el.quickOpenOverlay.hidden || !el.shortcutsOverlay.hidden) return;
+  if (e.shiftKey) {
+    if ((e.code === "BracketLeft" || e.code === "BracketRight") && tabs.length > 1 && currentTab >= 0) {
+      e.preventDefault();
+      const to = currentTab + (e.code === "BracketLeft" ? -1 : 1);
+      applyTabOrder(currentTab, to);
+    }
+    return;
+  }
   if (e.code === "KeyW" && currentTab >= 0) {
     e.preventDefault();
     closeTab(currentTab);
