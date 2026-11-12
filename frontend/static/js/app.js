@@ -840,12 +840,12 @@ function tabTooltip(tab) {
 }
 
 // Shown once there's more than one tab - a single document is already
-// named in the header below.
+// named on the left of the editor command bar.
 function renderTabs() {
   const strip = el.tabStrip;
   strip.hidden = tabs.length < 2;
   // With tabs showing, the current one already names the document - the
-  // header's own filename would just take room from its buttons.
+  // command bar's own filename would just take room from its icons.
   el.editorFilename.hidden = !strip.hidden;
   if (strip.hidden) {
     strip.replaceChildren();

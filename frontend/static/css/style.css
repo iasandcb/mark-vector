@@ -241,10 +241,9 @@ body {
    .tree-pane/.preview-pane (they're display:none while collapsed, so a
    button *inside* either would have no way to be clicked) - see
    app.js's setTreeCollapsed/setPreviewCollapsed. */
-/* Sits below .pane-header (min-height: 44px, plus its own padding) rather
-   than beside it - at the header's own height, it would overlap the
-   editor's filename label on the left or its save/publish/send buttons on
-   the right. */
+/* Sits below the editor command bar rather than beside it - at the bar's
+   own height it would overlap the filename on the left or the pinned
+   save/publish/send buttons on the right. */
 .pane-expand-btn {
   position: fixed;
   top: 56px;
@@ -828,13 +827,16 @@ body.row-dragging {
   border-color: var(--accent);
 }
 
-/* Editor-header buttons carry an icon and a word (see index.html), but only
-   the icon is shown, at every width - worded, the row wrapped onto a second
-   line even on a desktop. The word stays in the markup (and each button's
-   title says it on hover), and the publish/dictation labels are still kept
-   current by app.js. */
+/* Toolbar buttons carry an icon and a word (see index.html), but only the
+   icon is shown - worded, the row wrapped onto a second line. The word stays
+   in the markup (and each button's title / aria-label says it on hover).
+   대화 is the exception: it keeps its short label and the accent fill.
+   Publish/dictation labels are still kept current by app.js. */
 .editor-actions .btn-label {
   display: none;
+}
+.editor-actions .editor-send .btn-label {
+  display: inline;
 }
 .editor-actions .btn-icon {
   font-size: 17px;
@@ -856,21 +858,12 @@ body.row-dragging {
    itself is one line at every width (see .editor-actions); a narrow
    column tightens the gap again in the editor-column container query. */
 @media (max-width: 700px), (pointer: coarse) and (max-width: 1000px) and (max-height: 500px) {
-  .editor-column > .pane-header {
-    padding-left: 8px;
-    padding-right: 8px;
-  }
   .editor-actions .secondary-btn,
   .editor-actions .primary-btn {
     padding: 6px 5px;
   }
   .editor-actions .dictation-lang {
     padding: 0 2px;
-  }
-  /* What room is left is a sliver - the filename showed as a stray "0".
-     The document is named by its tab (two or more open) and in the list. */
-  #editor-filename {
-    display: none;
   }
 }
 
@@ -1170,10 +1163,11 @@ body.row-dragging {
 
 /* One row at every width and pane combination. Wrapping used to drop ◫
    and ⚙ onto a second line once the editor column got narrow (tree and
-   preview both open, or split view). The icons scroll inside
-   .editor-actions-scroll; the ⚙ stays outside that scroller so it is never
-   covered and never widens the page. The spacer keeps the icons against
-   the gear when they fit. */
+   preview both open, or split view). The tool icons scroll inside
+   .editor-actions-scroll. Save, publish, X article, 대화, and ⚙ stay
+   outside that scroller so they are never covered and never widen the
+   page. The spacer keeps the tool icons against that pinned group when
+   they fit. */
 .editor-actions {
   display: flex;
   align-items: center;
