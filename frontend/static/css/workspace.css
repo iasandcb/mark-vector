@@ -92,7 +92,10 @@ kbd { font-family: inherit; font-weight: 450; font-size: 10px; color: var(--mute
 .pane-resizer:hover, .pane-resizer.dragging { background: var(--accent); border-radius: 4px; }
 .pane-header { min-height: 61px; padding: 12px 17px; gap: 12px; background: #fff; }
 .pane-title-group { gap: 7px; }
-.pane-title-group::before { content: ''; display: block; width: 7px; height: 7px; background: #a0b7a9; border-radius: 2px; flex-shrink: 0; }
+/* Document-name mark. It belongs to the filename: with two or more tabs,
+   renderTabs hides #editor-filename and a mark on the group would stay
+   behind as a bare square. It is not a save or connection light. */
+.pane-filename::before { content: ''; display: inline-block; width: 7px; height: 7px; margin-right: 7px; background: #a0b7a9; border-radius: 2px; vertical-align: middle; }
 .pane-filename { font-family: inherit; font-size: 12px; font-weight: 550; color: #42534b; }
 .editor-primary-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .editor-primary-actions .secondary-btn, .editor-primary-actions .primary-btn { padding: 6px 9px; display: inline-flex; gap: 5px; align-items: center; min-height: 31px; }
