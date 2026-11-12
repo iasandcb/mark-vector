@@ -97,25 +97,35 @@ kbd { font-family: inherit; font-weight: 450; font-size: 10px; color: var(--mute
    behind as a bare square. It is not a save or connection light. */
 .pane-filename::before { content: ''; display: inline-block; width: 7px; height: 7px; margin-right: 7px; background: #a0b7a9; border-radius: 2px; vertical-align: middle; }
 .pane-filename { font-family: inherit; font-size: 12px; font-weight: 550; color: #42534b; }
-.editor-primary-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
-.editor-primary-actions .secondary-btn, .editor-primary-actions .primary-btn { padding: 6px 9px; display: inline-flex; gap: 5px; align-items: center; min-height: 31px; }
-.editor-primary-actions .ui-icon { width: 14px; height: 14px; }
-.editor-primary-actions .btn-label { font-size: 11px; }
+.editor-primary-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
+.editor-primary-actions .btn-label { display: none; }
 .secondary-btn { border-radius: 6px; font-size: 11px; min-height: 30px; padding: 5px 9px; line-height: 1.4; }
 .secondary-btn:not(:disabled):hover { background: var(--code-bg); border-color: #bccdc2; }
 .secondary-btn[aria-pressed="true"] { color: var(--accent); background: var(--active-bg); border-color: #bed3c6; }
 .secondary-btn[aria-pressed="true"]:hover { background: #d9e9df; }
-.editor-commandbar { display: flex; align-items: center; gap: 10px; padding: 7px 15px; min-height: 43px; border-bottom: 1px solid #edf0ed; }
-.commandbar-label { font-size: 9px; font-weight: 600; letter-spacing: 1px; color: #6d7e72; }
-.editor-actions { flex: 1; gap: 4px; }
+.editor-commandbar { display: flex; align-items: center; gap: 10px; padding: 7px 15px; min-height: 43px; min-width: 0; flex-wrap: nowrap; border-bottom: 1px solid #edf0ed; }
+.commandbar-title { flex: 0 1 auto; min-width: 0; max-width: min(46%, 16rem); gap: 8px; }
+.commandbar-title .pane-filename, .commandbar-title .tool-status { min-width: 0; }
+.commandbar-title .tool-status { max-width: 14rem; }
+.editor-commandbar:has(#editor-filename:not([hidden])) .commandbar-label { display: none; }
+.commandbar-title:has(#tool-status:not([hidden])) { max-width: min(62%, 24rem); }
+.editor-commandbar .pane-title-group::before { display: none; }
+.editor-commandbar:has(#editor-filename:not([hidden])) .pane-title-group::before { display: block; }
+.commandbar-label { flex-shrink: 0; font-size: 9px; font-weight: 600; letter-spacing: 1px; color: #6d7e72; }
+.editor-actions { flex: 1; gap: 4px; min-width: 0; }
 .editor-actions-scroll { justify-content: flex-end; gap: 3px; }
 .editor-actions .secondary-btn { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; min-height: 27px; padding: 4px 6px; background: transparent; border-color: transparent; color: #6f8175; }
 .editor-actions .secondary-btn:not(:disabled):hover { background: var(--code-bg); }
 .editor-actions .secondary-btn[aria-pressed="true"] { background: var(--active-bg); color: var(--accent); }
+.editor-actions .secondary-btn.dirty { border-color: var(--accent); color: var(--accent); }
 .editor-actions .btn-icon { display: inline-flex; font-size: 15px; }
-.editor-actions .ui-icon, .editor-actions > .secondary-btn > svg { width: 15px; height: 15px; }
+.editor-actions .ui-icon, .editor-actions .secondary-btn > svg { width: 15px; height: 15px; }
 .editor-actions .btn-label { display: none; }
+.editor-actions .editor-send { flex-shrink: 0; min-height: 27px; padding: 3px 8px; gap: 4px; border-radius: 6px; font-size: 11px; white-space: nowrap; }
+.editor-actions .editor-send .btn-label { display: inline; font-size: 11px; }
+.editor-actions .editor-send .ui-icon { width: 14px; height: 14px; }
 .editor-actions .dictation-group { align-items: center; }
+#editor-pane-b > .pane-header { min-height: 43px; padding: 7px 12px; }
 .dictation-lang { border-color: transparent; background: transparent; font-size: 9px; }
 .no-document .editor-commandbar { display: none; }
 .no-document .editor-primary-actions { visibility: hidden; }
@@ -210,10 +220,14 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .row-menu { border-radius: 9px; box-shadow: var(--shadow); padding: 5px; }
 .row-menu-item { border-radius: 5px; font-size: 12px; min-height: 32px; }
 @container (max-width: 370px) {
-  .editor-primary-actions .btn-label { display: none; }
   .pane-header { padding-inline: 10px; gap: 5px; }
-  .editor-primary-actions { gap: 3px; }
+  .editor-primary-actions { gap: 1px; }
   .document-format { display: none; }
+}
+@container editor-column (max-width: 420px) {
+  .editor-actions .editor-send .btn-label { display: none; }
+  .editor-actions .editor-send { padding: 4px 6px; min-width: 28px; }
+  .commandbar-title { max-width: 34%; }
 }
 @media (max-width: 1100px) and (min-width: 901px) {
   .app-shell { --tree-width: 230px; }
@@ -247,12 +261,13 @@ input[type="checkbox"] { accent-color: var(--accent); }
   .tree-empty { font-size: 14px; max-width: 230px; }
   .pane-header { min-height: 62px; padding: 13px 16px; }
   .pane-filename { font-size: 13px; }
-  .editor-primary-actions .secondary-btn, .editor-primary-actions .primary-btn { min-height: 35px; min-width: 35px; padding: 7px; }
-  .editor-primary-actions .btn-label { display: none; }
-  .editor-primary-actions .ui-icon { width: 17px; height: 17px; }
   .editor-commandbar { min-height: 49px; padding-inline: 13px; }
-  .editor-actions .secondary-btn { min-height: 34px; min-width: 34px; }
+  .editor-actions .secondary-btn,
+  .editor-actions .editor-send { min-height: 34px; min-width: 34px; }
+  .editor-actions .editor-send,
+  .editor-actions .editor-send .btn-label { font-size: 13px; }
   .editor-actions .ui-icon { width: 17px; height: 17px; }
+  .editor-actions .editor-send .ui-icon { width: 16px; height: 16px; }
   .editor-toolbar select { min-height: 40px; padding: 8px; font-size: 14px; }
   .editor-pane .cm-editor { font-size: 16px; }
   .editor-pane .cm-editor .cm-line { padding-inline: 14px; }
@@ -314,5 +329,5 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .x-article-dialog [data-open] { display: inline-flex; align-items: center; text-decoration: none; min-height: 36px; padding: 8px 16px; font-size: 12px; }
 .x-article-dialog .workspace-dialog-actions { flex-wrap: wrap; }
 
-/* Primary actions now have their own row, leaving room for the filename on phones. */
-#editor-filename { display: block; }
+/* A single open document is named on the command bar (tabs hide that label).
+   [hidden] still wins, so the filename stays gone once the tab strip is up. */
