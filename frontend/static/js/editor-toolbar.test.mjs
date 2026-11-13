@@ -52,6 +52,23 @@ test("대화 stays accent-filled, with its label, just before the settings gear"
   assert.ok(sendAt > scrollEnd && gearAt > sendAt && scrollAt < scrollEnd);
 });
 
+test("a narrow phone gives the dictation cluster its own row", () => {
+  const css = fs.readFileSync(new URL("../css/workspace.css", import.meta.url), "utf8");
+  const marker = "Narrow phone: recording controls on their own row.";
+  const at = css.indexOf(marker);
+  assert.ok(at > 0, "missing narrow-phone recording-row comment");
+  const mediaAt = css.lastIndexOf("@media (max-width: 700px)", at);
+  assert.ok(mediaAt > 0 && mediaAt < at, "the recording row must stay inside the phone breakpoint");
+  const block = css.slice(at, at + 2200);
+  assert.match(block, /@container editor-column \(max-width: 700px\)/);
+  assert.match(block, /\.editor-commandbar \.dictation-group \{[^}]*order:\s*-1/);
+  assert.match(block, /\.editor-commandbar \.dictation-group \{[^}]*flex:\s*1 0 100%/);
+  assert.match(block, /display:\s*contents/);
+  assert.match(block, /#dictation-record-btn|dictation-record/);
+  const base = css.slice(0, mediaAt);
+  assert.match(base, /\.editor-commandbar \{[^}]*flex-wrap:\s*nowrap/);
+});
+
 test("the split pane keeps filename plus icon-only publish, article, and save", () => {
   assert.match(paneB, /id="editor-filename-b"/);
   assert.match(paneB, /class="editor-actions-scroll"[\s\S]*id="fold-all-b"[\s\S]*id="unfold-all-b"/);
