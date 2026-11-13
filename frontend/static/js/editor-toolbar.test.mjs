@@ -52,19 +52,20 @@ test("대화 stays accent-filled, with its label, just before the settings gear"
   assert.ok(sendAt > scrollEnd && gearAt > sendAt && scrollAt < scrollEnd);
 });
 
-test("a narrow phone gives the dictation cluster its own row", () => {
+test("a narrow phone shows the recording clock and the queue notice", () => {
   const css = fs.readFileSync(new URL("../css/workspace.css", import.meta.url), "utf8");
-  const marker = "Narrow phone: recording controls on their own row.";
+  const marker = "Narrow phone: recording clock and the queue notice.";
   const at = css.indexOf(marker);
-  assert.ok(at > 0, "missing narrow-phone recording-row comment");
+  assert.ok(at > 0, "missing narrow-phone recording notice comment");
   const mediaAt = css.lastIndexOf("@media (max-width: 700px)", at);
-  assert.ok(mediaAt > 0 && mediaAt < at, "the recording row must stay inside the phone breakpoint");
-  const block = css.slice(at, at + 2200);
+  assert.ok(mediaAt > 0 && mediaAt < at, "the phone rules must stay inside the phone breakpoint");
+  const end = css.indexOf("@media (prefers-reduced-motion", at);
+  const block = css.slice(at, end);
   assert.match(block, /@container editor-column \(max-width: 700px\)/);
-  assert.match(block, /\.editor-commandbar \.dictation-group \{[^}]*order:\s*-1/);
-  assert.match(block, /\.editor-commandbar \.dictation-group \{[^}]*flex:\s*1 0 100%/);
-  assert.match(block, /display:\s*contents/);
-  assert.match(block, /#dictation-record-btn|dictation-record/);
+  assert.doesNotMatch(block, /display:\s*contents/);
+  assert.match(block, /\.dictation-group \{[^}]*position:\s*absolute/);
+  assert.match(block, /\.dictation-record\.recording \{[^}]*-webkit-text-fill-color:\s*#fff/);
+  assert.match(block, /#tool-status:not\(\[hidden\]\)[\s\S]*white-space:\s*normal/);
   const base = css.slice(0, mediaAt);
   assert.match(base, /\.editor-commandbar \{[^}]*flex-wrap:\s*nowrap/);
 });
