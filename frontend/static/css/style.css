@@ -1187,13 +1187,16 @@ body.tab-dragging {
   flex-shrink: 1;
 }
 
-/* One row at every width and pane combination. Wrapping used to drop ◫
+/* One row at desktop widths and pane combinations. Wrapping used to drop ◫
    and ⚙ onto a second line once the editor column got narrow (tree and
    preview both open, or split view). The tool icons scroll inside
    .editor-actions-scroll. Save, publish, X article, 대화, and ⚙ stay
    outside that scroller so they are never covered and never widen the
    page. The spacer keeps the tool icons against that pinned group when
-   they fit. */
+   they fit. A narrow phone is the exception: workspace.css pulls the
+   dictation cluster onto its own row so the mic, language, engine, and
+   record controls stay on screen instead of scrolling away with a hidden
+   scrollbar. */
 .editor-actions {
   display: flex;
   align-items: center;
