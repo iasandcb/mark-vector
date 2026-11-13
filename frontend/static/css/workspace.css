@@ -296,54 +296,52 @@ input[type="checkbox"] { accent-color: var(--accent); }
   .mobile-tab.active { color: var(--accent); }
   .mobile-tab.active::before { content: ''; position: absolute; top: 0; width: 26px; height: 2px; background: var(--accent); border-radius: 0 0 2px 2px; }
 
-  /* Narrow phone: recording controls on their own row.
-     The dictation cluster sits in .editor-actions-scroll, which hides its
-     scrollbar and keeps the rightmost icons in view. At 375–430px that
-     leaves only the record dot inside the viewport; the mic, language,
-     and engine are clipped to its left, and a running clock ("12:34") is
-     wider still. display:contents lets the cluster become a flex item of
-     the command bar so it can take the first line, while the filename and
-     the other tools stay on the line below. Desktop (and a wide phone
-     landscape column) never matches this container query. */
+  /* Narrow phone: recording clock and the queue notice.
+     The dictation cluster is taken out of the icon scroller with absolute
+     positioning. A contents box hid the elapsed time on WebKit (the red
+     button stayed, its text did not paint) and left
+     #tool-status sharing the icon row, where a 375px column ellipsizes
+     "YouTube 대기열에 넣었습니다" away. The cluster sits in the command
+     bar's top padding. While a notice is showing, the title row drops
+     below the icons and the pill wraps the whole sentence. Desktop never
+     matches this container query. */
   @container editor-column (max-width: 700px) {
     .editor-commandbar {
-      flex-wrap: wrap;
+      position: relative;
       align-items: center;
       column-gap: 2px;
-      row-gap: 6px;
       padding-inline: 10px;
+    }
+    .editor-commandbar:has(#dictation-group:not([hidden])) {
+      padding-top: 52px;
     }
     .editor-commandbar .editor-actions,
     .editor-commandbar .editor-actions-scroll {
-      display: contents;
-      /* overflow:auto on the scroller would suppress display:contents and
-         keep clipping the cluster. visible lets the box dissolve. */
+      /* The cluster is positioned against the command bar, so an
+         overflow scrollport between them would clip it. */
       overflow: visible;
     }
     .editor-commandbar .editor-actions-scroll > .secondary-btn,
     .editor-commandbar .editor-primary-actions .secondary-btn,
     .editor-commandbar .editor-send,
     .editor-commandbar #toolbar-toggle-btn {
-      flex: 0 1 auto;
+      flex: 0 0 auto;
       min-width: 32px;
       min-height: 32px;
       padding: 4px;
     }
-    .editor-commandbar .editor-actions-scroll::before {
-      content: none;
-    }
-    .editor-commandbar .commandbar-title {
-      margin-right: auto;
-    }
     .editor-commandbar .dictation-group {
-      order: -1;
-      flex: 1 0 100%;
+      position: absolute;
+      z-index: 2;
+      top: 6px;
+      left: 10px;
+      right: 10px;
       display: flex;
       align-items: center;
       justify-content: flex-start;
       gap: 6px;
-      min-width: 0;
-      max-width: 100%;
+      width: auto;
+      max-width: calc(100% - 20px);
     }
     .editor-commandbar .dictation-group > * {
       flex: 0 0 auto;
@@ -351,6 +349,8 @@ input[type="checkbox"] { accent-color: var(--accent); }
     .editor-commandbar .dictation-group #dictation-btn,
     .editor-commandbar .dictation-group select.dictation-lang,
     .editor-commandbar .dictation-group .dictation-record {
+      -webkit-appearance: none;
+      appearance: none;
       box-sizing: border-box;
       min-width: 44px;
       min-height: 40px;
@@ -359,6 +359,8 @@ input[type="checkbox"] { accent-color: var(--accent); }
       border-radius: 6px;
       background: var(--panel);
       color: var(--text);
+      -webkit-text-fill-color: var(--text);
+      line-height: 1.2;
       touch-action: manipulation;
     }
     .editor-commandbar .dictation-group select.dictation-lang {
@@ -368,17 +370,20 @@ input[type="checkbox"] { accent-color: var(--accent); }
     .editor-commandbar .dictation-group #dictation-btn[aria-pressed="true"] {
       background: var(--active-bg);
       color: var(--accent);
+      -webkit-text-fill-color: var(--accent);
       border-color: #bed3c6;
     }
     .editor-commandbar .dictation-group #dictation-btn.listening {
       background: #b91c1c;
       border-color: #b91c1c;
       color: #fff;
+      -webkit-text-fill-color: #fff;
     }
     .editor-commandbar .dictation-group #dictation-btn.transcribing-file {
       background: var(--accent);
       border-color: var(--accent);
       color: var(--accent-contrast);
+      -webkit-text-fill-color: var(--accent-contrast);
     }
     .editor-commandbar .dictation-group .dictation-record.recording {
       min-width: 4.8em;
@@ -386,12 +391,39 @@ input[type="checkbox"] { accent-color: var(--accent); }
       border-color: #b91c1c;
       background: #b91c1c;
       color: #fff;
+      -webkit-text-fill-color: #fff;
       font-size: 14px;
+      font-variant-numeric: tabular-nums;
+      line-height: 1.2;
       white-space: nowrap;
+      overflow: visible;
     }
     .editor-commandbar .dictation-group .dictation-record.recording.behind {
       border-color: #a16207;
       background: #a16207;
+    }
+    .editor-commandbar:has(#tool-status:not([hidden])) {
+      flex-wrap: wrap;
+      row-gap: 6px;
+    }
+    .editor-commandbar:has(#tool-status:not([hidden])) .editor-actions {
+      order: 1;
+      flex: 1 1 100%;
+    }
+    .editor-commandbar:has(#tool-status:not([hidden])) .commandbar-title {
+      order: 2;
+      flex: 1 0 100%;
+      max-width: 100%;
+      margin-right: 0;
+    }
+    .editor-commandbar:has(#tool-status:not([hidden])) .tool-status {
+      flex: 1 1 auto;
+      max-width: none;
+      min-width: 0;
+      overflow: visible;
+      text-overflow: unset;
+      white-space: normal;
+      line-height: 1.35;
     }
   }
 }
