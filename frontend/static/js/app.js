@@ -62,7 +62,9 @@ import {
 } from "./playback-session.mjs";
 import { captureAudio } from "./mic-capture.mjs";
 import { createWebSpeechTranscript, webSpeechAfterEnd, webSpeechAfterStartError } from "./web-speech-session.mjs";
-import { recordingSupported, startRecording, RECORDING_AUDIO } from "./recording.js";
+import { recordingSupported, startRecording, currentRecordingId, RECORDING_AUDIO } from "./recording.js";
+import { describePending, describeStop, retryStoredRecording } from "./recording-upload.mjs";
+import { sharedRecordingStore } from "./recording-store.mjs";
 import { parseEditBlocks, applyEditBlock, collapseEditBlocks } from "./doc-edits.js";
 import { createAnalysisPanel } from "./analysis.js";
 import { punctuateSpeech } from "./punctuation.js";
@@ -157,6 +159,8 @@ const el = {
   docEditUndoBtn: document.getElementById("doc-edit-undo-btn"),
   docEditDismissBtn: document.getElementById("doc-edit-dismiss-btn"),
   toolStatus: document.getElementById("tool-status"),
+  recordingRetryBtn: document.getElementById("recording-retry-btn"),
+  recordingDownloadBtn: document.getElementById("recording-download-btn"),
   remoteBtn: document.getElementById("remote-btn"),
   syncConflict: document.getElementById("sync-conflict"),
   updateBanner: document.getElementById("update-banner"),
@@ -2467,9 +2471,20 @@ async function convertActiveFormat(target) {
 // Some gateways expose an agent's tool calls as extra "tool_status" stream
 // events (not every provider sends these - most never will). Shown as a
 // transient status line above the editor while a message is being sent.
+// A recording that never reached the server keeps this set until a retry
+// confirms the YouTube job (or the user is still looking at that failure).
+// Clearing the status line — a send finishing, a 2.5s toast — puts the
+// failure back instead of leaving the screen looking like nothing happened.
+let pendingRecovery = null;
+let recordingNoticeLock = false;
+let recordingNoticeText = "";
+
 function setToolStatus(text) {
+  if (!text && pendingRecovery) text = pendingRecovery.text;
+  else if (!text && recordingNoticeLock && recordingNoticeText) text = recordingNoticeText;
   el.toolStatus.textContent = text || "";
   el.toolStatus.hidden = !text;
+  el.toolStatus.classList.toggle("recording-failure", !!(text && (pendingRecovery || recordingNoticeLock)));
 }
 
 function clearEditor() {
@@ -3367,13 +3382,28 @@ function updateRecordButton(progress) {
     return;
   }
   if (!progress) return;
-  // Behind: pieces waiting on a failed upload (they're retried).
-  const behind = !!progress.error && progress.pending > 0;
+  // Behind: pieces waiting on a failed upload (they're retried). The button
+  // title is not visible on a phone, so the same sentence goes in
+  // #tool-status and stays until the upload catches up.
+  const behind = !!progress.error && (progress.pending > 0 || !progress.offset);
   btn.classList.toggle("behind", behind);
   // Just the time - the red button already says it's recording, and the
   // header row has no room to spare on a phone.
   btn.textContent = formatClock(progress.elapsedMs);
   btn.title = behind ? t("editor.recordingBehind", { kb: Math.round(progress.pending / 1024), message: progress.error }) : t("editor.recordingOn");
+  if (behind) {
+    recordingNoticeLock = true;
+    const text = t("editor.recordingBehind", { kb: Math.round((progress.pending || 0) / 1024), message: progress.error });
+    recordingNoticeText = text;
+    if (pendingRecovery) pendingRecovery.text = text;
+    setToolStatus(text);
+    return;
+  }
+  if (recordingNoticeLock && !pendingRecovery) {
+    recordingNoticeLock = false;
+    recordingNoticeText = "";
+    setToolStatus("");
+  }
 }
 
 // `ownsStream`: the stream was opened just for this, and goes with it.
@@ -3386,11 +3416,138 @@ async function startDictationRecording(session, stream, ownsStream) {
       return;
     }
     session.recording = { handle, stream, ownsStream, doc };
-    updateRecordButton({ elapsedMs: 0, pending: 0, error: null });
+    updateRecordButton(handle.snapshot());
   } catch (err) {
     if (ownsStream) stream.getTracks().forEach((track) => track.stop());
-    showRemoteStatus(t("editor.recordingFailed", { message: err.message }));
+    showRecordingFailure(t("editor.recordingFailed", { message: err.message || "error" }));
   }
+}
+
+function showRecordingFailure(text) {
+  clearTimeout(remoteStatusTimer);
+  recordingNoticeLock = true;
+  recordingNoticeText = text;
+  if (pendingRecovery) pendingRecovery.text = text;
+  setToolStatus(text);
+}
+
+function showRecordingRecovery(notice, item) {
+  clearTimeout(remoteStatusTimer);
+  const count = notice.count || 1;
+  const text = t(count > 1 ? "editor.recordingKeptMany" : notice.noticeKey, {
+    message: notice.error || "",
+    filename: (item && item.filename) || "",
+    count,
+  });
+  pendingRecovery = item ? { ...item, text, notice } : null;
+  recordingNoticeLock = true;
+  if (el.recordingRetryBtn) el.recordingRetryBtn.hidden = !notice.retry;
+  if (el.recordingDownloadBtn) el.recordingDownloadBtn.hidden = !notice.download;
+  setToolStatus(text);
+}
+
+function clearRecordingRecovery() {
+  pendingRecovery = null;
+  recordingNoticeLock = false;
+  recordingNoticeText = "";
+  if (el.recordingRetryBtn) {
+    el.recordingRetryBtn.hidden = true;
+    el.recordingRetryBtn.disabled = false;
+  }
+  if (el.recordingDownloadBtn) {
+    el.recordingDownloadBtn.hidden = true;
+    el.recordingDownloadBtn.disabled = false;
+  }
+  el.toolStatus.classList.remove("recording-failure");
+}
+
+async function offerPendingRecordings() {
+  if (pendingRecovery) return;
+  let store;
+  try {
+    store = await sharedRecordingStore();
+  } catch {
+    return;
+  }
+  let records = [];
+  try {
+    records = await store.list();
+  } catch {
+    return;
+  }
+  const items = [];
+  for (const record of records) {
+    if (!record || record.localId === currentRecordingId()) continue;
+    let chunks = [];
+    try {
+      chunks = await store.chunks(record.localId);
+    } catch {
+      chunks = [];
+    }
+    const bytes = chunks.reduce((sum, blob) => sum + (blob && blob.size ? blob.size : 0), 0);
+    if (!bytes) {
+      await store.forget(record.localId).catch(() => {});
+      continue;
+    }
+    items.push(record);
+  }
+  if (!items.length) return;
+  items.sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
+  showRecordingRecovery(describePending(items.length, items[0].error), {
+    localId: items[0].localId,
+    filename: items[0].filename,
+    projectId: items[0].projectId,
+    sessionId: items[0].sessionId,
+  });
+}
+
+async function retryRecovery() {
+  if (!pendingRecovery || !pendingRecovery.localId) return;
+  const item = pendingRecovery;
+  el.recordingRetryBtn.disabled = true;
+  const waiting = t("editor.recordingRetrying");
+  pendingRecovery.text = waiting;
+  setToolStatus(waiting);
+  try {
+    const store = await sharedRecordingStore();
+    const record = await store.get(item.localId);
+    const chunks = await store.chunks(item.localId);
+    if (!record || !chunks.length) throw new Error(t("editor.recordingMissing"));
+    await retryStoredRecording(record, chunks, api);
+    await store.forget(item.localId);
+    clearRecordingRecovery();
+    showRemoteStatus(t("editor.recordingQueued"));
+    await refreshSessionDocs(record.projectId, record.sessionId).catch(() => {});
+    renderTree();
+    await offerPendingRecordings();
+  } catch (err) {
+    showRecordingRecovery(
+      describeStop({ queued: false, videoError: null, uploadError: err.message || "upload failed", bytes: 1 }),
+      item,
+    );
+  } finally {
+    if (el.recordingRetryBtn) el.recordingRetryBtn.disabled = false;
+  }
+}
+
+async function downloadRecovery() {
+  if (!pendingRecovery || !pendingRecovery.localId) return;
+  const store = await sharedRecordingStore();
+  const record = await store.get(pendingRecovery.localId);
+  const chunks = await store.chunks(pendingRecovery.localId);
+  if (!record || !chunks.length) {
+    showRecordingFailure(t("editor.recordingFailed", { message: t("editor.recordingMissing") }));
+    return;
+  }
+  const blob = new Blob(chunks, { type: record.mime || "application/octet-stream" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${String(record.started || "recording").replaceAll(":", "-")}.${record.ext || "m4a"}`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
 }
 
 function stopDictationRecording(session) {
@@ -3399,13 +3556,18 @@ function stopDictationRecording(session) {
   session.recording = null;
   recording.handle.stop().then(async (result) => {
     if (recording.ownsStream) recording.stream.getTracks().forEach((track) => track.stop());
-    showRemoteStatus(
-      result && result.videoError
-        ? t("editor.recordingVideoQueueFailed", { message: result.videoError })
-        : result && result.queued
-          ? t("editor.recordingQueued")
-          : t("editor.recordingSaved")
-    );
+    if (result && result.retry) {
+      showRecordingRecovery(result, {
+        localId: result.localId,
+        filename: result.filename || recording.doc.filename,
+        projectId: result.projectId || recording.doc.projectId,
+        sessionId: result.sessionId || recording.doc.sessionId,
+      });
+    } else {
+      clearRecordingRecovery();
+      showRemoteStatus(t((result && result.noticeKey) || "editor.recordingSaved", { message: (result && result.error) || "" }));
+      await offerPendingRecordings();
+    }
     const { projectId, sessionId } = recording.doc;
     await refreshSessionDocs(projectId, sessionId).catch(() => {});
     renderTree();
@@ -3766,7 +3928,7 @@ function startDictation() {
         if (dictation !== session) stream.getTracks().forEach((track) => track.stop());
         else startDictationRecording(session, stream, true);
       })
-      .catch((err) => showRemoteStatus(t("editor.recordingFailed", { message: err.message })));
+      .catch((err) => showRecordingFailure(t("editor.recordingFailed", { message: err.message || "error" })));
   }
 }
 
@@ -5016,10 +5178,13 @@ el.dictationRecordBtn.addEventListener("click", () => {
       navigator.mediaDevices
         .getUserMedia({ audio: micConstraints(RECORDING_AUDIO) })
         .then((stream) => (dictation === session ? startDictationRecording(session, stream, true) : stream.getTracks().forEach((tr) => tr.stop())))
-        .catch((err) => showRemoteStatus(t("editor.recordingFailed", { message: err.message })));
+        .catch((err) => showRecordingFailure(t("editor.recordingFailed", { message: err.message || "error" })));
   }
 });
+el.recordingRetryBtn.addEventListener("click", () => retryRecovery());
+el.recordingDownloadBtn.addEventListener("click", () => downloadRecovery());
 restoreDictationRecord();
+offerPendingRecordings();
 restoreMicChoice();
 updateMicButton();
 refreshMicDevices();
@@ -5117,6 +5282,10 @@ let remoteStatusTimer = null;
 function showRemoteStatus(text, { sticky = false } = {}) {
   clearTimeout(remoteStatusTimer);
   if (streaming) return; // the send in flight owns the status line
+  // A failed recording stays until retry or download. A later "listening"
+  // toast must not replace it, and must not schedule a clear that would
+  // race the failure text.
+  if (recordingNoticeLock || pendingRecovery) return;
   setToolStatus(text);
   if (text && !sticky) remoteStatusTimer = setTimeout(() => !streaming && !slideJob && setToolStatus(""), 2500);
 }

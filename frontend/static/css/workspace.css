@@ -410,11 +410,18 @@ input[type="checkbox"] { accent-color: var(--accent); }
       order: 1;
       flex: 1 1 100%;
     }
-    .editor-commandbar:has(#tool-status:not([hidden])) .commandbar-title {
+    .editor-commandbar:has(#tool-status:not([hidden])) .commandbar-title,
+    .editor-commandbar:has(#recording-retry-btn:not([hidden])) .commandbar-title {
       order: 2;
       flex: 1 0 100%;
       max-width: 100%;
       margin-right: 0;
+      flex-wrap: wrap;
+    }
+    .editor-commandbar #recording-retry-btn,
+    .editor-commandbar #recording-download-btn {
+      min-height: 40px;
+      padding: 6px 12px;
     }
     .editor-commandbar:has(#tool-status:not([hidden])) .tool-status {
       flex: 1 1 auto;

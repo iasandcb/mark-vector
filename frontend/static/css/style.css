@@ -1260,6 +1260,43 @@ body.tab-dragging {
   min-width: 0;
 }
 
+/* A failed recording is an error, not the green "saved" pill. The sentence
+   wraps on desktop too: the command bar otherwise ellipsizes it at 14rem,
+   which hid "YouTube 대기열에 넣었습니다" on a phone and would hide
+   "서버에 닿지 않았습니다" the same way. */
+.commandbar-title:has(#tool-status.recording-failure),
+.commandbar-title:has(#recording-retry-btn:not([hidden])) {
+  flex-wrap: wrap;
+  max-width: min(100%, 40rem);
+}
+.commandbar-title .tool-status.recording-failure {
+  flex: 1 1 12rem;
+  max-width: none;
+  overflow: visible;
+  text-overflow: unset;
+  white-space: normal;
+  line-height: 1.35;
+  background: #9a3412;
+}
+.editor-commandbar:has(.tool-status.recording-failure),
+.editor-commandbar:has(#recording-retry-btn:not([hidden])) {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+.tool-status-retry {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #9a3412;
+  border: 1px solid #9a3412;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  min-height: 28px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.tool-status-retry:disabled { opacity: 0.6; }
+
 .editor-toolbar {
   display: flex;
   flex-wrap: wrap;

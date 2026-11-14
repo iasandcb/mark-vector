@@ -1,3 +1,4 @@
+import logging
 import re
 import shutil
 import subprocess
@@ -8,6 +9,7 @@ from fastapi.testclient import TestClient
 from app import storage
 from app.config import settings
 from app.main import app
+from app.routers import recordings
 
 
 @pytest.fixture
@@ -42,6 +44,27 @@ def test_upload_in_pieces_and_follow_the_document(doc):
     assert len(storage.list_recordings(pid, other, "lecture.md")) == 1
     storage.delete_document(pid, other, "lecture.md")
     assert not (storage._conversations_dir(pid) / other / ".recordings" / "lecture.md").exists()
+
+
+def test_rejections_are_logged_with_the_reason(doc, monkeypatch, caplog):
+    monkeypatch.setattr(recordings, "MAX_CHUNK_BYTES", 4)
+    pid, conv_id, filename = doc
+    client = TestClient(app)
+    base = f"/api/projects/{pid}/conversations/{conv_id}/documents/{filename}/recordings"
+    with caplog.at_level(logging.WARNING, logger="app.routers.recordings"):
+        bad = client.post(base, json={"ext": "exe", "started": "2026-10-18T19:30:12"})
+        rec = client.post(base, json={"ext": "m4a", "started": "2026-10-18T19:30:12"}).json()
+        huge = client.put(f"{base}/{rec['id']}?offset=0", content=b"12345")
+        empty = client.put(f"{base}/{rec['id']}/video", json={"enqueue": True, "duration_sec": 1})
+    assert bad.status_code == 400
+    assert "Unsupported recording type" in bad.json()["detail"]
+    assert huge.status_code == 413 and huge.json()["detail"] == "Chunk too large"
+    assert empty.status_code == 400 and empty.json()["detail"] == "Recording is empty"
+    text = caplog.text
+    assert "where=create" in text and "Unsupported recording type: exe" in text
+    assert "where=append" in text and "Chunk too large" in text
+    assert "where=enqueue" in text and "Recording is empty" in text
+    assert "INGEST_TOKEN" not in text and "WORKER_TOKEN" not in text
 
 
 def test_bad_ids_and_delete(doc):
