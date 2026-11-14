@@ -3,7 +3,7 @@ import re
 import shutil
 import uuid
 from datetime import date, datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from .config import settings
 
@@ -1742,6 +1742,25 @@ def append_recording(project_id: str, conv_id: str, filename: str, recording_id:
 # ---------- audio dropped in by a bot (routers/ingest.py) ----------
 
 _INGEST_NAME_BAD = re.compile(r"[/\\\x00-\x1f]+")
+# A folder title is not a directory name (conversations are keyed by id),
+# but the route promises it is one path component, so a caller cannot hand
+# us `a/b` or `..` and have that string stored as the folder.
+_FOLDER_COMPONENT_BAD = re.compile(r"[\x00-\x1f\x7f\\]")
+_FOLDER_COMPONENT_MAX = 255
+
+
+def _folder_component(title: str) -> str:
+    """The exact folder name ingest will store. One path component only."""
+    name = title.strip()
+    if (
+        not name
+        or name in {".", ".."}
+        or len(name) > _FOLDER_COMPONENT_MAX
+        or name != PurePosixPath(name).name
+        or _FOLDER_COMPONENT_BAD.search(name)
+    ):
+        raise ValueError("folder must be a single path component")
+    return name
 
 
 def _find_or_create_project(title: str) -> str:
@@ -1789,9 +1808,16 @@ def ingest_audio(project_title: str, folder_title: str, name: str, ext: str, src
     """`src` (a binary file object) becomes the one recording of a new, empty
     document named after `name`, in the top-level folder `folder_title` of
     the project `project_title` - each made if missing. A name that's taken
-    gets " (2)", " (3)", ... Nothing is transcribed."""
+    gets " (2)", " (3)", ... Nothing is transcribed.
+
+    `folder_title` is kept exactly, after stripping surrounding whitespace.
+    It must be one path component (no slashes or control characters, not
+    `.` or `..`, at most 255 characters). The route chooses that name:
+    `folder`, else `date`, else `layout=stamp`'s YYYYMMDD, else today's
+    YYYY-MM-DD."""
     if ext not in RECORDING_EXTS:
         raise ValueError(f"Unsupported recording type: {ext}")
+    folder_title = _folder_component(folder_title)
     stem = _INGEST_NAME_BAD.sub(" ", name).strip().strip(".") or "audio"
     project_id = _find_or_create_project(project_title)
     conv_id = _find_or_create_folder(project_id, folder_title)

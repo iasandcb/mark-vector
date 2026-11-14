@@ -1,15 +1,41 @@
-"""Audio a bot drops in - e.g. the soundtrack of a YouTube video someone
-else's tool extracted - attached to a new document, ready to transcribe.
+"""Audio a bot drops in - a YouTube soundtrack another tool extracted, or a
+voice memo - attached to a new document, ready to transcribe.
 
     curl -H "Authorization: Bearer $INGEST_TOKEN" -F file=@talk.m4a \\
          https://markvector.fly.dev/api/ingest/audio
 
 makes "talk.md" in the folder named for today (INGEST_TIMEZONE's day, e.g.
 "2026-10-20") of the "youtube" project, both made if missing, with the file
-as its recording. Optional form fields: `project`, `date` (YYYY-MM-DD),
-`title` (instead of the file's own name) and `enqueue` (`false`/`0`/`no`/
-`off` keeps it out of the YouTube queue; anything else, including omitting
-it, queues the new recording for the worker).
+as its recording. Omitting the new fields keeps that default, which is what
+scripter's youtube_ingest.py already sends.
+
+A voice memo that should land in today's compact folder, under a document
+named for the current time, sends `layout=stamp` and omits project, folder,
+and title:
+
+    curl -H "Authorization: Bearer $INGEST_TOKEN" -F file=@memo.m4a \\
+         -F layout=stamp \\
+         https://markvector.fly.dev/api/ingest/audio
+
+That makes "164512.md" (HHmmss, 24-hour clock) in the folder "20261114"
+(YYYYMMDD). Both come from INGEST_TIMEZONE (default Asia/Seoul). An explicit
+`project`, `folder`, or `title` still wins over those defaults.
+
+Optional form fields:
+
+- `project` — default "youtube".
+- `folder` — the exact folder name. One path component: no slashes or
+  control characters, not `.` or `..`, at most 255 characters. When this is
+  set it wins over `date` and over `layout`.
+- `date` (YYYY-MM-DD) — the folder name when `folder` is omitted. Existing
+  callers keep using this. A date that is sent must still match
+  YYYY-MM-DD, even when `folder` is what actually names the folder.
+- `title` — the document name, instead of the file's own name. With
+  `layout=stamp` and no title, the name is the current HHmmss.
+- `layout` — `stamp` for the compact date folder and clock document above.
+  Anything else is rejected. Omit it for the YYYY-MM-DD default.
+- `enqueue` — `false`/`0`/`no`/`off` keeps the recording out of the YouTube
+  queue. Anything else, including omitting it, queues the new recording.
 
 Not behind the sign-in (auth.AuthMiddleware lets /api/ingest/ through): a
 bot has no session. INGEST_TOKEN is the key instead, and without it set the
@@ -31,6 +57,7 @@ router = APIRouter(prefix="/api/ingest", tags=["ingest"])
 
 DEFAULT_PROJECT = "youtube"
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_LAYOUT_STAMP = "stamp"
 
 
 def _check_token(request: Request) -> None:
@@ -49,6 +76,34 @@ def _now_local() -> datetime:
     return datetime.now(tz)
 
 
+def _layout(raw: str) -> str:
+    layout = raw.strip().lower()
+    if layout not in {"", _LAYOUT_STAMP}:
+        raise HTTPException(status_code=400, detail="layout must be stamp")
+    return layout
+
+
+def _folder_title(now: datetime, folder: str, date: str, layout: str) -> str:
+    """`folder` is the exact name. Otherwise `date` still names the folder.
+    With neither, `layout=stamp` uses YYYYMMDD and the plain default stays
+    today's YYYY-MM-DD."""
+    if folder.strip():
+        return folder.strip()
+    if date:
+        return date
+    if layout == _LAYOUT_STAMP:
+        return now.strftime("%Y%m%d")
+    return now.strftime("%Y-%m-%d")
+
+
+def _document_title(now: datetime, title: str, stem: str, layout: str) -> str:
+    if title.strip():
+        return title.strip()
+    if layout == _LAYOUT_STAMP:
+        return now.strftime("%H%M%S")
+    return stem
+
+
 @router.post("/audio")
 async def ingest_audio(
     request: Request,
@@ -56,7 +111,9 @@ async def ingest_audio(
     file: UploadFile = File(...),
     project: str = Form(DEFAULT_PROJECT),
     date: str = Form(""),
+    folder: str = Form(""),
     title: str = Form(""),
+    layout: str = Form(""),
     enqueue: str = Form(""),
 ):
     _check_token(request)
@@ -70,12 +127,13 @@ async def ingest_audio(
         raise HTTPException(status_code=400, detail=f"Unsupported file type: .{ext} ({allowed})")
     if date and not _DATE_RE.match(date):
         raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD")
+    chosen = _layout(layout)
     now = _now_local()
     try:
         result = storage.ingest_audio(
             project.strip() or DEFAULT_PROJECT,
-            date or now.strftime("%Y-%m-%d"),
-            title.strip() or stem,
+            _folder_title(now, folder, date, chosen),
+            _document_title(now, title, stem, chosen),
             ext,
             file.file,
             now.replace(tzinfo=None),
