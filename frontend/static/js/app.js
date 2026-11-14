@@ -24,7 +24,7 @@ import {
 import { t, getLanguage, applyStaticTranslations, createLanguageSelect, exchangeHeadingRole } from "./i18n.js";
 import { createEditor } from "./editor.js";
 import { createEditorEnterController } from "./editor-enter.mjs";
-import { createArrowEcho, editorArrowPlan } from "./editor-arrow.mjs";
+import { createArrowEcho, createModifierLatch, editorArrowPlan } from "./editor-arrow.mjs";
 import { openTranscribeDialog } from "./transcribe.js";
 import { openRecordingsDialog } from "./recordings-dialog.js";
 import { createGamepadRemote } from "./remote.js";
@@ -5643,15 +5643,21 @@ function movePresenter(delta, to = null) {
 // fixed up once in the 🎮 dialog. Undo/regenerate exist but have no
 // default button.
 // Android Chrome can report a keyboard's arrows as a gamepad and swallow the
-// keydown (see gamepad-arrows.mjs). The first of the two paths moves the
-// caret; the echo does not. A real controller still goes to onAction.
+// keydown, Shift/Ctrl/Alt included (see gamepad-arrows.mjs). The modifier
+// keys themselves still arrive, so the latch is what a swallowed arrow
+// extends the selection with. The first of the two paths moves the caret;
+// the echo does not. A real controller still goes to onAction.
 const arrowEcho = createArrowEcho();
+const modifierLatch = createModifierLatch();
+document.addEventListener("keydown", (event) => modifierLatch.note(event), true);
+document.addEventListener("keyup", (event) => modifierLatch.note(event), true);
+window.addEventListener("blur", () => modifierLatch.clear());
 function applyEditorArrow(event, editor) {
   const plan = editorArrowPlan(event, arrowEcho, performance.now());
   if (plan.type === "ignore") return false;
   if (plan.type === "native") return false;
   event.preventDefault();
-  if (plan.type === "move") editor.nudgeCaret(plan.key);
+  if (plan.type === "move") editor.nudgeCaret(plan.key, plan.modifiers);
   return true;
 }
 function focusedEditingEditor() {
@@ -5695,7 +5701,7 @@ const remote = createGamepadRemote({
     const editor = focusedEditingEditor();
     if (!editor || editor.disabled) return;
     if (!arrowEcho.claimPad(key, performance.now())) return;
-    editor.nudgeCaret(key);
+    editor.nudgeCaret(key, modifierLatch.snapshot());
   },
 });
 el.remoteBtn.addEventListener("click", () => remote.openSettings());
