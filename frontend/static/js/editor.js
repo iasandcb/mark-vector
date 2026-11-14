@@ -72,9 +72,18 @@ export function createEditor(textarea, { onFoldToggle, foldRanges, documentKey =
     textarea.scrollToEnd = () => {
       textarea.scrollTop = textarea.scrollHeight;
     };
-    textarea.nudgeCaret = (key) => {
-      const next = moveCaret(textarea.value, textarea.selectionStart, textarea.selectionEnd, key);
-      textarea.setSelectionRange(next.head, next.head);
+    textarea.nudgeCaret = (key, modifiers) => {
+      const next = moveCaret(textarea.value, textarea.selectionStart, textarea.selectionEnd, key, modifiers);
+      if (next.changes) {
+        const ordered = [...next.changes].sort((a, b) => b.from - a.from);
+        for (const change of ordered) {
+          const insert = change.insert || "";
+          textarea.value = textarea.value.slice(0, change.from) + insert + textarea.value.slice(change.to ?? change.from);
+        }
+      }
+      const start = Math.min(next.anchor, next.head);
+      const end = Math.max(next.anchor, next.head);
+      textarea.setSelectionRange(start, end);
     };
     Object.defineProperty(textarea, "scrollElement", { get: () => textarea });
     // The plain textarea is its own root - see the real adapter's
@@ -361,17 +370,35 @@ export function createEditor(textarea, { onFoldToggle, foldRanges, documentKey =
       view.scrollDOM.scrollTo(options);
     },
     // An arrow Chrome delivered as a gamepad D-pad instead of a keydown.
-    // CodeMirror's keymap runs when the synthetic event is accepted (wrapped
-    // lines, bidi). If it leaves the caret where it was, step by code point
-    // and logical line.
-    nudgeCaret(key) {
+    // `modifiers` is the Shift/Ctrl/Alt state latched from the keys Chrome
+    // did deliver. CodeMirror's keymap runs when the synthetic event is
+    // accepted (wrapped lines, selection, move-line). If it changes nothing,
+    // step by the same rules as that keymap.
+    nudgeCaret(key, modifiers) {
       if (!view.state.facet(EditorView.editable)) return;
       const before = view.state.selection.main;
-      view.contentDOM.dispatchEvent(new KeyboardEvent("keydown", { key, code: key, bubbles: true, cancelable: true }));
+      const beforeDoc = view.state.doc.toString();
+      view.contentDOM.dispatchEvent(new KeyboardEvent("keydown", {
+        key,
+        code: key,
+        bubbles: true,
+        cancelable: true,
+        shiftKey: !!modifiers?.shift,
+        ctrlKey: !!modifiers?.ctrl,
+        altKey: !!modifiers?.alt,
+        metaKey: !!modifiers?.meta,
+      }));
       const after = view.state.selection.main;
-      if (after.anchor === before.anchor && after.head === before.head) {
-        const next = moveCaret(view.state.doc.toString(), before.anchor, before.head, key);
-        if (next.anchor !== before.anchor || next.head !== before.head) {
+      if (after.anchor === before.anchor && after.head === before.head && view.state.doc.toString() === beforeDoc) {
+        const next = moveCaret(beforeDoc, before.anchor, before.head, key, modifiers);
+        if (next.changes) {
+          view.dispatch({
+            changes: next.changes,
+            selection: { anchor: next.anchor, head: next.head },
+            scrollIntoView: true,
+            userEvent: "move.line",
+          });
+        } else if (next.anchor !== before.anchor || next.head !== before.head) {
           view.dispatch({ selection: { anchor: next.anchor, head: next.head }, scrollIntoView: true, userEvent: "select" });
         }
       }
