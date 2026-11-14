@@ -17,6 +17,7 @@
 // pressed with the page in front, and only deliver input to a visible page.
 
 import { t } from "./i18n.js";
+import { dpadArrow, isKeyboardAsGamepad, nextKeyboardArrow } from "./gamepad-arrows.mjs";
 
 // Versioned: a new default layout ships under a new key, so bindings saved
 // against the previous layout don't silently override it.
@@ -42,8 +43,15 @@ function saveBindings(bindings) {
   }
 }
 
-function connectedPads() {
+function allPads() {
   return [...(navigator.getGamepads ? navigator.getGamepads() : [])].filter(Boolean);
+}
+
+// Keyboards that Android Chrome exposes through the Gamepad API are not
+// controllers. connectedPads() is what the button, the settings dialog, and
+// the presenter actions see.
+function connectedPads() {
+  return allPads().filter((pad) => !isKeyboardAsGamepad(pad));
 }
 
 function isPressed(pad, binding) {
@@ -63,23 +71,49 @@ function bindingLabel(binding) {
 }
 
 // `actions`: [{ id, label, defaultBinding }] in the order the settings
-// dialog lists them. `onAction(id)` runs on each press. `onConnectionChange
-// (pad | null)` reports the first connected pad, for an indicator.
-export function createGamepadRemote({ actions, onAction, onConnectionChange }) {
+// dialog lists them. `onAction(id)` runs on each press of a real controller.
+// `onConnectionChange(pad | null)` reports the first connected controller,
+// for an indicator. `onKeyboardArrow(key)` is an arrow Chrome delivered as a
+// gamepad D-pad instead of a keydown (see gamepad-arrows.mjs); it is not a
+// presenter action and does not count as a connected controller.
+export function createGamepadRemote({ actions, onAction, onConnectionChange, onKeyboardArrow }) {
   const defaults = Object.fromEntries(actions.map((a) => [a.id, a.defaultBinding || null]));
   let bindings = loadBindings(defaults);
   const wasPressed = new Map(); // `${padIndex}:${actionId}` -> bool
+  const arrowHeld = new Map(); // padIndex -> { key, nextAt }
   let learning = null; // { actionId, baseline: Map(padIndex -> axes[]), done(binding|null) }
   let frame = null;
 
+  function pollKeyboardArrows(pads) {
+    const now = performance.now();
+    const seen = new Set();
+    for (const pad of pads) {
+      if (!isKeyboardAsGamepad(pad)) continue;
+      seen.add(pad.index);
+      const step = nextKeyboardArrow(arrowHeld.get(pad.index) || null, dpadArrow(pad), now);
+      if (step.state) arrowHeld.set(pad.index, step.state);
+      else arrowHeld.delete(pad.index);
+      if (step.emit && onKeyboardArrow) onKeyboardArrow(step.emit);
+    }
+    for (const index of [...arrowHeld.keys()]) if (!seen.has(index)) arrowHeld.delete(index);
+  }
+
   function poll() {
     frame = null;
-    const pads = connectedPads();
-    if (!pads.length) return;
+    const pads = allPads();
+    if (!pads.length) {
+      arrowHeld.clear();
+      return;
+    }
+    const controllers = pads.filter((pad) => !isKeyboardAsGamepad(pad));
+    // Keyboard arrows still have to move the caret while the settings
+    // dialog is learning a real controller's buttons. A hidden tab is not
+    // an editor the user is typing in.
+    if (!document.hidden) pollKeyboardArrows(pads);
     if (learning) {
-      pollLearning(pads);
+      pollLearning(controllers);
     } else if (!document.hidden) {
-      for (const pad of pads) {
+      for (const pad of controllers) {
         for (const action of actions) {
           const key = `${pad.index}:${action.id}`;
           const pressed = isPressed(pad, bindings[action.id]);
@@ -128,11 +162,13 @@ export function createGamepadRemote({ actions, onAction, onConnectionChange }) {
   }
 
   function ensurePolling() {
-    if (frame === null && connectedPads().length) frame = requestAnimationFrame(poll);
+    if (frame === null && allPads().length) frame = requestAnimationFrame(poll);
   }
 
   window.addEventListener("gamepadconnected", (e) => {
-    onConnectionChange(e.gamepad);
+    // A keyboard showing up as a pad must not reveal the gamepad button.
+    // A controller that was already connected keeps its indicator.
+    if (!isKeyboardAsGamepad(e.gamepad)) onConnectionChange(e.gamepad);
     ensurePolling();
   });
   window.addEventListener("gamepaddisconnected", () => {
@@ -140,10 +176,10 @@ export function createGamepadRemote({ actions, onAction, onConnectionChange }) {
   });
   // A pad already exposed before this ran (e.g. after a reload, once a
   // button has been pressed on this origin) fires no "connected" event.
-  if (connectedPads().length) {
-    onConnectionChange(connectedPads()[0]);
-    ensurePolling();
-  }
+  // A keyboard-shaped pad starts polling so its arrows can move the caret,
+  // and does not count as connected.
+  if (connectedPads().length) onConnectionChange(connectedPads()[0]);
+  if (allPads().length) ensurePolling();
 
   function openSettings() {
     const overlay = document.createElement("div");

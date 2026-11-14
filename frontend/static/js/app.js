@@ -24,6 +24,7 @@ import {
 import { t, getLanguage, applyStaticTranslations, createLanguageSelect, exchangeHeadingRole } from "./i18n.js";
 import { createEditor } from "./editor.js";
 import { createEditorEnterController } from "./editor-enter.mjs";
+import { createArrowEcho, editorArrowPlan } from "./editor-arrow.mjs";
 import { openTranscribeDialog } from "./transcribe.js";
 import { openRecordingsDialog } from "./recordings-dialog.js";
 import { createGamepadRemote } from "./remote.js";
@@ -5641,6 +5642,25 @@ function movePresenter(delta, to = null) {
 // is 12 up, 13 down, 14 left, 15 right. A pad that reports differently is
 // fixed up once in the 🎮 dialog. Undo/regenerate exist but have no
 // default button.
+// Android Chrome can report a keyboard's arrows as a gamepad and swallow the
+// keydown (see gamepad-arrows.mjs). The first of the two paths moves the
+// caret; the echo does not. A real controller still goes to onAction.
+const arrowEcho = createArrowEcho();
+function applyEditorArrow(event, editor) {
+  const plan = editorArrowPlan(event, arrowEcho, performance.now());
+  if (plan.type === "ignore") return false;
+  if (plan.type === "native") return false;
+  event.preventDefault();
+  if (plan.type === "move") editor.nudgeCaret(plan.key);
+  return true;
+}
+function focusedEditingEditor() {
+  const node = document.activeElement;
+  if (!node || !node.closest) return null;
+  if (el.editor.rootElement && el.editor.rootElement.contains(node)) return el.editor;
+  if (el.editorB.rootElement && el.editorB.rootElement.contains(node)) return el.editorB;
+  return null;
+}
 const remote = createGamepadRemote({
   actions: [
     { id: "newSlide", label: t("remote.action.newSlide"), defaultBinding: { type: "button", index: 1 } },
@@ -5670,6 +5690,12 @@ const remote = createGamepadRemote({
   onConnectionChange(pad) {
     el.remoteBtn.hidden = !pad;
     el.remoteBtn.title = pad ? t("remote.buttonTitle", { id: pad.id }) : "";
+  },
+  onKeyboardArrow(key) {
+    const editor = focusedEditingEditor();
+    if (!editor || editor.disabled) return;
+    if (!arrowEcho.claimPad(key, performance.now())) return;
+    editor.nudgeCaret(key);
   },
 });
 el.remoteBtn.addEventListener("click", () => remote.openSettings());
@@ -9304,6 +9330,7 @@ function applyEditorEnter(event, controller, { carryIndent = false, insertIndent
   return plan.type !== "passthrough" && plan.type !== "native";
 }
 el.editorB.addEventListener("keydown", (e) => {
+  if (applyEditorArrow(e, el.editorB)) return;
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
     e.preventDefault();
     saveDocumentB();
@@ -9491,6 +9518,7 @@ function handleEditorTabKey(outdent) {
 }
 
 el.editor.addEventListener("keydown", (e) => {
+  if (applyEditorArrow(e, el.editor)) return;
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
     e.preventDefault();
     saveActive();

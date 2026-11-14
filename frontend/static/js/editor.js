@@ -36,6 +36,7 @@ import {
   searchKeymap,
   closeSearchPanel,
 } from "./vendor/codemirror.js";
+import { moveCaret } from "./editor-arrow.mjs";
 
 const USE_CODEMIRROR = true;
 
@@ -70,6 +71,10 @@ export function createEditor(textarea, { onFoldToggle, foldRanges, documentKey =
     };
     textarea.scrollToEnd = () => {
       textarea.scrollTop = textarea.scrollHeight;
+    };
+    textarea.nudgeCaret = (key) => {
+      const next = moveCaret(textarea.value, textarea.selectionStart, textarea.selectionEnd, key);
+      textarea.setSelectionRange(next.head, next.head);
     };
     Object.defineProperty(textarea, "scrollElement", { get: () => textarea });
     // The plain textarea is its own root - see the real adapter's
@@ -354,6 +359,22 @@ export function createEditor(textarea, { onFoldToggle, foldRanges, documentKey =
     },
     scrollTo(options) {
       view.scrollDOM.scrollTo(options);
+    },
+    // An arrow Chrome delivered as a gamepad D-pad instead of a keydown.
+    // CodeMirror's keymap runs when the synthetic event is accepted (wrapped
+    // lines, bidi). If it leaves the caret where it was, step by code point
+    // and logical line.
+    nudgeCaret(key) {
+      if (!view.state.facet(EditorView.editable)) return;
+      const before = view.state.selection.main;
+      view.contentDOM.dispatchEvent(new KeyboardEvent("keydown", { key, code: key, bubbles: true, cancelable: true }));
+      const after = view.state.selection.main;
+      if (after.anchor === before.anchor && after.head === before.head) {
+        const next = moveCaret(view.state.doc.toString(), before.anchor, before.head, key);
+        if (next.anchor !== before.anchor || next.head !== before.head) {
+          view.dispatch({ selection: { anchor: next.anchor, head: next.head }, scrollIntoView: true, userEvent: "select" });
+        }
+      }
     },
     focus() {
       view.focus();
