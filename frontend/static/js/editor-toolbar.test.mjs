@@ -66,8 +66,16 @@ test("a narrow phone shows the recording clock and the queue notice", () => {
   assert.match(block, /\.dictation-group \{[^}]*position:\s*absolute/);
   assert.match(block, /\.dictation-record\.recording \{[^}]*-webkit-text-fill-color:\s*#fff/);
   assert.match(block, /#tool-status:not\(\[hidden\]\)[\s\S]*white-space:\s*normal/);
+  assert.match(block, /#recording-retry-btn[\s\S]*min-height:\s*40px/);
   const base = css.slice(0, mediaAt);
   assert.match(base, /\.editor-commandbar \{[^}]*flex-wrap:\s*nowrap/);
+  const style = fs.readFileSync(new URL("../css/style.css", import.meta.url), "utf8");
+  assert.match(style, /\.tool-status\.recording-failure \{[^}]*white-space:\s*normal/);
+  const statusAt = column.indexOf('id="tool-status"');
+  const retryAt = column.indexOf('id="recording-retry-btn"');
+  const downloadAt = column.indexOf('id="recording-download-btn"');
+  const scrollAt = column.indexOf('class="editor-actions-scroll"');
+  assert.ok(statusAt < retryAt && retryAt < downloadAt && downloadAt < scrollAt);
 });
 
 test("the split pane keeps filename plus icon-only publish, article, and save", () => {

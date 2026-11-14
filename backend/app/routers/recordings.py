@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import re
 import shutil
 from datetime import datetime, timedelta, timezone
@@ -13,9 +14,26 @@ from .. import storage, video_jobs
 from ..config import settings
 
 router = APIRouter(prefix="/api/projects/{project_id}/conversations/{conv_id}/documents/{filename}/recordings", tags=["recordings"])
+logger = logging.getLogger(__name__)
 
 # One upload is a few seconds of speech-grade audio; this is just a ceiling.
 MAX_CHUNK_BYTES = 8 * 1024 * 1024
+
+
+def _reject(status: int, detail, *, where: str, **ctx) -> HTTPException:
+    """A 4xx the client can show. Logged with the reason so a recording that
+    never becomes a file or a YouTube job is visible on the server too.
+    `detail` is the response body; nothing here is a credential."""
+    rendered = detail if isinstance(detail, str) else repr(detail)
+    context = " ".join(f"{key}={value}" for key, value in ctx.items() if value is not None)
+    logger.warning(
+        "recording rejected: where=%s status=%s detail=%s%s",
+        where,
+        status,
+        rendered,
+        f" {context}" if context else "",
+    )
+    return HTTPException(status_code=status, detail=detail)
 
 
 class NewRecording(BaseModel):
@@ -24,8 +42,8 @@ class NewRecording(BaseModel):
     started: str
 
 
-def _not_found(exc: FileNotFoundError) -> HTTPException:
-    return HTTPException(status_code=404, detail=f"Not found: {exc}")
+def _not_found(exc: FileNotFoundError, *, where: str) -> HTTPException:
+    return _reject(404, f"Not found: {exc}", where=where)
 
 
 @router.get("")
@@ -34,11 +52,11 @@ def list_recordings(project_id: str, conv_id: str, filename: str):
         recordings = storage.list_recordings(project_id, conv_id, filename)
         videos = video_jobs.videos_for_document(project_id, conv_id, filename)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise _reject(400, str(exc), where="list", project=project_id, file=filename)
     except FileNotFoundError as exc:
-        raise _not_found(exc)
+        raise _not_found(exc, where="list")
     except video_jobs.VideoJobError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+        raise _reject(exc.status_code, exc.detail, where="list", project=project_id, file=filename)
     for recording in recordings:
         recording["video"] = videos.get(recording["id"])
     return recordings
@@ -60,11 +78,11 @@ def set_recording_video(project_id: str, conv_id: str, filename: str, recording_
             project_id, conv_id, filename, recording_id, body.enqueue, body.duration_sec
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise _reject(400, str(exc), where="enqueue", project=project_id, file=filename, recording=recording_id)
     except FileNotFoundError as exc:
-        raise _not_found(exc)
+        raise _not_found(exc, where="enqueue")
     except video_jobs.VideoJobError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+        raise _reject(exc.status_code, exc.detail, where="enqueue", project=project_id, file=filename, recording=recording_id)
     return {"video": video}
 
 
@@ -81,7 +99,7 @@ def _upload_started(raw: str) -> datetime:
     try:
         started = datetime.fromisoformat(raw.strip())
     except ValueError:
-        raise HTTPException(status_code=400, detail="started must be an ISO timestamp")
+        raise _reject(400, "started must be an ISO timestamp", where="upload")
     if started.tzinfo is not None:
         try:
             tz = ZoneInfo(settings.ingest_timezone)
@@ -97,7 +115,7 @@ def _upload_ext(name: str) -> str:
         ext = "wav"
     if ext not in storage.RECORDING_EXTS:
         allowed = ", ".join(sorted(storage.RECORDING_EXTS))
-        raise HTTPException(status_code=400, detail=f"Unsupported file type: .{ext or '?'} ({allowed})")
+        raise _reject(400, f"Unsupported file type: .{ext or '?'} ({allowed})", where="upload", name=name)
     return ext
 
 
@@ -123,19 +141,19 @@ def upload_recording(
         try:
             duration = float(duration_sec)
         except ValueError:
-            raise HTTPException(status_code=400, detail="duration_sec must be a number")
+            raise _reject(400, "duration_sec must be a number", where="upload", file=filename)
     try:
         info = storage.add_recording_bytes(project_id, conv_id, filename, ext, file.file, when)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise _reject(400, str(exc), where="upload", project=project_id, file=filename)
     except FileNotFoundError as exc:
-        raise _not_found(exc)
+        raise _not_found(exc, where="upload")
     info["video"] = None
     if video_jobs.wants_queue(enqueue):
         try:
             info["video"] = video_jobs.set_enqueued(project_id, conv_id, filename, info["id"], True, duration)
         except video_jobs.VideoJobError as exc:
-            raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+            raise _reject(exc.status_code, exc.detail, where="upload-enqueue", project=project_id, file=filename, recording=info["id"])
     background.add_task(prepare_playable, project_id, conv_id, filename, info["id"])
     return info
 
@@ -146,9 +164,9 @@ def create_recording(project_id: str, conv_id: str, filename: str, req: NewRecor
         started = datetime.fromisoformat(req.started)
         return storage.create_recording(project_id, conv_id, filename, req.ext, started)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise _reject(400, str(exc), where="create", project=project_id, file=filename, ext=req.ext)
     except FileNotFoundError as exc:
-        raise _not_found(exc)
+        raise _not_found(exc, where="create")
 
 
 @router.put("/{recording_id}")
@@ -157,15 +175,15 @@ async def append_recording(project_id: str, conv_id: str, filename: str, recordi
     current size when `offset` isn't where the file ends."""
     data = await request.body()
     if len(data) > MAX_CHUNK_BYTES:
-        raise HTTPException(status_code=413, detail="Chunk too large")
+        raise _reject(413, "Chunk too large", where="append", project=project_id, file=filename, recording=recording_id, bytes=len(data))
     try:
         size = storage.append_recording(project_id, conv_id, filename, recording_id, offset, data)
     except storage.RecordingOffsetError as exc:
-        raise HTTPException(status_code=409, detail={"size": exc.size})
+        raise _reject(409, {"size": exc.size}, where="append", project=project_id, file=filename, recording=recording_id, offset=offset, size=exc.size)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise _reject(400, str(exc), where="append", project=project_id, file=filename, recording=recording_id)
     except FileNotFoundError as exc:
-        raise _not_found(exc)
+        raise _not_found(exc, where="append")
     return {"size": size}
 
 
@@ -250,9 +268,9 @@ async def get_recording(project_id: str, conv_id: str, filename: str, recording_
             return FileResponse(dst, media_type="audio/mp4", filename=stem.rsplit(".", 1)[0] + ".m4a")
         path, mime = storage.recording_file(project_id, conv_id, filename, recording_id)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise _reject(400, str(exc), where="read", project=project_id, file=filename, recording=recording_id)
     except FileNotFoundError as exc:
-        raise _not_found(exc)
+        raise _not_found(exc, where="read")
     return FileResponse(path, media_type=mime, filename=stem)
 
 
@@ -261,7 +279,7 @@ def delete_recording(project_id: str, conv_id: str, filename: str, recording_id:
     try:
         storage.delete_recording(project_id, conv_id, filename, recording_id)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise _reject(400, str(exc), where="delete", project=project_id, file=filename, recording=recording_id)
     except FileNotFoundError as exc:
-        raise _not_found(exc)
+        raise _not_found(exc, where="delete")
     return {"ok": True}
