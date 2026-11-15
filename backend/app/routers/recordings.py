@@ -148,6 +148,10 @@ def upload_recording(
         raise _reject(400, str(exc), where="upload", project=project_id, file=filename)
     except FileNotFoundError as exc:
         raise _not_found(exc, where="upload")
+    except OSError as exc:
+        logger.exception("recording upload failed errno=%s", exc.errno)
+        status, detail = storage.recording_write_error(exc)
+        raise _reject(status, detail, where="upload", project=project_id, file=filename)
     info["video"] = None
     if video_jobs.wants_queue(enqueue):
         try:

@@ -1,10 +1,11 @@
+import errno
 import io
 from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app import storage
+from app import storage, video_jobs
 from app.config import settings
 from app.main import app
 from app.routers import ingest
@@ -220,6 +221,49 @@ def test_storage_rejects_a_folder_with_a_nul_before_creating_a_project(tmp_path,
             "youtube", "a\x00b", "memo", "m4a", io.BytesIO(b"abc"), datetime(2026, 11, 14, 16, 45, 12)
         )
     assert not any(p["title"].strip().lower() == "youtube" for p in storage.list_projects())
+
+
+def _documents():
+    return [
+        d
+        for p in storage.list_projects()
+        for c in storage.list_conversations(p["id"])
+        for d in storage.list_documents(p["id"], c["id"])
+        if d["filename"] != "system.md"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("err", "status", "detail"),
+    [
+        (errno.ENOSPC, 507, "Not enough disk space to store this recording"),
+        (getattr(errno, "EDQUOT", errno.ENOSPC), 507, "Not enough disk space to store this recording"),
+        (errno.EIO, 500, "Could not store this recording"),
+    ],
+)
+def test_write_errors_are_json_and_keep_nothing(client, monkeypatch, err, status, detail):
+    """A full volume used to escape as text/plain 'Internal Server Error'.
+    A large memo hits that once a smaller one still fit. The dated folder
+    may already have been created; the document and its recording must not
+    stay behind, and nothing is queued."""
+
+    real = storage._copy_into_recording
+
+    def fail(path, src):
+        class _Full:
+            def read(self, n=-1):
+                raise OSError(err, "No space left on device")
+
+        return real(path, _Full())
+
+    monkeypatch.setattr(storage, "_copy_into_recording", fail)
+    res = _post(client, name="yatap.m4a", layout="stamp", enqueue="true")
+    assert res.status_code == status, res.text
+    assert res.headers["content-type"].startswith("application/json")
+    assert res.text != "Internal Server Error"
+    assert res.json() == {"detail": detail}
+    assert _documents() == []
+    assert video_jobs.list_jobs("all") == []
 
 
 def test_unknown_layout_and_a_bad_date_are_rejected(client):

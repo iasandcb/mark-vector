@@ -2,6 +2,7 @@
 The list may be empty; the file is a normal recording and, like ingest,
 joins the YouTube queue unless enqueue says otherwise."""
 
+import errno
 import io
 
 from fastapi.testclient import TestClient
@@ -95,6 +96,27 @@ def test_rejects_empty_and_unknown_types_without_keeping_them(tmp_path, monkeypa
     bad = _upload(client, base, "notes.txt", b"hello", "text/plain")
     assert bad.status_code == 400 and "txt" in bad.json()["detail"]
     assert _upload(client, base, "talk.mp3", b"x", "audio/mpeg", started="not-a-date").status_code == 400
+    assert client.get(base).json() == []
+
+
+def test_disk_full_is_json_and_keeps_no_recording(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    pid, conv, filename = _doc()
+    base = f"/api/projects/{pid}/conversations/{conv}/documents/{filename}/recordings"
+    real = storage._copy_into_recording
+
+    def fail(path, src):
+        class _Full:
+            def read(self, n=-1):
+                raise OSError(errno.ENOSPC, "No space left on device")
+
+        return real(path, _Full())
+
+    monkeypatch.setattr(storage, "_copy_into_recording", fail)
+    res = _upload(client, base, "yatap.m4a", b"\x00\x00\x00\x18ftypM4A ", "audio/mp4")
+    assert res.status_code == 507, res.text
+    assert res.headers["content-type"].startswith("application/json")
+    assert res.json()["detail"] == "Not enough disk space to store this recording"
     assert client.get(base).json() == []
 
 

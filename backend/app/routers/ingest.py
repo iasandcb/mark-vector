@@ -37,11 +37,17 @@ Optional form fields:
 - `enqueue` — `false`/`0`/`no`/`off` keeps the recording out of the YouTube
   queue. Anything else, including omitting it, queues the new recording.
 
+A full data volume is 507 JSON (`Not enough disk space to store this
+recording`). Any other failure to write the file is 500 JSON. Neither is
+the bare text "Internal Server Error" Starlette sends for an uncaught
+exception.
+
 Not behind the sign-in (auth.AuthMiddleware lets /api/ingest/ through): a
 bot has no session. INGEST_TOKEN is the key instead, and without it set the
 route is off."""
 
 import hmac
+import logging
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import PurePath
@@ -54,6 +60,7 @@ from ..config import settings
 from .recordings import prepare_playable
 
 router = APIRouter(prefix="/api/ingest", tags=["ingest"])
+logger = logging.getLogger(__name__)
 
 DEFAULT_PROJECT = "youtube"
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -140,6 +147,14 @@ async def ingest_audio(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except OSError as exc:
+        # The copy writes straight onto the data volume. A full volume raises
+        # here, after the body has already been accepted. Logged with the
+        # errno so the fly log still shows ENOSPC; the client gets JSON
+        # instead of Starlette's text/plain 500.
+        logger.exception("ingest audio failed errno=%s", exc.errno)
+        status, detail = storage.recording_write_error(exc)
+        raise HTTPException(status_code=status, detail=detail)
     # The playable copy is made now, not on the first ▶ - for an hour's
     # audio that takes a minute or more.
     background.add_task(prepare_playable, result["project_id"], result["conv_id"], result["filename"], result["recording"]["id"])

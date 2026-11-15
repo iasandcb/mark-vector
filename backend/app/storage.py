@@ -1,3 +1,4 @@
+import errno
 import json
 import re
 import shutil
@@ -1775,6 +1776,22 @@ def _find_or_create_folder(project_id: str, title: str) -> str:
         if conv["parent_id"] is None and conv["title"] == title:
             return conv["id"]
     return create_conversation(project_id, title)["id"]
+
+
+def recording_write_error(exc: OSError) -> tuple[int, str]:
+    """Status and JSON detail for a recording that could not be written.
+
+    A full volume (`ENOSPC`, or a quota) is what a large memo hits after a
+    smaller one still fit. Callers must turn this into an `HTTPException`:
+    an uncaught `OSError` becomes Starlette's text/plain
+    "Internal Server Error"."""
+    full = {errno.ENOSPC}
+    quot = getattr(errno, "EDQUOT", None)
+    if quot is not None:
+        full.add(quot)
+    if exc.errno in full:
+        return 507, "Not enough disk space to store this recording"
+    return 500, "Could not store this recording"
 
 
 def _copy_into_recording(path: Path, src) -> None:
