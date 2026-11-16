@@ -1974,8 +1974,21 @@ body.tab-dragging {
   border-bottom: none;
 }
 
+.shortcuts-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
 .shortcuts-row-desc {
   color: var(--text);
+}
+
+.shortcuts-row-note {
+  color: var(--muted);
+  font-size: calc(11px * var(--font-scale));
+  line-height: 1.35;
 }
 
 .shortcuts-row-keys {
