@@ -6772,7 +6772,15 @@ function shortcutGroups() {
       title: "shortcuts.groupNavigate",
       rows: [
         { desc: "shortcuts.toggleTree", keys: [`${mod}B`] },
-        { desc: "shortcuts.togglePreview", keys: [`${alt}${mod}B`] },
+        // ⌥⌘B / Ctrl+Alt+B is the chord that reaches the page. ⌘⇧B /
+        // Ctrl+Shift+B is the one Chrome uses for the bookmarks bar, so it
+        // is named in the note rather than offered as a second binding.
+        {
+          desc: "shortcuts.togglePreview",
+          keys: [`${mod}${alt}B`],
+          note: "shortcuts.togglePreviewChrome",
+          noteVars: { blocked: IS_MAC ? "⌘⇧B" : "Ctrl+Shift+B" },
+        },
         { desc: "shortcuts.previewViews", keys: [IS_MAC ? `${alt}1 / 2 / 3` : `${alt}⇧1 / 2 / 3`] },
         { desc: "shortcuts.analysisRun", keys: [`${alt}R`] },
         { desc: "shortcuts.jumpDoc", keys: [`${HINT_KEY_SYMBOL}1-9`] },
@@ -6813,7 +6821,17 @@ function renderShortcutsHelp() {
         kbd.textContent = key;
         keys.appendChild(kbd);
       }
-      rowEl.append(desc, keys);
+      if (row.note) {
+        const text = document.createElement("span");
+        text.className = "shortcuts-row-text";
+        const note = document.createElement("span");
+        note.className = "shortcuts-row-note";
+        note.textContent = t(row.note, row.noteVars);
+        text.append(desc, note);
+        rowEl.append(text, keys);
+      } else {
+        rowEl.append(desc, keys);
+      }
       el.shortcutsGroups.appendChild(rowEl);
     }
   }
