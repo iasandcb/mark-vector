@@ -132,8 +132,10 @@ kbd { font-family: inherit; font-weight: 450; font-size: calc(10px * var(--font-
 .no-document > .scroll-nav { display: none; }
 .editor-toolbar { padding: 10px 16px; background: #f7f9f7; border-bottom: 1px solid var(--border); gap: 7px; }
 .editor-toolbar select { border-radius: 5px; min-height: 29px; font-size: calc(11px * var(--font-scale)); background: var(--panel); }
-.editor-pane .cm-editor { font-size: calc(13px * var(--font-scale)); }
-.editor-pane .cm-editor .cm-scroller { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; line-height: 1.9; }
+/* Same size and leading as the preview's rendered body (.markdown-body).
+   The phone block below keeps the larger 16px editor. */
+.editor-pane .cm-editor { font-size: calc(14px * var(--font-scale)); }
+.editor-pane .cm-editor .cm-scroller { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; line-height: 1.85; }
 .editor-pane .cm-editor .cm-content { padding: 26px 0 70px; caret-color: var(--accent); }
 .editor-pane .cm-editor .cm-line { padding: 0 24px 0 17px; }
 .editor-pane .cm-editor .cm-gutters { background: var(--panel); border-right: none; padding-top: 0; color: #a6b7ac; }
@@ -270,6 +272,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
   .editor-actions .editor-send .ui-icon { width: 16px; height: 16px; }
   .editor-toolbar select { min-height: 40px; padding: 8px; font-size: calc(14px * var(--font-scale)); }
   .editor-pane .cm-editor { font-size: calc(16px * var(--font-scale)); }
+  .editor-pane .cm-editor .cm-scroller { line-height: 1.9; }
   .editor-pane .cm-editor .cm-line { padding-inline: 14px; }
   .document-status { padding: 10px 16px; font-size: calc(10px * var(--font-scale)); }
   .workspace-welcome { padding: 28px 22px; }
