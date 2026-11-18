@@ -90,6 +90,39 @@ test("a normal Arrow key is left to the editor; a DPAD keyCode is moved here", (
   assert.deepEqual(editorArrowPlan({ key: "ArrowLeft", keyCode: 37, isTrusted: false }, createArrowEcho(), 0), { type: "ignore" });
 });
 
+test("an Android letter without modifier flags leaves Control held until its keyup", () => {
+  const latch = createModifierLatch();
+  latch.note({ type: "keydown", key: "Unidentified", code: "", keyCode: 17, ctrlKey: true, isTrusted: true });
+  latch.note({
+    type: "keydown",
+    key: "Unidentified",
+    code: "",
+    keyCode: 66,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+    metaKey: false,
+    isTrusted: true,
+  });
+  assert.equal(latch.snapshot().ctrl, true);
+  latch.note({ type: "keyup", key: "", code: "", keyCode: 17, ctrlKey: false, isTrusted: true });
+  assert.equal(latch.snapshot().ctrl, false);
+
+  latch.note({ type: "keydown", key: "Control", code: "ControlLeft", ctrlKey: true, isTrusted: true });
+  latch.note({
+    type: "keydown",
+    key: "x",
+    code: "KeyX",
+    keyCode: 88,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+    metaKey: false,
+    isTrusted: true,
+  });
+  assert.equal(latch.snapshot().ctrl, false);
+});
+
 test("the modifier latch remembers Shift after its keydown and forgets it on keyup", () => {
   const latch = createModifierLatch();
   latch.note({ type: "keydown", key: "Shift", shiftKey: true, isTrusted: true });

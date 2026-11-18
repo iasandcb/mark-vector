@@ -15,6 +15,26 @@ const NAV_KEYCODES = { 122: "Home", 123: "End" };
 const MODIFIER_KEYS = { Shift: "shift", Control: "ctrl", Alt: "alt", Meta: "meta" };
 const MODIFIER_KEYCODES = { 16: "shift", 17: "ctrl", 18: "alt", 91: "meta", 92: "meta" };
 
+function modifierName(event) {
+  const named = MODIFIER_KEYS[event.key];
+  if (named) return named;
+  // Android reports the modifier itself as Unidentified, or with an empty
+  // key, and puts the real key in the legacy keyCode (17 is Control).
+  const key = event.key;
+  if (key === "Unidentified" || key === "Process" || key == null || key === "") {
+    return MODIFIER_KEYCODES[event.keyCode] || null;
+  }
+  return null;
+}
+
+// A hardware letter on Android Chrome often has an empty `code` (that
+// property is disabled there) and ctrlKey/altKey/shiftKey left false.
+// Copying those flags would forget a modifier that is still held.
+function eventOmitsModifierFlags(event) {
+  const code = event.code;
+  return !code || code === "Unidentified";
+}
+
 // Long enough that the gamepad sample of one physical press (the next
 // animation frame) does not move the caret a second time, and shorter than
 // the hold-to-repeat delay in gamepad-arrows.mjs.
@@ -40,17 +60,26 @@ export function arrowFromKeyEvent(event) {
 
 // Shift/Ctrl/Alt are not DPAD keys, so Chrome still delivers them while it
 // swallows the arrow they modify. The arrow sample then reads the latch.
+// A hardware letter can also arrive without ctrlKey; the letter must not
+// clear the modifier that keydown already recorded.
 export function createModifierLatch() {
   const down = { shift: false, ctrl: false, alt: false, meta: false };
   return {
     note(event) {
       if (!event || event.isTrusted === false) return;
-      const named = MODIFIER_KEYS[event.key] || (event.key === "Unidentified" ? MODIFIER_KEYCODES[event.keyCode] : null);
+      const named = modifierName(event);
       if (named) {
         down[named] = event.type !== "keyup";
         return;
       }
       if (event.type !== "keydown" && event.type !== "keyup") return;
+      if (eventOmitsModifierFlags(event)) {
+        if (event.shiftKey) down.shift = true;
+        if (event.ctrlKey) down.ctrl = true;
+        if (event.altKey) down.alt = true;
+        if (event.metaKey) down.meta = true;
+        return;
+      }
       down.shift = !!event.shiftKey;
       down.ctrl = !!event.ctrlKey;
       down.alt = !!event.altKey;
