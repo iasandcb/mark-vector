@@ -25,6 +25,7 @@ import { t, getLanguage, applyStaticTranslations, createLanguageSelect, exchange
 import { createEditor } from "./editor.js";
 import { createEditorEnterController } from "./editor-enter.mjs";
 import { createArrowEcho, createModifierLatch, editorArrowPlan } from "./editor-arrow.mjs";
+import { sidebarShortcutAction } from "./sidebar-shortcut.mjs";
 import { openTranscribeDialog } from "./transcribe.js";
 import { openRecordingsDialog } from "./recordings-dialog.js";
 import { createGamepadRemote } from "./remote.js";
@@ -9444,13 +9445,16 @@ document.addEventListener("keydown", (e) => {
     openShortcutsHelp();
     return;
   }
-  // ⌘/Ctrl+B and ⌥⌘/Ctrl+Alt+B: VS Code's own keys for its left and right
-  // sidebars, here the navigation tree and the preview. Same "works while
-  // editing" reasoning as ⌘/ above. Matched on e.code, not e.key - Option
-  // turns the B into "∫" on a Mac keyboard.
-  if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.code === "KeyB") {
+  // ⌘/Ctrl+B and ⌥⌘/Ctrl+Alt+B: the navigation tree and the preview.
+  // Desktop matches `code` KeyB, so Mac Option+B (the key is "∫") still
+  // counts. Android Chrome leaves `code` empty and can omit ctrlKey on
+  // the letter; the latch still has Control, because that keydown does
+  // arrive. This listener is the bubble phase, so CodeMirror has already
+  // seen the key and its own Ctrl-b caret binding still runs.
+  const sidebar = sidebarShortcutAction(e, modifierLatch.snapshot());
+  if (sidebar) {
     e.preventDefault();
-    if (e.altKey) setPreviewCollapsed(!el.layout.classList.contains("preview-collapsed"));
+    if (sidebar === "preview") setPreviewCollapsed(!el.layout.classList.contains("preview-collapsed"));
     else setTreeCollapsed(!el.layout.classList.contains("tree-collapsed"));
     return;
   }
