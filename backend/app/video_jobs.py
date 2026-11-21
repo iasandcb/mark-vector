@@ -397,6 +397,26 @@ def set_enqueued(
     return _with_jobs(mutate)
 
 
+def recording_states() -> dict[tuple[str, str, str, str], dict]:
+    """``(project_id, conv_id, filename, recording_id)`` → status and YouTube id.
+
+    An expired claim is already back in the queue (see ``_with_jobs``).
+    The storage screen uses this to tell a finished upload from one that
+    still needs the original file."""
+
+    def mutate(data: dict, _now_):
+        found = {}
+        for job in data["jobs"].values():
+            video_id = job.get("youtube_video_id")
+            found[(job["project_id"], job["conv_id"], job["filename"], job["recording_id"])] = {
+                "status": job.get("status"),
+                "youtube_video_id": video_id if isinstance(video_id, str) and video_id else None,
+            }
+        return False, found
+
+    return _with_jobs(mutate)
+
+
 def videos_for_document(project_id: str, conv_id: str, filename: str) -> dict[str, dict]:
     """recording id → user-facing status. An expired claim shows as queued."""
 

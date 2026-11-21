@@ -35,6 +35,25 @@ def _load_allowed_emails() -> list[str]:
     return [e.strip().lower() for e in raw.split(",") if e.strip()]
 
 
+def _load_storage_warn_percent() -> float:
+    """When the data volume is at least this full, the workspace warns.
+
+    ``STORAGE_WARN_PERCENT`` is a number from 0 to 100. Anything else
+    (unset, blank, not a number, out of range) is 80, the same way a bad
+    ``CUSTOM_OPENAI_PROVIDERS`` value is ignored instead of crashing.
+    """
+    raw = os.getenv("STORAGE_WARN_PERCENT", "").strip()
+    if not raw:
+        return 80.0
+    try:
+        value = float(raw)
+    except ValueError:
+        return 80.0
+    if value != value or value in (float("inf"), float("-inf")) or not 0 <= value <= 100:
+        return 80.0
+    return value
+
+
 def _load_passcode() -> str | None:
     """A lighter-weight alternate to Google sign-in (see auth.py's
     /auth/passcode) for gating a public test deployment without setting up
@@ -80,6 +99,8 @@ class Settings:
     # them to YouTube (routers/worker.py). Not the ingest token: that one
     # only grants the ability to drop a file in. Unset, the worker API is off.
     worker_token: str | None = os.getenv("WORKER_TOKEN") or None
+    # Workspace banner once shutil.disk_usage(DATA_DIR) reaches this percent.
+    storage_warn_percent: float = field(default_factory=_load_storage_warn_percent)
 
 
 settings = Settings()
