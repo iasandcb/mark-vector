@@ -23,6 +23,7 @@ from .routers import (
     stt,
     system_prompt,
     transcribe,
+    volume,
     worker,
     x_articles,
 )
@@ -54,6 +55,7 @@ app.include_router(live.router)
 app.include_router(transcribe.router)
 app.include_router(stt.router)
 app.include_router(recordings.router)
+app.include_router(volume.router)
 app.include_router(ingest.router)
 app.include_router(worker.router)
 app.include_router(x_articles.router)

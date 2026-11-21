@@ -1,0 +1,48 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import test from "node:test";
+
+const html = fs.readFileSync(new URL("../../index.html", import.meta.url), "utf8");
+const css = fs.readFileSync(new URL("../css/workspace.css", import.meta.url), "utf8");
+const dialog = fs.readFileSync(new URL("./storage-dialog.js", import.meta.url), "utf8");
+const i18n = fs.readFileSync(new URL("./i18n.js", import.meta.url), "utf8");
+
+test("storage is reachable from the editor icon bar and from settings", () => {
+  const column = html.slice(html.indexOf('id="editor-column"'), html.indexOf('id="split-resizer"'));
+  const scrollAt = column.indexOf('class="editor-actions-scroll"');
+  const buttonAt = column.indexOf('id="storage-btn"');
+  assert.ok(scrollAt > 0 && buttonAt > scrollAt);
+  assert.match(column, /id="storage-btn"[^>]*data-i18n-title="storage.open"/);
+  assert.match(column, /id="storage-warning"[^>]*hidden/);
+  assert.ok(column.indexOf('id="storage-warning"') < column.indexOf('class="editor-commandbar"'));
+  assert.match(html, /id="storage-settings-btn"[^>]*data-i18n-title="storage.open"/);
+  assert.match(html, /id="storage-settings-badge"[^>]*hidden/);
+});
+
+test("the storage panel stays usable on a phone", () => {
+  const at = css.indexOf(".storage-panel");
+  assert.ok(at > 0);
+  const mediaAt = css.indexOf("@media (max-width: 700px)", at);
+  assert.ok(mediaAt > at);
+  const block = css.slice(mediaAt, css.indexOf("}", css.indexOf(".storage-preview-list { max-height", mediaAt)) + 1);
+  assert.match(block, /\.storage-panel \{[^}]*width:\s*100%/);
+  assert.match(block, /\.storage-actions \.secondary-btn \{[^}]*min-height:\s*44px/);
+  assert.match(block, /font-size:\s*calc\(14px \* var\(--font-scale\)\)/);
+  assert.match(css, /\.storage-usage \{[^}]*font-size:\s*calc\(13px \* var\(--font-scale\)\)/);
+  assert.match(css, /\.storage-warning\[hidden\] \{ display: none; \}/);
+});
+
+test("Korean copy and a confirm step guard delete and cleanup", () => {
+  assert.match(i18n, /"storage.title": "저장 공간"/);
+  assert.match(i18n, /"storage.warning": "저장 공간이 \{percent\}% 찼습니다\./);
+  assert.match(i18n, /"storage.deleteConfirm": "선택한 녹음 \{count\}개를 삭제할까요\?/);
+  assert.match(i18n, /YouTube 업로드가 끝난 원본 \{originals\}개와 재생용 복사본 \{plays\}개/);
+  const cleanupAt = dialog.indexOf("previewStorageCleanup");
+  const runAt = dialog.indexOf("runStorageCleanup");
+  assert.ok(cleanupAt > 0 && runAt > cleanupAt);
+  assert.match(dialog.slice(cleanupAt, runAt), /cleanupDecision\(preview, ok\)\.proceed/);
+  assert.match(dialog, /showModal\(\)/);
+  const deleteAt = dialog.indexOf("storage.deleteConfirm");
+  const deleteCall = dialog.indexOf("deleteStorageRecordings");
+  assert.ok(deleteAt > 0 && deleteCall > deleteAt);
+});

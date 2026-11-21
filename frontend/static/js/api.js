@@ -613,3 +613,29 @@ export function setRecordingVideo(projectId, id, filename, recordingId, body) {
     body: JSON.stringify(body),
   }).then(asJson);
 }
+
+// ---------- storage (the data volume) ----------
+
+export function getStorageUsage() {
+  return fetch(`${BASE}/storage`).then(asJson);
+}
+
+export function listStorageRecordings() {
+  return fetch(`${BASE}/storage/recordings`).then(asJson);
+}
+
+export function deleteStorageRecordings(recordings) {
+  return fetch(`${BASE}/storage/recordings`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ recordings }),
+  }).then(asJson);
+}
+
+export function previewStorageCleanup() {
+  return fetch(`${BASE}/storage/cleanup/preview`, { method: "POST" }).then(asJson);
+}
+
+export function runStorageCleanup() {
+  return fetch(`${BASE}/storage/cleanup`, { method: "POST" }).then(asJson);
+}

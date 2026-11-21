@@ -82,6 +82,7 @@ FastAPI가 `frontend/` 디렉터리를 함께 서빙하므로 별도의 프론�
 | `INGEST_TIMEZONE` | 업로드 날짜 폴더의 기준 시간대이자, 녹음 id에 적힌 시각을 UTC로 읽을 때의 시간대 (기본 `Asia/Seoul`) |
 | `WORKER_TOKEN` | YouTube 워커 큐(`/api/worker/...`)의 Bearer 토큰. `INGEST_TOKEN`과 다른 비밀. 미설정 시 그 API는 404 |
 | `DATA_DIR` | 대화 저장 경로 (기본값: `../data`) |
+| `STORAGE_WARN_PERCENT` | 데이터 디렉터리 디스크 사용률이 이 퍼센트 이상이면 워크스페이스에 경고 (기본 `80`, 0–100. 그 외 값은 무시하고 80) |
 
 프로바이더는 최소 하나만 설정하면 됩니다. API 키가 없는 프로바이더는 드롭다운에 나오지 않고, 하나도 없으면 툴바에 "설정된 LLM 프로바이더가 없습니다. 서버의 .env에서 API 키를 설정하세요."가 표시됩니다.
 
@@ -665,6 +666,11 @@ API는 기존 앱 로그인으로 보호됩니다. `GET /api/x-articles/config`�
 | PUT | `/api/projects/{id}/conversations/{cid}/documents/{filename}/recordings/{recording_id}/video` | 그 녹음을 YouTube 큐에 넣거나 뺌 `{enqueue, duration_sec?}`. 로그인 세션. 자세한 계약은 [YouTube 영상 작업 큐](#youtube-영상-작업-큐) |
 | POST | `…/recordings/upload` | 음성 파일 multipart `file`, 선택 `started`, `duration_sec`, `enqueue`. 그 문서의 녹음이 되고 기본으로 큐에 들어갑니다. 로그인 세션 |
 | GET, POST | `/api/worker/jobs` … | 워커용 큐. `Authorization: Bearer $WORKER_TOKEN`. 목록·claim·오디오·progress·complete·fail·retry. 위 절의 JSON이 계약입니다. |
+| GET | `/api/storage` | 데이터 디렉터리 디스크 `total_bytes` / `used_bytes` / `free_bytes` / `percent_used`, `threshold_percent`, `warning`. 로그인 세션 |
+| GET | `/api/storage/recordings` | 녹음 목록(크기, 날짜, 프로젝트·폴더·문서, YouTube 업로드 완료 여부, `.play` 복사본 크기). 로그인 세션 |
+| DELETE | `/api/storage/recordings` | 선택한 원본과 그 `.play` 복사본 삭제 `{recordings:[{project_id, conv_id, filename, recording_id}]}`. 로그인 세션 |
+| POST | `/api/storage/cleanup/preview` | YouTube 업로드가 끝난 원본과 모든 `.play` 복사본, 비워질 바이트. 파일을 지우지 않음 |
+| POST | `/api/storage/cleanup` | 미리보기의 파일을 삭제. 업로드가 끝나지 않은 원본과 문서는 유지 |
 | GET | `/api/system-prompt` | 공통(전역) 시스템 프롬프트 조회 `{content}` |
 | PUT | `/api/system-prompt` | 공통 시스템 프롬프트 저장 `{content}` |
 | GET | `/api/custom-symbols` | 공용 커스텀 심볼 CSV 조회 `{content}` |

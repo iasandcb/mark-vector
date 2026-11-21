@@ -28,6 +28,7 @@ import { createArrowEcho, createModifierLatch, editorArrowPlan } from "./editor-
 import { sidebarShortcutAction } from "./sidebar-shortcut.mjs";
 import { openTranscribeDialog } from "./transcribe.js";
 import { openRecordingsDialog } from "./recordings-dialog.js";
+import { openStorageDialog, refreshStorageWarning } from "./storage-dialog.js";
 import { createGamepadRemote } from "./remote.js";
 import { splitSlides, lastSlideStart } from "./slides.js";
 import { startRealtimeTranscription } from "./realtime-stt.js";
@@ -7602,6 +7603,21 @@ function transcribeIntoSession(projectId, sessionId) {
   });
 }
 
+function showStorage() {
+  openStorageDialog({
+    onChanged: async (refs) => {
+      const seen = new Set();
+      for (const ref of refs || []) {
+        const key = `${ref.project_id}\0${ref.conv_id}`;
+        if (!ref.project_id || !ref.conv_id || seen.has(key)) continue;
+        seen.add(key);
+        await refreshSessionDocs(ref.project_id, ref.conv_id).catch(() => {});
+      }
+      renderTree();
+    },
+  });
+}
+
 function showRecordings(projectId, sessionId, filename) {
   openRecordingsDialog({
     projectId,
@@ -9728,6 +9744,10 @@ discussionPane = mountDiscussion({
 
   applyStaticTranslations();
   mountIcons();
+  document.getElementById("storage-btn").addEventListener("click", showStorage);
+  document.getElementById("storage-settings-btn").addEventListener("click", showStorage);
+  document.getElementById("storage-warning").addEventListener("click", showStorage);
+  refreshStorageWarning();
   el.editor.rootElement.querySelector(".cm-content")?.setAttribute("aria-label", t("workspace.editor"));
   el.editorB.rootElement.querySelector(".cm-content")?.setAttribute("aria-label", t("editor.splitView"));
   for (const row of [el.globalSystemRow, el.globalCustomSymbolsRow, el.globalSpokenMathRow]) makeTreeRowAccessible(row, row.textContent.trim());

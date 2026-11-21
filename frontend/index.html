@@ -46,6 +46,11 @@
             <span class="doc-role-badge role-system">S</span>
             <span class="doc-filename" data-i18n="tree.globalSpokenMath"></span>
           </div>
+          <button id="storage-settings-btn" class="storage-settings-btn" type="button" data-i18n-title="storage.open">
+            <span class="storage-settings-icon" data-icon="storage" aria-hidden="true"></span>
+            <span class="doc-filename" data-i18n="storage.settings"></span>
+            <span id="storage-settings-badge" class="storage-badge" hidden></span>
+          </button>
         </details>
         <div class="workspace-footer-row"><span id="lang-select-slot"></span><button id="shortcuts-btn" class="icon-btn" type="button" data-icon="keyboard" data-i18n-title="shortcuts.openTitle"></button></div>
         <div id="auth-info" class="auth-info" hidden></div>
@@ -85,6 +90,7 @@
         <p id="discuss-partial" class="discuss-partial" hidden></p>
       </aside>
       <div id="editor-column" class="editor-column">
+      <button id="storage-warning" class="storage-warning" type="button" hidden></button>
       <!-- Open documents as tabs (see the tabs section in app.js) - shown
            once there's more than one. -->
       <div id="tab-strip" class="tab-strip" role="tablist" hidden></div>
@@ -106,6 +112,10 @@
         </div>
         <div class="editor-actions">
           <div class="editor-actions-scroll">
+          <button id="storage-btn" class="secondary-btn" type="button" data-i18n-title="storage.open">
+            <span class="btn-icon" aria-hidden="true"><span data-icon="storage"></span></span>
+            <span class="btn-label" data-i18n="storage.open"></span>
+          </button>
           <!-- Icon and wording are separate spans. The row is icon-only
                (see .btn-label in style.css); titles/aria-labels keep the
                words. The publish button's own wording is swapped in JS,
