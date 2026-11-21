@@ -545,20 +545,65 @@ input[type="checkbox"] { accent-color: var(--accent); }
   color: var(--muted);
 }
 .storage-actions .secondary-btn { min-height: 32px; padding: 6px 12px; font-size: calc(12px * var(--font-scale)); }
-.storage-list { overflow-y: auto; padding: 6px 10px 12px; display: flex; flex-direction: column; gap: 4px; }
+/* The list is the flex child that scrolls. min-height: 0 lets it shrink
+   inside the fixed-height phone panel; the rows themselves must not. */
+.storage-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 10px 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+.storage-summary,
+.storage-actions { flex: 0 0 auto; }
+/* A shrinking flex row is what iPhone Safari collapses onto one line-height,
+   so the filename, meta, YouTube line and the next row paint on top of
+   each other. flex: 0 0 auto keeps each row as tall as its text. */
 .storage-row {
   display: flex;
+  flex: 0 0 auto;
   align-items: flex-start;
   gap: 10px;
+  width: 100%;
+  height: auto;
   padding: 8px;
   border-radius: 8px;
   cursor: pointer;
 }
 .storage-row:hover { background: var(--bg); }
-.storage-row input { width: 18px; height: 18px; margin-top: 2px; flex: 0 0 auto; }
-.storage-row-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.storage-row-title { font-size: calc(13px * var(--font-scale)); font-weight: 600; overflow-wrap: anywhere; }
-.storage-row-meta, .storage-row-play { font-size: calc(12px * var(--font-scale)); color: var(--muted); overflow-wrap: anywhere; }
+.storage-row input {
+  align-self: flex-start;
+  width: 18px;
+  height: 18px;
+  margin-top: 3px;
+  flex: 0 0 auto;
+}
+.storage-row-main {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+}
+.storage-row-title,
+.storage-row-meta,
+.storage-row-yt,
+.storage-row-play {
+  display: block;
+  width: 100%;
+  margin: 0;
+  line-height: 1.45;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.storage-row-meta,
+.storage-row-yt,
+.storage-row-play { margin-top: 2px; }
+.storage-row-title { font-size: calc(13px * var(--font-scale)); font-weight: 600; }
+.storage-row-meta, .storage-row-play { font-size: calc(12px * var(--font-scale)); color: var(--muted); }
 .storage-row-yt { font-size: calc(12px * var(--font-scale)); color: var(--muted); }
 .storage-row-yt.done { color: #1d6048; font-weight: 600; }
 .storage-row-loose { cursor: default; padding-left: 36px; }
