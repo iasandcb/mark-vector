@@ -19,6 +19,25 @@ test("storage is reachable from the editor icon bar and from settings", () => {
   assert.match(html, /id="storage-settings-badge"[^>]*hidden/);
 });
 
+test("recording rows stack and wrap instead of sharing one line height", () => {
+  const list = css.slice(css.indexOf(".storage-list {"), css.indexOf(".storage-summary,"));
+  assert.match(list, /min-height:\s*0/);
+  assert.match(list, /flex:\s*1\s+1\s+auto/);
+  const row = css.slice(css.indexOf(".storage-row {"), css.indexOf(".storage-row:hover"));
+  assert.match(row, /flex:\s*0\s+0\s+auto/);
+  assert.match(row, /align-items:\s*flex-start/);
+  assert.match(row, /height:\s*auto/);
+  assert.doesNotMatch(row, /height:\s*\d+px/);
+  assert.match(css, /\.storage-row input \{[^}]*align-self:\s*flex-start/);
+  assert.match(css, /\.storage-row-main \{[^}]*display:\s*block/);
+  const linesAt = css.indexOf(".storage-row-title,");
+  const lines = css.slice(linesAt, css.indexOf("}", linesAt) + 1);
+  assert.match(lines, /display:\s*block/);
+  assert.match(lines, /line-height:\s*1\.45/);
+  assert.match(lines, /white-space:\s*normal/);
+  assert.match(lines, /overflow-wrap:\s*anywhere/);
+});
+
 test("the storage panel stays usable on a phone", () => {
   const at = css.indexOf(".storage-panel");
   assert.ok(at > 0);
