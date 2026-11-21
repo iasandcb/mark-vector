@@ -154,16 +154,23 @@ class ChatGPTCredentials:
     def __init__(self):
         self._lock = asyncio.Lock()
         self._record: dict | None = None
-        self._mtime: float | None = None
+        # (mtime_ns, inode, size). mtime alone misses a replace that lands
+        # in the same timestamp tick: two immediate save_credentials()
+        # calls often share one st_mtime, so a fresh file would stay
+        # invisible until the clock moved. os.replace always installs a
+        # new inode (the previous one is still linked, so it can't be
+        # reused), and size catches an in-place rewrite in that same tick.
+        self._stamp: tuple[int, int, int] | None = None
 
     def _reload(self) -> dict | None:
         try:
-            mtime = credentials_path().stat().st_mtime
+            st = credentials_path().stat()
         except FileNotFoundError:
-            self._record, self._mtime = None, None
+            self._record, self._stamp = None, None
             return None
-        if mtime != self._mtime:
-            self._record, self._mtime = load_credentials(), mtime
+        stamp = (st.st_mtime_ns, st.st_ino, st.st_size)
+        if stamp != self._stamp:
+            self._record, self._stamp = load_credentials(), stamp
         return self._record
 
     def available(self) -> bool:
