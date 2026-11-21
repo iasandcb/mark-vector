@@ -267,9 +267,11 @@ async def test_reasoning_capable_models_filters_by_thinking_support(monkeypatch)
     provider._capabilities_cache["claude-haiku-4-5"] = _capabilities(adaptive=False, enabled=True)
     provider._capabilities_cache["claude-haiku-3"] = _capabilities(adaptive=False, enabled=False)
 
-    result = await provider.reasoning_capable_models(["claude-opus-5", "claude-haiku-4-5", "claude-haiku-3"])
+    result = await provider.reasoning_efforts(["claude-opus-5", "claude-haiku-4-5", "claude-haiku-3"])
 
-    assert result == ["claude-opus-5", "claude-haiku-4-5"]
+    # Keys are the models the selector applies to. Adaptive and legacy
+    # "enabled" thinking both qualify; a model with neither is left out.
+    assert list(result) == ["claude-opus-5", "claude-haiku-4-5"]
 
 
 # ---------- OpenAIProvider - real OpenAI (Responses API + web_search) ----------
@@ -378,9 +380,10 @@ async def test_openai_reasoning_capable_models_matches_by_name_pattern():
     provider = OpenAIProvider(api_key="fake")
     models = ["gpt-5.6-luna", "gpt-5-mini", "o1", "o3-mini", "o4-mini", "gpt-4o", "gpt-4.1", "text-embedding-3-large"]
 
-    result = await provider.reasoning_capable_models(models)
+    result = await provider.reasoning_efforts(models)
 
-    assert result == ["gpt-5.6-luna", "gpt-5-mini", "o1", "o3-mini", "o4-mini"]
+    # Keys are the models the selector applies to. gpt-4 and non-chat ids stay out.
+    assert list(result) == ["gpt-5.6-luna", "gpt-5-mini", "o1", "o3-mini", "o4-mini"]
 
 
 # ---------- OpenAIProvider - custom base_url (Hermes/Together/etc.) must be
