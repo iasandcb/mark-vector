@@ -1198,10 +1198,11 @@ body.tab-dragging {
    .editor-actions-scroll. Save, publish, X article, 대화, and ⚙ stay
    outside that scroller so they are never covered and never widen the
    page. The spacer keeps the tool icons against that pinned group when
-   they fit. A narrow phone is the exception: workspace.css lifts the
-   dictation cluster into the command bar's top padding (not
-   display:contents, which hid the elapsed time on WebKit) and gives the
-   queue notice its own wrapping row. */
+   they fit. A narrow phone is the exception: workspace.css puts the open
+   filename on its own line above the icons, lifts the dictation cluster
+   into the command bar's top padding (not display:contents, which hid
+   the elapsed time on WebKit), and gives the queue notice its own
+   wrapping row. */
 .editor-actions {
   display: flex;
   align-items: center;

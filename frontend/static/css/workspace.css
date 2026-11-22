@@ -299,15 +299,18 @@ input[type="checkbox"] { accent-color: var(--accent); }
   .mobile-tab.active { color: var(--accent); }
   .mobile-tab.active::before { content: ''; position: absolute; top: 0; width: 26px; height: 2px; background: var(--accent); border-radius: 0 0 2px 2px; }
 
-  /* Narrow phone: recording clock and the queue notice.
+  /* Narrow phone: the open filename has its own line, then the
+     recording clock and the queue notice.
      The dictation cluster is taken out of the icon scroller with absolute
      positioning. A contents box hid the elapsed time on WebKit (the red
      button stayed, its text did not paint) and left
      #tool-status sharing the icon row, where a 375px column ellipsizes
      "YouTube 대기열에 넣었습니다" away. The cluster sits in the command
-     bar's top padding. While a notice is showing, the title row drops
-     below the icons and the pill wraps the whole sentence. Desktop never
-     matches this container query. */
+     bar's top padding. The filename used to share that icon row, and at
+     390px the pencil painted over "now.md". It now takes the full width
+     above the icons (ellipsis when the name is long). While a notice is
+     showing, the title row drops below the icons and the pill wraps the
+     whole sentence. Desktop never matches this container query. */
   @container editor-column (max-width: 700px) {
     .editor-commandbar {
       position: relative;
@@ -315,14 +318,57 @@ input[type="checkbox"] { accent-color: var(--accent); }
       column-gap: 2px;
       padding-inline: 10px;
     }
+    /* Own line for the name. flex-shrink 0 and basis 100% force the wrap;
+       min-width 0 lets a long name ellipsize instead of widening the page.
+       The panel background covers any icon that still overflows upward. */
+    .editor-commandbar:has(#editor-filename:not([hidden])) {
+      flex-wrap: wrap;
+      row-gap: 4px;
+    }
+    .editor-commandbar:has(#editor-filename:not([hidden])) .commandbar-title {
+      order: -1;
+      flex: 1 0 100%;
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      background: var(--panel);
+      position: relative;
+      z-index: 1;
+    }
+    .editor-commandbar:has(#editor-filename:not([hidden])) .pane-filename {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .editor-commandbar:has(#editor-filename:not([hidden])) .editor-actions {
+      flex: 1 1 100%;
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+    }
     .editor-commandbar:has(#dictation-group:not([hidden])) {
       padding-top: 52px;
     }
-    .editor-commandbar .editor-actions,
-    .editor-commandbar .editor-actions-scroll {
-      /* The cluster is positioned against the command bar, so an
-         overflow scrollport between them would clip it. */
+    .editor-commandbar .editor-actions {
+      /* The cluster is positioned against the command bar. It is not a
+         child of the scroller on a narrow viewport (see
+         syncDictationHome in app.js), so this row can scroll without
+         clipping the clock. */
       overflow: visible;
+    }
+    /* Pack icons to the end while they fit. The spacer shrinks to nothing
+       when they don't, so scrollLeft 0 still reaches the first icon
+       (justify-content: flex-end would leave that icon off to the left,
+       where it cannot be scrolled back). */
+    .editor-commandbar .editor-actions-scroll {
+      justify-content: flex-start;
+      overflow-x: auto;
+      overflow-y: hidden;
+    }
+    .editor-commandbar .editor-actions-scroll::before {
+      flex: 1 1 0px;
+      min-width: 0;
     }
     .editor-commandbar .editor-actions-scroll > .secondary-btn,
     .editor-commandbar .editor-primary-actions .secondary-btn,
@@ -332,6 +378,9 @@ input[type="checkbox"] { accent-color: var(--accent); }
       min-width: 32px;
       min-height: 32px;
       padding: 4px;
+    }
+    .editor-commandbar > .dictation-group .btn-label {
+      display: none;
     }
     .editor-commandbar .dictation-group {
       position: absolute;
