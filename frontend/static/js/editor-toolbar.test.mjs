@@ -54,7 +54,7 @@ test("대화 stays accent-filled, with its label, just before the settings gear"
 
 test("a narrow phone shows the recording clock and the queue notice", () => {
   const css = fs.readFileSync(new URL("../css/workspace.css", import.meta.url), "utf8");
-  const marker = "Narrow phone: recording clock and the queue notice.";
+  const marker = "Narrow phone: the open filename has its own line";
   const at = css.indexOf(marker);
   assert.ok(at > 0, "missing narrow-phone recording notice comment");
   const mediaAt = css.lastIndexOf("@media (max-width: 700px)", at);
@@ -76,6 +76,44 @@ test("a narrow phone shows the recording clock and the queue notice", () => {
   const downloadAt = column.indexOf('id="recording-download-btn"');
   const scrollAt = column.indexOf('class="editor-actions-scroll"');
   assert.ok(statusAt < retryAt && retryAt < downloadAt && downloadAt < scrollAt);
+});
+
+test("a phone gives the open filename its own line and ellipsizes the overflow", () => {
+  const css = fs.readFileSync(new URL("../css/workspace.css", import.meta.url), "utf8");
+  const marker = "Narrow phone: the open filename has its own line";
+  const at = css.indexOf(marker);
+  assert.ok(at > 0, "missing phone filename comment");
+  const mediaAt = css.lastIndexOf("@media (max-width: 700px)", at);
+  assert.ok(mediaAt > 0 && mediaAt < at, "the phone filename rules must stay inside the phone breakpoint");
+  const end = css.indexOf("@media (prefers-reduced-motion", at);
+  const containerAt = css.indexOf("@container editor-column (max-width: 700px)", at);
+  assert.ok(containerAt > at && containerAt < end, "the filename line stays in the phone column query");
+  const block = css.slice(at, end);
+  assert.match(block, /\.editor-commandbar:has\(#editor-filename:not\(\[hidden\]\)\) \{[^}]*flex-wrap:\s*wrap/);
+  assert.match(
+    block,
+    /\.editor-commandbar:has\(#editor-filename:not\(\[hidden\]\)\) \.commandbar-title \{[^}]*flex:\s*1 0 100%[^}]*max-width:\s*100%[^}]*min-width:\s*0/,
+  );
+  assert.match(
+    block,
+    /\.editor-commandbar:has\(#editor-filename:not\(\[hidden\]\)\) \.pane-filename \{[^}]*overflow:\s*hidden[^}]*text-overflow:\s*ellipsis[^}]*white-space:\s*nowrap/,
+  );
+  assert.match(
+    block,
+    /\.editor-commandbar \.editor-actions-scroll \{[^}]*justify-content:\s*flex-start[^}]*overflow-x:\s*auto/,
+  );
+  assert.match(block, /\.editor-commandbar \.editor-actions-scroll::before \{[^}]*flex:\s*1 1 0px[^}]*min-width:\s*0/);
+  assert.match(block, /\.editor-commandbar > \.dictation-group \.btn-label \{[^}]*display:\s*none/);
+  assert.doesNotMatch(block, /max-width:\s*34%/);
+  const app = fs.readFileSync(new URL("./app.js", import.meta.url), "utf8");
+  assert.match(app, /function syncDictationHome\(\)/);
+  assert.match(app, /NARROW_VIEWPORT = window\.matchMedia\("\(max-width: 700px\)"\)/);
+  assert.match(app, /if \(NARROW_VIEWPORT\.matches\) \{[\s\S]*bar\.appendChild\(group\)/);
+  assert.match(app, /anchor\.after\(group\)/);
+  const base = css.slice(0, mediaAt);
+  assert.match(base, /\.editor-commandbar \{[^}]*flex-wrap:\s*nowrap/);
+  assert.match(base, /\.commandbar-title \{[^}]*max-width:\s*min\(46%, 16rem\)/);
+  assert.match(base, /\.pane-filename \{[^}]*font-size:\s*calc\(12px \* var\(--font-scale\)\)/);
 });
 
 test("the split pane keeps filename plus icon-only publish, article, and save", () => {

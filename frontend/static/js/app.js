@@ -7153,6 +7153,30 @@ async function toggleSession(projectId, id) {
 // probably opened to read.
 const PHONE_LAYOUT = window.matchMedia("(max-width: 700px), (pointer: coarse) and (max-width: 1000px) and (max-height: 500px)");
 
+// The dictation cluster is absolutely positioned on a narrow phone (see the
+// editor-column container query in workspace.css). It has to leave the icon
+// scroller first: a scrollport between it and the command bar clips it, which
+// is also why the tools cannot scroll while it stays in there, and the
+// leftmost icons then paint off the screen. Wider than 700px it goes back
+// after the inline-complete button, which is where index.html puts it.
+const NARROW_VIEWPORT = window.matchMedia("(max-width: 700px)");
+
+function syncDictationHome() {
+  const group = document.getElementById("dictation-group");
+  const bar = document.querySelector("#editor-column .editor-commandbar");
+  const scroll = bar?.querySelector(".editor-actions-scroll");
+  const anchor = document.getElementById("inline-complete-btn");
+  if (!group || !bar || !scroll || !anchor) return;
+  if (NARROW_VIEWPORT.matches) {
+    if (group.parentElement !== bar) bar.appendChild(group);
+  } else if (group.parentElement !== scroll) {
+    anchor.after(group);
+  }
+}
+
+syncDictationHome();
+NARROW_VIEWPORT.addEventListener("change", syncDictationHome);
+
 // Only pair existing siblings; the final .c suffix identifies the left pane.
 async function documentPair(projectId, sessionId, filename) {
   if (!filename.endsWith(".md")) return null;
