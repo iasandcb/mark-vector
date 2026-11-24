@@ -72,6 +72,19 @@ export function createEditor(textarea, { onFoldToggle, foldRanges, documentKey =
     textarea.scrollToEnd = () => {
       textarea.scrollTop = textarea.scrollHeight;
     };
+    // 1-based line at the top of the viewport, plus how far through that
+    // line the viewport has moved. The real editor asks CodeMirror; a
+    // textarea has uniform lines, so scrollTop / line-height is the line.
+    textarea.topVisibleLine = () => {
+      const styles = getComputedStyle(textarea);
+      const parsed = parseFloat(styles.lineHeight);
+      const lineHeight = Number.isFinite(parsed) && parsed > 0 ? parsed : 22;
+      const count = Math.max(1, String(textarea.value ?? "").split("\n").length);
+      const raw = textarea.scrollTop / lineHeight;
+      const line = Math.min(count, Math.max(1, Math.floor(raw) + 1));
+      const fraction = Math.min(0.999, Math.max(0, raw - Math.floor(raw)));
+      return { line, fraction };
+    };
     textarea.nudgeCaret = (key, modifiers) => {
       const next = moveCaret(textarea.value, textarea.selectionStart, textarea.selectionEnd, key, modifiers);
       if (next.changes) {
@@ -356,6 +369,28 @@ export function createEditor(textarea, { onFoldToggle, foldRanges, documentKey =
     },
     get scrollTop() {
       return view.scrollDOM.scrollTop;
+    },
+    // The source line at the top of the viewport. `fraction` is how far
+    // through that line's block (a wrapped line is one block) the viewport
+    // has scrolled, so scroll sync can sit between preview anchors instead
+    // of jumping a whole line at a time. A lineBlock top below the scroll
+    // position is the content padding above the first line: the viewport
+    // is still on that line, at its start.
+    topVisibleLine() {
+      const scrollTop = view.scrollDOM.scrollTop;
+      let block;
+      try {
+        block = view.lineBlockAtHeight(scrollTop);
+      } catch (err) {
+        return null;
+      }
+      if (!block) return null;
+      const doc = view.state.doc;
+      const line = doc.lineAt(Math.max(0, Math.min(block.from, doc.length)));
+      const height = block.bottom - block.top;
+      let fraction = 0;
+      if (height > 0 && scrollTop > block.top) fraction = Math.min(0.999, (scrollTop - block.top) / height);
+      return { line: line.number, fraction };
     },
     set scrollTop(value) {
       view.scrollDOM.scrollTop = value;
