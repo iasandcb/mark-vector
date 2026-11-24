@@ -74,6 +74,13 @@ import { punctuateSpeech } from "./punctuation.js";
 import { expectsText } from "./glasses-link.mjs";
 import { mountDiscussion } from "./discussion-pane.js";
 import { buildLeanPlaygroundUrl, concatenateLeanBlocks, extractLeanBlocks } from "./lean-playground.mjs";
+import {
+  annotateSegment,
+  collapseWithEditorLines,
+  dedupeAnchors,
+  lineIndexAt,
+  previewScrollForEditor,
+} from "./scroll-sync.mjs";
 
 // Inline-thread markers. Declared up here, away from the rest of the
 // inline-thread code further down, because `el` below builds the editor,
@@ -1615,13 +1622,17 @@ function followStream() {
 
 // Opt-in (checkbox, off by default - see restoreSyncScrollPref below), so it
 // never fights someone who wants to scroll the two panes independently.
-// One-directional (editor -> preview) as asked: scrolling the preview itself
-// never moves the editor back. There's no reliable source-line mapping from
-// the raw markdown to the rendered HTML (the renderer is a plain string ->
-// string renderer, no position tracking), so this matches by proportion of
-// the scrollable range instead of by line - close enough to "show what I'm
-// editing" without needing to instrument the renderer.
+// One-directional (editor -> preview): scrolling the preview itself never
+// moves the editor back. The preview's top-level blocks carry the editor
+// line they came from (data-source-line). The editor's top visible line is
+// placed between the neighbouring anchors, so a tall block (display math,
+// an image, a code fence) takes the preview space its source lines cover
+// instead of a share of the whole scrollbar. `syncingPreview` keeps a
+// layout refresh from feeding the write back into itself.
 const SYNC_SCROLL_KEY = "mark-vector:sync-scroll";
+let previewAnchors = [];
+let syncingPreview = false;
+let previewAnchorFrame = 0;
 
 function saveSyncScrollPref() {
   try {
@@ -1646,12 +1657,67 @@ function restoreSyncScrollPref() {
 // otherwise it's pane A scrolling while the preview is currently showing
 // pane B (or vice versa), which has nothing to sync against.
 function syncPreviewScrollFromSource(which) {
+  if (syncingPreview) return;
   if (!el.syncScrollCheckbox.checked || which !== previewSource) return;
   const sourceEditor = which === "b" ? el.editorB : el.editor;
   const editorRange = sourceEditor.scrollHeight - sourceEditor.clientHeight;
   const previewRange = el.preview.scrollHeight - el.preview.clientHeight;
   if (editorRange <= 0 || previewRange <= 0) return;
-  el.preview.scrollTop = (sourceEditor.scrollTop / editorRange) * previewRange;
+  const placed = typeof sourceEditor.topVisibleLine === "function" ? sourceEditor.topVisibleLine() : null;
+  const documentLines = String(sourceEditor.value ?? "").split("\n").length;
+  const target = previewScrollForEditor({
+    sourceLine: placed ? placed.line + placed.fraction : 1,
+    anchors: placed ? previewAnchors : [],
+    editorScrollTop: sourceEditor.scrollTop,
+    editorScrollHeight: sourceEditor.scrollHeight,
+    editorClientHeight: sourceEditor.clientHeight,
+    previewScrollHeight: el.preview.scrollHeight,
+    previewClientHeight: el.preview.clientHeight,
+    documentLines,
+  });
+  if (Math.abs(el.preview.scrollTop - target) < 0.5) return;
+  syncingPreview = true;
+  el.preview.scrollTop = target;
+  syncingPreview = false;
+}
+
+function measurePreviewAnchors() {
+  const anchors = [];
+  const scroller = el.preview;
+  const scrollerRect = scroller.getBoundingClientRect();
+  for (const node of scroller.querySelectorAll("[data-source-line]")) {
+    const line = Number(node.getAttribute("data-source-line"));
+    if (!Number.isFinite(line)) continue;
+    const rect = node.getBoundingClientRect();
+    anchors.push({ line, top: rect.top - scrollerRect.top + scroller.scrollTop });
+  }
+  return dedupeAnchors(anchors);
+}
+
+function refreshPreviewAnchors() {
+  previewAnchors = measurePreviewAnchors();
+  if (el.syncScrollCheckbox.checked) syncPreviewScrollFromSource(previewSource);
+}
+
+function schedulePreviewAnchorRefresh() {
+  if (previewAnchorFrame) return;
+  previewAnchorFrame = requestAnimationFrame(() => {
+    previewAnchorFrame = 0;
+    refreshPreviewAnchors();
+  });
+}
+
+// The preview's own box, plus each top-level block. Observing the blocks
+// (not only the pane) is what notices an image finishing, KaTeX fonts
+// settling, or a fence growing — scroll position does not change their
+// size, so the callback does not loop with the sync write above.
+let previewLayoutObserver = null;
+function watchPreviewLayout() {
+  if (typeof ResizeObserver !== "function") return;
+  if (!previewLayoutObserver) previewLayoutObserver = new ResizeObserver(() => schedulePreviewAnchorRefresh());
+  previewLayoutObserver.disconnect();
+  previewLayoutObserver.observe(el.preview);
+  for (const child of el.preview.children) previewLayoutObserver.observe(child);
 }
 
 // ---------- live sockets (shared plumbing for "glasses" and "live") ----------
@@ -2312,6 +2378,10 @@ function paintSharedPreview(text, dialect) {
   decorateLeanBlocks(el.preview, leanBlocksShownInPreview(text));
   document.getElementById("preview-empty").hidden = !!text.trim();
   el.preview.hidden = !text.trim();
+  // Measure after the pane is shown: a hidden preview reports every block
+  // at y = 0, and the sync just below would then pin the preview to the top.
+  watchPreviewLayout();
+  previewAnchors = measurePreviewAnchors();
 }
 
 function renderPreview() {
@@ -8426,6 +8496,14 @@ function decorateLeanBlocks(container, blocks) {
     if (!pre || pre.parentElement?.classList.contains("lean-block")) continue;
     const wrap = document.createElement("div");
     wrap.className = "lean-block";
+    // The run button sits above the fence, so the anchor has to be the
+    // wrapper. Leaving it on the <pre> would attribute that button to the
+    // previous block.
+    const sourceLine = pre.getAttribute("data-source-line");
+    if (sourceLine) {
+      wrap.setAttribute("data-source-line", sourceLine);
+      pre.removeAttribute("data-source-line");
+    }
     const button = document.createElement("button");
     button.type = "button";
     button.className = "lean-run";
@@ -8459,12 +8537,20 @@ function updateLeanRunButtons() {
   el.runAllLeanBtn.hidden = extractLeanBlocks(previewText).length === 0;
 }
 
+function renderAnnotatedSegment(source, segment, offset, dialect, editorLine) {
+  const html = renderMarkdown(segment, dialect);
+  return annotateSegment(html, segment, lineIndexAt(source, offset), editorLine);
+}
+
 function renderDocumentWithThreads(text, dialect) {
   // A reply that edited the document beside it reads as "edited", not as
-  // its raw SEARCH/REPLACE blocks (see doc-edits.js).
-  text = collapseEditBlocks(text, `> ✏️ ${t("docEdit.blockNote")}`);
+  // its raw SEARCH/REPLACE blocks (see doc-edits.js). The collapse keeps
+  // each surviving line's editor line, so a block after a fence is still
+  // anchored to the editor rather than to the shortened preview text.
+  const collapsed = collapseWithEditorLines(text, `> ✏️ ${t("docEdit.blockNote")}`);
+  text = collapsed.text;
   const threads = inlineThreads(text);
-  if (!threads.length) return renderMarkdown(text, dialect);
+  if (!threads.length) return renderAnnotatedSegment(text, text, 0, dialect, collapsed.editorLine);
   // Each segment is rendered on its own, so only the one holding the
   // document's `<!-- math: ... -->` directive would see it - everything after
   // the first thread would fall back to the inherited dialect and render
@@ -8473,14 +8559,15 @@ function renderDocumentWithThreads(text, dialect) {
   const parts = [];
   let cursor = 0;
   for (const thread of threads) {
-    parts.push(renderMarkdown(text.slice(cursor, thread.start), dialect));
+    parts.push(renderAnnotatedSegment(text, text.slice(cursor, thread.start), cursor, dialect, collapsed.editorLine));
     if (thread.shown) {
-      const body = renderMarkdown(text.slice(thread.bodyStart, thread.bodyEnd), dialect);
-      parts.push(`<div class="inline-thread">${body}</div>`);
+      const body = renderAnnotatedSegment(text, text.slice(thread.bodyStart, thread.bodyEnd), thread.bodyStart, dialect, collapsed.editorLine);
+      const openLine = collapsed.editorLine[lineIndexAt(text, thread.start)];
+      parts.push(`<div class="inline-thread" data-source-line="${openLine}">${body}</div>`);
     }
     cursor = thread.end + (text[thread.end] === "\n" ? 1 : 0);
   }
-  parts.push(renderMarkdown(text.slice(cursor), dialect));
+  parts.push(renderAnnotatedSegment(text, text.slice(cursor), cursor, dialect, collapsed.editorLine));
   return parts.join("");
 }
 
@@ -9383,6 +9470,24 @@ el.syncScrollCheckbox.addEventListener("change", () => {
   saveSyncScrollPref();
   syncPreviewScrollFromSource(previewSource);
 });
+el.preview.addEventListener("load", (event) => {
+  if (event.target && event.target.tagName === "IMG") schedulePreviewAnchorRefresh();
+}, true);
+if (document.fonts) {
+  document.fonts.ready.then(() => schedulePreviewAnchorRefresh());
+  document.fonts.addEventListener?.("loadingdone", () => schedulePreviewAnchorRefresh());
+}
+window.addEventListener("resize", schedulePreviewAnchorRefresh);
+// Editor wrapping changes which source line sits at the top without a scroll
+// event (a pane resize). The content box is what grows or shrinks.
+if (typeof ResizeObserver === "function") {
+  const editorLayoutObserver = new ResizeObserver(() => schedulePreviewAnchorRefresh());
+  for (const editor of [el.editor, el.editorB]) {
+    const content = editor.scrollElement?.querySelector?.(".cm-content");
+    if (content) editorLayoutObserver.observe(content);
+    else if (editor.scrollElement) editorLayoutObserver.observe(editor.scrollElement);
+  }
+}
 restoreSyncScrollPref();
 el.glassesCheckbox.addEventListener("change", () => {
   saveGlassesEnabledPref();
