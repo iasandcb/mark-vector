@@ -177,6 +177,13 @@
                only) - see toggleEditorViewMode in app.js. Its own "pressed"
                look means "currently rendered", same convention as
                #split-toggle-btn above. -->
+          <!-- Shown only when this document has a lean fence. First in the
+               icon row so a phone (the row scrolls) still shows it without
+               a sideways flick. Opens every lean block, in order. -->
+          <button id="run-all-lean-editor-btn" class="secondary-btn" type="button" hidden data-i18n-title="lean.runAllTitle" data-i18n-aria-label="lean.runAll">
+            <span class="btn-icon" aria-hidden="true">Lean</span>
+            <span class="btn-label" data-i18n="lean.runAll"></span>
+          </button>
           <button id="fold-all-a" class="secondary-btn" type="button" data-i18n-title="editor.foldAll">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 4 6 5 6-5 M6 20l6-5 6 5"/></svg>
           </button>
@@ -413,6 +420,7 @@
             <input type="checkbox" id="glasses-checkbox">
             <span data-i18n="preview.glasses"></span>
           </label>
+          <button id="run-all-lean-btn" class="secondary-btn preview-only" type="button" hidden data-i18n="lean.runAll" data-i18n-title="lean.runAllTitle"></button>
           <button id="download-md-btn" class="icon-btn preview-only" disabled data-i18n-title="preview.downloadMdTitle">⤓ MD</button>
           <button id="export-pdf-btn" class="icon-btn preview-only" disabled data-i18n-title="preview.exportPdfTitle">⤓ PDF</button>
           <button id="copy-md-btn" class="icon-btn preview-only" type="button" disabled data-i18n="preview.copyMd" data-i18n-title="preview.copyMdTitle" aria-live="polite">Copy to clipboard</button>

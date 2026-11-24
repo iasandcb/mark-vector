@@ -1437,6 +1437,56 @@ body.tab-dragging {
   padding: 0;
 }
 
+/* A lean fence in the preview. The button sits above the block so it does
+   not cover the code, and the code itself stays the rendered fence. */
+.markdown-body .lean-block {
+  margin: 0 0 10px;
+}
+
+.markdown-body .lean-block pre {
+  margin: 0;
+}
+
+.markdown-body .lean-run {
+  display: inline-flex;
+  align-items: center;
+  margin: 0 0 6px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--accent);
+  font-family: inherit;
+  font-weight: 600;
+  font-size: calc(12px * var(--font-scale));
+  line-height: 1.3;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.markdown-body .lean-run:hover {
+  border-color: var(--accent);
+}
+
+.markdown-body .lean-run:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+#run-all-lean-btn {
+  font-size: calc(12px * var(--font-scale));
+  padding: 4px 8px;
+  white-space: nowrap;
+}
+
+/* The icon bar keeps the long phrase off this button (see .editor-actions
+   .btn-label). "Lean" stays visible; the full phrase is the accessible name
+   and the preview's own run-all button. */
+#run-all-lean-editor-btn .btn-icon {
+  font-size: calc(12px * var(--font-scale));
+  font-weight: 700;
+}
+
 .markdown-body blockquote {
   margin: 0 0 10px;
   padding-left: 12px;
@@ -1729,6 +1779,11 @@ body.tab-dragging {
     line-height: 1.75;
   }
 
+  .markdown-body .lean-run {
+    font-size: calc(14px * var(--font-scale));
+    padding: 8px 12px;
+  }
+
   .markdown-body pre,
   .markdown-body code {
     font-size: calc(16px * var(--font-scale));
@@ -1761,6 +1816,10 @@ body.tab-dragging {
 }
 
 @media print {
+  .lean-run {
+    display: none !important;
+  }
+
   body.app-shell > :not(#print-target) {
     display: none !important;
   }

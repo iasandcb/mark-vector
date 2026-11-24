@@ -73,6 +73,7 @@ import { createAnalysisPanel } from "./analysis.js";
 import { punctuateSpeech } from "./punctuation.js";
 import { expectsText } from "./glasses-link.mjs";
 import { mountDiscussion } from "./discussion-pane.js";
+import { buildLeanPlaygroundUrl, concatenateLeanBlocks, extractLeanBlocks } from "./lean-playground.mjs";
 
 // Inline-thread markers. Declared up here, away from the rest of the
 // inline-thread code further down, because `el` below builds the editor,
@@ -139,6 +140,8 @@ const el = {
   exportPdfBtn: document.getElementById("export-pdf-btn"),
   downloadMdBtn: document.getElementById("download-md-btn"),
   copyMdBtn: document.getElementById("copy-md-btn"),
+  runAllLeanBtn: document.getElementById("run-all-lean-btn"),
+  runAllLeanEditorBtn: document.getElementById("run-all-lean-editor-btn"),
   syncScrollCheckbox: document.getElementById("sync-scroll-checkbox"),
   glassesCheckbox: document.getElementById("glasses-checkbox"),
   glassesToolbar: document.getElementById("glasses-toolbar"),
@@ -2306,6 +2309,7 @@ function paintSharedPreview(text, dialect) {
   // ones are rendered in their own box (see renderDocumentWithThreads). The
   // buffer keeps all of them either way, and a published page gets none.
   el.preview.innerHTML = renderDocumentWithThreads(text, dialect);
+  decorateLeanBlocks(el.preview, leanBlocksShownInPreview(text));
   document.getElementById("preview-empty").hidden = !!text.trim();
   el.preview.hidden = !text.trim();
 }
@@ -2337,6 +2341,7 @@ function renderPreview() {
     syncPreviewScrollFromSource("a");
   }
   renderEditorView();
+  updateLeanRunButtons();
   updateScrollNavVisibility();
   syncInlineFolds();
   if (el.glassesCheckbox.checked) glassesSocket.send(false);
@@ -2371,6 +2376,7 @@ function renderPreviewB() {
     paintSharedPreview(resolved.text, sessionMathDialect(activeB.projectId, activeB.sessionId));
     syncPreviewScrollFromSource("b");
   }
+  updateLeanRunButtons();
   updateScrollNavVisibility();
   analysisPanel.contentChanged();
 }
@@ -2417,6 +2423,7 @@ function renderEditorView() {
     el.editor.value,
     sessionMathDialect(active.projectId, active.sessionId)
   );
+  decorateLeanBlocks(el.editorRendered, leanBlocksShownInPreview(el.editor.value));
 }
 
 // The currently open document's own math format if it declares one, else
@@ -8384,6 +8391,74 @@ function stripInlineThreads(text) {
 // the whole document to renderMarkdown, so the thread's own markup can wrap
 // it - which also means a Markdown construct can't span a thread boundary,
 // a fair trade for a block-level divider.
+// Lean fences the preview actually draws. Collapsed threads are omitted,
+// matching renderDocumentWithThreads, and edit blocks are already collapsed
+// to a note so a ```lean inside a SEARCH/REPLACE is not a program. The
+// document-level action uses extractLeanBlocks on the raw buffer instead,
+// so every fence in the file is included whether or not it is on screen.
+function leanBlocksShownInPreview(text) {
+  const rendered = collapseEditBlocks(text, `> ✏️ ${t("docEdit.blockNote")}`);
+  const threads = inlineThreads(rendered);
+  const segments = [];
+  if (!threads.length) {
+    segments.push(rendered);
+  } else {
+    let cursor = 0;
+    for (const thread of threads) {
+      segments.push(rendered.slice(cursor, thread.start));
+      if (thread.shown) segments.push(rendered.slice(thread.bodyStart, thread.bodyEnd));
+      cursor = thread.end + (rendered[thread.end] === "\n" ? 1 : 0);
+    }
+    segments.push(rendered.slice(cursor));
+  }
+  return segments.flatMap((segment) => extractLeanBlocks(segment));
+}
+
+function isLeanCodeElement(code) {
+  return [...code.classList].some((name) => /^language-lean4?$/i.test(name));
+}
+
+function decorateLeanBlocks(container, blocks) {
+  const nodes = [...container.querySelectorAll("pre > code")].filter(isLeanCodeElement);
+  const count = Math.min(nodes.length, blocks.length);
+  for (let i = 0; i < count; i++) {
+    const pre = nodes[i].parentElement;
+    if (!pre || pre.parentElement?.classList.contains("lean-block")) continue;
+    const wrap = document.createElement("div");
+    wrap.className = "lean-block";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "lean-run";
+    button.textContent = t("lean.runBlock");
+    button.title = t("lean.runBlockTitle");
+    const source = blocks[i].code;
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openLeanInWebEditor(source);
+    });
+    pre.before(wrap);
+    wrap.append(button, pre);
+  }
+}
+
+function openLeanInWebEditor(code) {
+  const built = buildLeanPlaygroundUrl(code);
+  if (!built.ok) {
+    alert(t("lean.tooLong"));
+    return;
+  }
+  const tab = window.open(built.url, "_blank", "noopener,noreferrer");
+  if (tab) tab.opener = null;
+}
+
+function updateLeanRunButtons() {
+  const editorText = active ? el.editor.value : "";
+  el.runAllLeanEditorBtn.hidden = extractLeanBlocks(editorText).length === 0;
+  const previewText = resolvedPreview().text || "";
+  el.runAllLeanBtn.hidden = extractLeanBlocks(previewText).length === 0;
+}
+
 function renderDocumentWithThreads(text, dialect) {
   // A reply that edited the document beside it reads as "edited", not as
   // its raw SEARCH/REPLACE blocks (see doc-edits.js).
@@ -9262,7 +9337,7 @@ el.editor.addEventListener("keyup", updateInlineThreadButton);
 // and the editor's own rendered view (see #view-mode-btn) - both render the
 // exact same document-with-threads markup, just into different elements.
 function collapseThreadOnClick(e, container) {
-  if (!active || streaming || e.target.closest("a")) return;
+  if (!active || streaming || e.target.closest("a, .lean-run")) return;
   const box = e.target.closest(".inline-thread");
   if (!box) return;
   const boxes = [...container.querySelectorAll(".inline-thread")];
@@ -9276,6 +9351,13 @@ el.editorRendered.addEventListener("click", openInternalDocumentLink);
 el.exportPdfBtn.addEventListener("click", exportPreviewToPdf);
 el.downloadMdBtn.addEventListener("click", downloadActiveAsMarkdown);
 el.copyMdBtn.addEventListener("click", copyPreviewMarkdown);
+el.runAllLeanBtn.addEventListener("click", () => {
+  openLeanInWebEditor(concatenateLeanBlocks(extractLeanBlocks(resolvedPreview().text || "")));
+});
+el.runAllLeanEditorBtn.addEventListener("click", () => {
+  if (!active) return;
+  openLeanInWebEditor(concatenateLeanBlocks(extractLeanBlocks(el.editor.value)));
+});
 el.editorScrollTopBtn.addEventListener("click", () => el.editor.scrollTo({ top: 0, behavior: "smooth" }));
 el.editorScrollBottomBtn.addEventListener("click", () => {
   streamFollow.editor = true;
