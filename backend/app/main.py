@@ -1,8 +1,11 @@
+import json
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
+
+from .version import APP_VERSION
 
 from .auth import AuthMiddleware, is_authenticated
 from .auth import router as auth_router
@@ -62,17 +65,43 @@ app.include_router(x_articles.router)
 
 
 class NoCacheStaticFiles(StaticFiles):
-    """This app is under active local development - without an explicit
-    Cache-Control, browsers may serve a stale JS/CSS file from their own
-    heuristic cache on a plain reload (not just skip revalidation), so a
-    just-deployed fix can look like it never took effect. Force revalidation
-    on every load instead; the ETag/Last-Modified Starlette already sends
-    still let an unchanged file come back as a cheap 304."""
+    """Scripts and styles are not stored at all. `no-cache` still lets iOS
+    WebKit (Safari, Orion, an installed home-screen app) reuse a module it
+    already parsed, so a deployed tab fix kept running the previous bundle.
+    Other static files revalidate, and the ETag/Last-Modified Starlette
+    sends still lets an unchanged file come back as a cheap 304."""
 
     def file_response(self, *args, **kwargs) -> Response:
         response = super().file_response(*args, **kwargs)
-        response.headers["Cache-Control"] = "no-cache"
+        full_path = args[0] if args else kwargs.get("full_path", "")
+        suffix = str(full_path).rsplit(".", 1)[-1].lower()
+        if suffix in {"js", "mjs", "css"}:
+            response.headers["Cache-Control"] = "no-store"
+        else:
+            response.headers["Cache-Control"] = "no-cache"
         return response
+
+
+def editor_index_html() -> str:
+    """The shell the browser actually loads. The entry module and every
+    module it imports carry the build version, so a new deploy cannot be
+    served from a cached `/static/js/app.js` with no query string."""
+    html = (FRONTEND_DIR / "index.html").read_text(encoding="utf-8")
+    version = APP_VERSION
+    html = html.replace('href="/static/css/style.css"', f'href="/static/css/style.css?v={version}"', 1)
+    html = html.replace('href="/static/css/workspace.css"', f'href="/static/css/workspace.css?v={version}"', 1)
+    imports = {}
+    root = FRONTEND_DIR / "static" / "js"
+    for path in sorted(item for item in root.rglob("*") if item.is_file() and item.suffix in {".js", ".mjs"}):
+        url = "/" + path.relative_to(FRONTEND_DIR).as_posix()
+        imports[url] = f"{url}?v={version}"
+    import_map = json.dumps({"imports": imports}, separators=(",", ":"))
+    html = html.replace(
+        '<script type="module" src="/static/js/app.js"></script>',
+        f'<script type="importmap">{import_map}</script>\n  <script type="module" src="/static/js/app.js?v={version}"></script>',
+        1,
+    )
+    return html
 
 
 app.mount("/static", NoCacheStaticFiles(directory=FRONTEND_DIR / "static"), name="static")
@@ -89,8 +118,9 @@ def index(request: Request):
     # instead of a bare bounce to /login - it's what the service looks like
     # to anyone who isn't its owner. Same URL either way, so existing
     # bookmarks keep opening the app.
-    page = "index.html" if is_authenticated(request) else "landing.html"
-    return FileResponse(FRONTEND_DIR / page, headers={"Cache-Control": "no-cache, private", "Vary": "Cookie"})
+    if not is_authenticated(request):
+        return FileResponse(FRONTEND_DIR / "landing.html", headers={"Cache-Control": "no-store", "Vary": "Cookie"})
+    return HTMLResponse(editor_index_html(), headers={"Cache-Control": "no-store", "Vary": "Cookie"})
 
 
 @app.get("/about")

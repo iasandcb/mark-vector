@@ -100,7 +100,11 @@ def test_login_page_reachable_without_session(isolated_data_dir, google_configur
 
 
 def test_static_assets_reachable_without_session(isolated_data_dir, google_configured, client):
-    assert client.get("/static/js/app.js").status_code == 200
+    script = client.get("/static/js/app.js")
+    assert script.status_code == 200
+    assert script.headers["Cache-Control"] == "no-store"
+    assert client.get("/static/css/style.css").headers["Cache-Control"] == "no-store"
+    assert client.get("/static/js/tab-persist.mjs").headers["Cache-Control"] == "no-store"
 
 
 def test_public_share_link_reachable_without_session(isolated_data_dir, google_configured, client):
@@ -114,7 +118,11 @@ def test_authenticated_request_reaches_the_app(isolated_data_dir, google_configu
     client.cookies.set(auth.SESSION_COOKIE, session)
     resp = client.get("/")
     assert resp.status_code == 200
+    assert resp.headers["Cache-Control"] == "no-store"
     assert 'id="landing"' not in resp.text
+    assert "/static/js/app.js?v=" in resp.text
+    assert 'type="importmap"' in resp.text
+    assert "/static/js/tab-persist.mjs?v=" in resp.text
     assert client.get("/api/projects").status_code == 200
 
 
