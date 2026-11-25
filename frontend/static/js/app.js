@@ -4,7 +4,17 @@ import { openXArticleDialog } from "./x-article.js";
 import { conversationPair, paneShareState } from "./split-share.mjs";
 import { conversationCompletedSnapshot, planConversationSend } from "./conversation-send.mjs";
 import { normalizePreviewPin, previewContent, previewMarkdownDownload, PREVIEW_PIN_STORAGE_KEY } from "./preview-pin.mjs";
-import { TABS_STORAGE_KEY, dropIndicatorX, pointerPastDragThreshold, reorderTabs, snapshotTabs, tabDropTarget, tabGapIndex } from "./tab-order.mjs";
+import { dropIndicatorX, pointerPastDragThreshold, reorderTabs, snapshotTabs, tabDropTarget, tabGapIndex } from "./tab-order.mjs";
+import {
+  bindTabPersistenceFlush,
+  flushTabSnapshot,
+  planTabRestore,
+  readTabSnapshot,
+  snapshotAfterActivate,
+  snapshotAfterClose,
+  snapshotAfterOpen,
+  writeTabSnapshot,
+} from "./tab-persist.mjs";
 import { copyText } from "./clipboard-copy.mjs";
 import { icon, symbolIcon, mountIcons } from "./icons.js";
 import * as api from "./api.js";
@@ -571,9 +581,15 @@ function loadActiveDocRef() {
 // its own, or the one it already has. Split view's pane B has no tabs.
 // The list of tabs (not their unsaved contents - autosave already keeps
 // those per document) survives a reload, in the order they were left -
-// including an order chosen by dragging a tab (see startTabDrag).
+// including an order chosen by dragging a tab (see startTabDrag). It is
+// written to localStorage at the moment it changes (see tab-persist.mjs),
+// not when the page unloads: iOS WebKit can kill the page before
+// beforeunload, and a write that waited would bring the closed tabs back.
 let tabs = []; // [{ ref, title, stash }]
 let currentTab = -1;
+// False until init has copied the stored list into `tabs`. A pagehide
+// before that would otherwise write this empty list over the real one.
+let tabsHydrated = false;
 // Set while a pointer may be dragging a tab. Nothing is reordered until
 // the pointer actually moves past the click threshold.
 let tabDrag = null;
@@ -606,23 +622,22 @@ function sameDocRef(a, b) {
     a.hermesSessionId === b.hermesSessionId;
 }
 
-function saveTabs() {
-  try {
-    localStorage.setItem(TABS_STORAGE_KEY, JSON.stringify(snapshotTabs(tabs, currentTab)));
-  } catch (err) {
-    // localStorage unavailable - the tabs just won't survive a reload
-  }
+function saveTabs(snapshot = null) {
+  writeTabSnapshot(localStorage, snapshot || snapshotTabs(tabs, currentTab));
 }
 
 function loadTabs() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(TABS_STORAGE_KEY) || "null");
-    if (saved && Array.isArray(saved.tabs)) return saved;
-  } catch (err) {
-    // fall through
-  }
-  return null;
+  return readTabSnapshot(localStorage);
 }
+
+// pagehide and visibility hidden, not only beforeunload. See tab-persist.mjs.
+// Not until the stored list is in memory: startup awaits the project tree
+// first, and a hide in that gap must not replace the stored tabs with [].
+bindTabPersistenceFlush({
+  target: window,
+  document,
+  flush: () => flushTabSnapshot(localStorage, tabsHydrated, snapshotTabs(tabs, currentTab)),
+});
 
 function stashDirty(stash) {
   return !!stash && stash.content !== stash.active.savedContent;
@@ -718,8 +733,12 @@ async function openInTab(ref) {
   // must still land in the one dictation started in.
   holdDictationOn(ref);
   if (await loadIntoTab(ref)) {
-    tabs.splice(previous + 1, 0, { ref: activeDocRef(), title: active.filename, stash: null });
-    currentTab = previous + 1;
+    const opened = { ref: activeDocRef(), title: active.filename, stash: null };
+    const saved = snapshotAfterOpen(tabs, previous, opened);
+    tabs.splice(previous + 1, 0, opened);
+    currentTab = saved.current;
+    // The new tab is in the stored list as soon as it exists.
+    saveTabs(saved);
   } else if (previous >= 0) {
     // Didn't open (gone, or a fetch failed): the screen never changed.
     tabs[previous].stash = null;
@@ -730,12 +749,16 @@ async function openInTab(ref) {
   renderTabs();
 }
 
-async function switchToTab(index, { keepCurrent = true } = {}) {
-  if (streaming || index < 0 || index >= tabs.length || (index === currentTab && active)) return;
+async function switchToTab(index, { keepCurrent = true, force = false } = {}) {
+  if (streaming || index < 0 || index >= tabs.length) return;
+  if (!force && index === currentTab && active) return;
   if (keepCurrent) stashCurrentTab();
   const arriving = tabs[index].ref;
   holdDictationOn(arriving);
   currentTab = index;
+  // Before loadIntoTab's fetch. A kill during that fetch would otherwise
+  // restore whichever tab was current the last time a write landed.
+  saveTabs(snapshotAfterActivate(tabs, currentTab));
   const tab = tabs[index];
   const stash = tab.stash;
   const arrivingHome = !!(dictation && dictation.targetRef && sameDocRef(dictation.targetRef, arriving));
@@ -753,10 +776,13 @@ async function switchToTab(index, { keepCurrent = true } = {}) {
     restoreTabView(stash);
   } else {
     // Its document is gone - drop the tab and show a neighbor instead.
+    // Store the shorter list before the neighbor's own fetch.
+    const saved = snapshotAfterClose(tabs, index, index);
     tabs.splice(index, 1);
-    currentTab = -1;
-    if (tabs.length) {
-      await switchToTab(Math.min(index, tabs.length - 1), { keepCurrent: false });
+    currentTab = saved.current;
+    saveTabs(saved);
+    if (currentTab >= 0) {
+      await switchToTab(currentTab, { keepCurrent: false, force: true });
       return;
     }
     clearEditor();
@@ -776,18 +802,20 @@ async function closeTab(index, { force = false, keepDraft = false } = {}) {
   const wasCurrent = index === currentTab;
   // Closing means discarding: don't offer the edits back next time it opens.
   if (wasCurrent && isDirty() && !keepDraft) clearAutosave();
+  // Persist before switching. switchToTab waits on the network to load the
+  // neighbor, and iOS WebKit (Safari, Orion) can kill the page on lock or
+  // reboot without beforeunload. A write that waits for that load never
+  // lands, so the closed tabs come back. currentTab matches the stored
+  // index first, so a pagehide flush during the load stores this same list.
+  const saved = snapshotAfterClose(tabs, currentTab, index);
   tabs.splice(index, 1);
-  if (!wasCurrent) {
-    if (index < currentTab) currentTab -= 1;
-  } else {
-    currentTab = -1;
-    if (tabs.length) {
-      await switchToTab(Math.min(index, tabs.length - 1), { keepCurrent: false });
-      return;
-    }
-    clearEditor();
+  currentTab = saved.current;
+  saveTabs(saved);
+  if (wasCurrent && currentTab >= 0) {
+    await switchToTab(currentTab, { keepCurrent: false, force: true });
+    return;
   }
-  saveTabs();
+  if (wasCurrent) clearEditor();
   renderTabs();
 }
 
@@ -847,6 +875,9 @@ async function dropTabs(matches) {
       if (i < currentTab) currentTab -= 1;
     }
   }
+  // Background tabs are already gone. Store that before closeTab waits on
+  // the current document's replacement.
+  saveTabs();
   if (currentTab >= 0 && tabs[currentTab].ref && matches(tabs[currentTab].ref)) {
     await closeTab(currentTab, { force: true });
     return;
@@ -9991,16 +10022,23 @@ discussionPane = mountDiscussion({
   setCustomAsciiMathSymbols(parseCustomSymbolsCsv(globalCustomSymbolsContent));
   setSpokenMathVocabulary(parseSpokenMathCsv((await api.getSpokenMath()).content));
   clearEditor();
-  // Tabs come back as they were; the one that was on screen (or the one a
-  // /d/... URL names) is the one loaded now - the rest load when switched to.
-  const savedTabs = loadTabs();
-  if (savedTabs) tabs = savedTabs.tabs.filter((tab) => tab.ref).map(({ ref, title }) => ({ ref, title, stash: null }));
-  const startRef = urlDocRef || (savedTabs && tabs[savedTabs.current] && tabs[savedTabs.current].ref) || savedDocRef;
-  const startAt = tabs.findIndex((tab) => sameDocRef(tab.ref, startRef));
-  if (startAt >= 0) await switchToTab(startAt, { keepCurrent: false });
-  else if (startRef) {
+  // The stored tab list is the set of open documents. mark-vector:active-doc
+  // is only a fallback when that list was never written; it must not reopen
+  // a tab the list has already dropped. A ?project&session&file link is an
+  // explicit open and may still add a tab. The one that was on screen is
+  // loaded now; the rest load when switched to.
+  const restored = planTabRestore({
+    saved: loadTabs(),
+    activeDoc: savedDocRef,
+    urlRef: urlDocRef,
+  });
+  tabs = restored.tabs.map(({ ref, title }) => ({ ref, title, stash: null }));
+  if (restored.openIndex >= 0) currentTab = restored.openIndex;
+  tabsHydrated = true;
+  if (restored.openIndex >= 0) await switchToTab(restored.openIndex, { keepCurrent: false });
+  else if (restored.openRef) {
     currentTab = tabs.length - 1;
-    await openInTab(startRef);
+    await openInTab(restored.openRef);
   }
   renderTabs();
   await restoreActiveDocumentB(savedDocRefB);
