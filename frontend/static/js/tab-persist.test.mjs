@@ -5,6 +5,7 @@ import { reorderTabs, snapshotTabs } from "./tab-order.mjs";
 import {
   TABS_STORAGE_KEY,
   bindTabPersistenceFlush,
+  chooseTabSnapshot,
   flushTabSnapshot,
   planTabRestore,
   readTabSnapshot,
@@ -228,15 +229,17 @@ test("with no stored list the active document still opens", () => {
   assert.equal(plan.openIndex, -1);
 });
 
-test("a document link still opens when it is not already a tab", () => {
+test("a different document link still opens when it is not already a tab", () => {
   const urlRef = { role: "document", projectId: "p", sessionId: "s", filename: "linked.md" };
   const plan = planTabRestore({
     saved: {
       tabs: [{ ref: { role: "document", projectId: "p", sessionId: "s", filename: "kept.md" }, title: "kept.md" }],
       current: 0,
+      consumedSearch: "",
     },
     activeDoc: { role: "document", filename: "closed.md" },
     urlRef,
+    pageSearch: "?project=p&session=s&file=linked.md",
   });
   assert.equal(plan.openRef, urlRef);
   assert.equal(plan.openIndex, -1);
@@ -244,18 +247,87 @@ test("a document link still opens when it is not already a tab", () => {
   assert.equal(plan.tabs[0].title, "kept.md");
 });
 
-test("a document link switches to the tab that already has it", () => {
+test("a different document link switches to the tab that already has it", () => {
   const urlRef = { role: "hermes-session", hermesSessionId: "1" };
   const plan = planTabRestore({
     saved: {
       tabs: [{ ref: { role: "hermes-session", hermesSessionId: "1", hermesTitle: "chat" }, title: "chat" }],
       current: 0,
+      consumedSearch: "",
     },
     activeDoc: { role: "document", filename: "chat" },
     urlRef,
+    pageSearch: "?project=p&session=s&file=chat",
   });
   assert.equal(plan.openIndex, 0);
   assert.equal(plan.openRef, urlRef);
+});
+
+test("closing 2026-11-15.c.md keeps it closed when a stale load and the page URL name it", () => {
+  const now = {
+    ref: { role: "document", projectId: "p", sessionId: "s", filename: "now.md" },
+    title: "now.md",
+  };
+  const closed = {
+    ref: { role: "document", projectId: "p", sessionId: "s", filename: "2026-11-15.c.md" },
+    title: "2026-11-15.c.md",
+  };
+  const page = "?project=p&session=s&file=2026-11-15.c.md";
+  const storage = memoryStorage();
+  let mirror = null;
+  const mirrorWrite = (snapshot) => {
+    mirror = snapshot;
+  };
+
+  // Both tabs are open and the conversation file is the one on screen.
+  // That is also what the address bar (or the home-screen start URL) names.
+  writeTabSnapshot(storage, {
+    ...snapshotAfterActivate([now, closed], 1),
+    revision: 1,
+    consumedSearch: page,
+  }, { mirrorWrite });
+
+  // Close the second tab. This revision has to be the one that survives.
+  const closedList = snapshotAfterClose([now, closed], 1, 1);
+  assert.equal(writeTabSnapshot(storage, {
+    ...closedList,
+    revision: 2,
+    consumedSearch: page,
+  }, { mirrorWrite }), true);
+  assert.deepEqual(mirror.tabs.map((item) => item.title), ["now.md"]);
+  assert.equal(mirror.current, 0);
+
+  // The switch that was loading 2026-11-15.c.md finishes and tries to store
+  // the pre-close list, with that file current.
+  assert.equal(writeTabSnapshot(storage, {
+    ...snapshotTabs([now, closed], 1),
+    revision: 1,
+    consumedSearch: page,
+  }, { mirrorWrite }), false);
+  assert.equal(mirror.revision, 2);
+
+  // Swiping the app away rolls localStorage back to the previous checkpoint.
+  // IndexedDB kept the close.
+  storage.setItem(TABS_STORAGE_KEY, JSON.stringify({
+    tabs: [
+      { ref: now.ref, title: now.title },
+      { ref: closed.ref, title: closed.title },
+    ],
+    current: 1,
+    revision: 1,
+    consumedSearch: page,
+  }));
+  const saved = chooseTabSnapshot(readTabSnapshot(storage), mirror);
+  const plan = planTabRestore({
+    saved,
+    activeDoc: closed.ref,
+    urlRef: closed.ref,
+    pageSearch: page,
+  });
+  assert.deepEqual(plan.tabs.map((item) => item.title), ["now.md"]);
+  assert.equal(plan.openRef.filename, "now.md");
+  assert.equal(plan.openIndex, 0);
+  assert.equal(plan.tabs.some((item) => item.title === "2026-11-15.c.md"), false);
 });
 
 test("unreadable storage is an absent list, and a failed write does not throw", () => {
@@ -350,12 +422,14 @@ test("the editor stores a close before it loads the next document, and flushes o
   const saveAt = closeTab.indexOf("saveTabs(saved)");
   const awaitAt = closeTab.indexOf("await switchToTab");
   assert.ok(closeTab.includes("snapshotAfterClose(tabs, currentTab, index)"));
+  assert.ok(closeTab.indexOf("bumpTabEpoch()") < saveAt);
   assert.ok(saveAt > 0 && awaitAt > saveAt);
 
   const switchToTab = sliceFn(app, "async function switchToTab", "async function closeTab");
   const activateAt = switchToTab.indexOf("saveTabs(snapshotAfterActivate(tabs, currentTab))");
   const loadAt = switchToTab.indexOf("await loadIntoTab");
   assert.ok(activateAt > 0 && loadAt > activateAt);
+  assert.ok(switchToTab.indexOf("if (!tabLoadCurrent(epoch)) return") > loadAt);
   const dropAt = switchToTab.indexOf("saveTabs(saved)");
   const nextAt = switchToTab.indexOf("await switchToTab");
   assert.ok(dropAt > loadAt && nextAt > dropAt);
@@ -370,7 +444,14 @@ test("the editor stores a close before it loads the next document, and flushes o
   assert.ok(reorder.includes("saveTabs()"));
   assert.equal(reorder.includes("await "), false);
 
-  assert.match(app, /flush: \(\) => flushTabSnapshot\(localStorage, tabsHydrated, snapshotTabs\(tabs, currentTab\)\)/);
+  assert.match(app, /flush: \(\) => \{\n\s+if \(!tabsHydrated\) return;\n\s+saveTabs\(\);\n\s+\}/);
+  assert.match(app, /chooseTabSnapshot\(localTabs, mirrorTabs\)/);
+  assert.match(app, /readTabMirror\(globalThis\.indexedDB\)/);
+  assert.match(app, /writeTabMirror\(globalThis\.indexedDB, stored\)/);
+  const select = sliceFn(app, "async function selectDocument(", "async function selectDocumentB");
+  const epochGate = select.indexOf("if (!tabLoadCurrent(epoch)) return");
+  const assign = select.indexOf("active = {");
+  assert.ok(epochGate > 0 && assign > epochGate);
   const restore = app.slice(app.indexOf("const restored = planTabRestore"));
   const hydratedAt = restore.indexOf("tabsHydrated = true");
   const awaitRestore = restore.indexOf("await switchToTab");
