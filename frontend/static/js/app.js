@@ -7,10 +7,13 @@ import { normalizePreviewPin, previewContent, previewMarkdownDownload, PREVIEW_P
 import { dropIndicatorX, pointerPastDragThreshold, reorderTabs, snapshotTabs, tabDropTarget, tabGapIndex } from "./tab-order.mjs";
 import {
   bindTabPersistenceFlush,
+  bindTabReconcile,
   chooseTabSnapshot,
   planTabRestore,
+  readTabCookie,
   readTabMirror,
   readTabSnapshot,
+  reconcileTabList,
   snapshotAfterActivate,
   snapshotAfterClose,
   snapshotAfterOpen,
@@ -650,7 +653,52 @@ function saveTabs(snapshot = null) {
     consumedSearch: location.search || "",
   }, {
     mirrorWrite: (stored) => writeTabMirror(globalThis.indexedDB, stored),
+    cookieWrite: (line) => { document.cookie = line; },
+    secure: location.protocol === "https:",
   });
+}
+
+// Orion can show a restored page whose JavaScript heap still has the
+// closed tab. Storage (and the cookie jar) is read again and, when it is
+// newer, replaces that heap. sessionStorage and history.state are not
+// consulted; a restored page would bring those back with the old list.
+let reconcilingTabs = false;
+
+async function applyStoredTabs(stored) {
+  const next = reconcileTabList({
+    memoryRevision: tabRevision,
+    memoryTabs: tabs,
+    memoryCurrent: currentTab,
+    stored,
+  });
+  if (!next.changed) return;
+  tabRevision = next.revision;
+  const showing = (currentTab >= 0 && tabs[currentTab] && tabs[currentTab].ref) || activeDocRef();
+  tabs = next.tabs.map(({ ref, title }) => ({ ref, title, stash: null }));
+  currentTab = next.current;
+  const nextRef = currentTab >= 0 && tabs[currentTab] ? tabs[currentTab].ref : null;
+  if (nextRef && !sameDocRef(showing, nextRef)) {
+    await switchToTab(currentTab, { keepCurrent: false, force: true });
+  } else if (!nextRef) {
+    currentTab = -1;
+    clearEditor();
+    renderTabs();
+  } else {
+    renderTabs();
+  }
+}
+
+async function reconcileTabsFromDisk() {
+  if (!tabsHydrated || reconcilingTabs || streaming) return;
+  reconcilingTabs = true;
+  try {
+    await applyStoredTabs(chooseTabSnapshot(loadTabs(), readTabCookie(document.cookie)));
+    if (!tabsHydrated || streaming) return;
+    const mirrorTabs = await readTabMirror(globalThis.indexedDB);
+    await applyStoredTabs(chooseTabSnapshot(loadTabs(), readTabCookie(document.cookie), mirrorTabs));
+  } finally {
+    reconcilingTabs = false;
+  }
 }
 
 function loadTabs() {
@@ -669,6 +717,11 @@ bindTabPersistenceFlush({
     if (!tabsHydrated) return;
     saveTabs();
   },
+});
+bindTabReconcile({
+  target: window,
+  document,
+  reconcile: () => { reconcileTabsFromDisk(); },
 });
 
 function stashDirty(stash) {
@@ -10084,7 +10137,7 @@ discussionPane = mountDiscussion({
   // The one that was on screen is loaded now; the rest load when switched to.
   const localTabs = loadTabs();
   const mirrorTabs = await readTabMirror(globalThis.indexedDB);
-  const savedTabs = chooseTabSnapshot(localTabs, mirrorTabs);
+  const savedTabs = chooseTabSnapshot(localTabs, mirrorTabs, readTabCookie(document.cookie));
   if (savedTabs && Number.isInteger(savedTabs.revision)) tabRevision = savedTabs.revision;
   const restored = planTabRestore({
     saved: savedTabs,
@@ -10101,6 +10154,8 @@ discussionPane = mountDiscussion({
   if (mirrorTabs && savedTabs === mirrorTabs && tabRevisionOf(mirrorTabs) > tabRevisionOf(localTabs)) {
     writeTabSnapshot(localStorage, savedTabs, {
       mirrorWrite: (stored) => writeTabMirror(globalThis.indexedDB, stored),
+      cookieWrite: (line) => { document.cookie = line; },
+      secure: location.protocol === "https:",
     });
   }
   if (restored.openIndex >= 0) await switchToTab(restored.openIndex, { keepCurrent: false });

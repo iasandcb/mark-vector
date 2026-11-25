@@ -5,13 +5,17 @@ import { reorderTabs, snapshotTabs } from "./tab-order.mjs";
 import {
   TABS_STORAGE_KEY,
   bindTabPersistenceFlush,
+  bindTabReconcile,
   chooseTabSnapshot,
   flushTabSnapshot,
   planTabRestore,
+  readTabCookie,
   readTabSnapshot,
+  reconcileTabList,
   snapshotAfterActivate,
   snapshotAfterClose,
   snapshotAfterOpen,
+  tabCookieAssignment,
   writeTabSnapshot,
 } from "./tab-persist.mjs";
 
@@ -330,6 +334,137 @@ test("closing 2026-11-15.c.md keeps it closed when a stale load and the page URL
   assert.equal(plan.tabs.some((item) => item.title === "2026-11-15.c.md"), false);
 });
 
+function docTab(filename) {
+  return {
+    ref: { role: "document", projectId: "p", sessionId: "s", filename },
+    title: filename,
+  };
+}
+
+test("Orion's restored heap drops the closed tab when storage or the cookie is newer", () => {
+  const now = docTab("now.md");
+  const closed = docTab("2026-11-15.c.md");
+  const page = "?project=p&session=s&file=2026-11-15.c.md";
+  const storage = memoryStorage();
+  let jar = "";
+  const closedList = {
+    ...snapshotAfterClose([now, closed], 1, 1),
+    revision: 4,
+    consumedSearch: page,
+  };
+  assert.equal(writeTabSnapshot(storage, closedList, {
+    cookieWrite: (line) => { jar = line; },
+    secure: true,
+  }), true);
+  assert.match(jar, /^mv-tabs=/);
+  assert.match(jar, /Path=\//);
+  assert.match(jar, /Secure/);
+  const roundTrip = readTabCookie(jar);
+  assert.equal(roundTrip.revision, 4);
+  assert.deepEqual(roundTrip.tabs.map((item) => item.title), ["now.md"]);
+
+  // The page snapshot still has both tabs, and so do the storage views
+  // Orion froze with the heap. The cookie jar was written at close time.
+  storage.setItem(TABS_STORAGE_KEY, JSON.stringify({
+    tabs: [
+      { ref: now.ref, title: now.title },
+      { ref: closed.ref, title: closed.title },
+    ],
+    current: 1,
+    revision: 3,
+    consumedSearch: page,
+  }));
+  const frozenMirror = {
+    tabs: [
+      { ref: now.ref, title: now.title },
+      { ref: closed.ref, title: closed.title },
+    ],
+    current: 1,
+    revision: 3,
+    consumedSearch: page,
+  };
+  const stored = chooseTabSnapshot(readTabSnapshot(storage), frozenMirror, readTabCookie(jar));
+  const heap = reconcileTabList({
+    memoryRevision: 3,
+    memoryTabs: [now, closed],
+    memoryCurrent: 1,
+    stored,
+  });
+  assert.equal(heap.changed, true);
+  assert.equal(heap.revision, 4);
+  assert.equal(heap.current, 0);
+  assert.deepEqual(heap.tabs.map((item) => item.title), ["now.md"]);
+  const plan = planTabRestore({
+    saved: stored,
+    activeDoc: closed.ref,
+    urlRef: closed.ref,
+    pageSearch: page,
+  });
+  assert.equal(plan.openRef.filename, "now.md");
+  assert.deepEqual(plan.tabs.map((item) => item.title), ["now.md"]);
+});
+
+test("a newer in-memory close is kept when the stored list is older", () => {
+  const now = docTab("now.md");
+  const closed = docTab("2026-11-15.c.md");
+  const next = reconcileTabList({
+    memoryRevision: 5,
+    memoryTabs: [now],
+    memoryCurrent: 0,
+    stored: {
+      tabs: [now, closed],
+      current: 1,
+      revision: 4,
+    },
+  });
+  assert.equal(next.changed, false);
+  assert.equal(next.revision, 5);
+  assert.deepEqual(next.tabs.map((item) => item.title), ["now.md"]);
+});
+
+test("an older cookie does not beat a newer local list", () => {
+  const now = docTab("now.md");
+  const closed = docTab("2026-11-15.c.md");
+  const chosen = chooseTabSnapshot(
+    { tabs: [now], current: 0, revision: 5 },
+    null,
+    { tabs: [now, closed], current: 1, revision: 4 },
+  );
+  assert.equal(chosen.revision, 5);
+  assert.deepEqual(chosen.tabs.map((item) => item.title), ["now.md"]);
+});
+
+test("a tab list that does not fit in a cookie is not written there", () => {
+  const huge = [{ ref: { role: "document", filename: "x".repeat(4000) }, title: "x" }];
+  assert.equal(tabCookieAssignment({ tabs: huge, current: 0, revision: 1 }), null);
+});
+
+test("pageshow on a restored page and becoming visible reconcile the heap", () => {
+  const events = [];
+  const target = emitter();
+  const doc = emitter();
+  doc.visibilityState = "hidden";
+  const unbind = bindTabReconcile({
+    target,
+    document: doc,
+    reconcile: (info) => events.push(info),
+  });
+  target.dispatch("pageshow", { persisted: true });
+  target.dispatch("pageshow", { persisted: false });
+  doc.visibilityState = "visible";
+  doc.dispatch("visibilitychange");
+  doc.visibilityState = "hidden";
+  doc.dispatch("visibilitychange");
+  assert.deepEqual(events, [
+    { persisted: true, reason: "pageshow" },
+    { persisted: false, reason: "pageshow" },
+    { persisted: false, reason: "visible" },
+  ]);
+  unbind();
+  target.dispatch("pageshow", { persisted: true });
+  assert.equal(events.length, 3);
+});
+
 test("unreadable storage is an absent list, and a failed write does not throw", () => {
   const storage = memoryStorage();
   storage.setItem(TABS_STORAGE_KEY, "{");
@@ -445,9 +580,13 @@ test("the editor stores a close before it loads the next document, and flushes o
   assert.equal(reorder.includes("await "), false);
 
   assert.match(app, /flush: \(\) => \{\n\s+if \(!tabsHydrated\) return;\n\s+saveTabs\(\);\n\s+\}/);
-  assert.match(app, /chooseTabSnapshot\(localTabs, mirrorTabs\)/);
+  assert.match(app, /chooseTabSnapshot\(localTabs, mirrorTabs, readTabCookie\(document\.cookie\)\)/);
   assert.match(app, /readTabMirror\(globalThis\.indexedDB\)/);
   assert.match(app, /writeTabMirror\(globalThis\.indexedDB, stored\)/);
+  assert.match(app, /bindTabReconcile\(\{[\s\S]*?reconcile: \(\) => \{ reconcileTabsFromDisk\(\); \}/);
+  const code = app.replace(/\/\/[^\n]*/g, "");
+  assert.equal(code.includes("sessionStorage"), false);
+  assert.equal(/history\.(state|replaceState|pushState)/.test(code), false);
   const select = sliceFn(app, "async function selectDocument(", "async function selectDocumentB");
   const epochGate = select.indexOf("if (!tabLoadCurrent(epoch)) return");
   const assign = select.indexOf("active = {");

@@ -26,6 +26,17 @@
 //   icon keeps its start URL — must not open a document the stored list
 //   has already dropped. There is no service worker and no server copy of
 //   this list.
+//
+// Orion (iPhone) does not always reload after the app is swiped away. It
+// restores the page from its own session snapshot and fires pageshow with
+// persisted=true, so the JavaScript heap still has the tab list from before
+// the close. Chrome reloads and reads storage, which is why the same build
+// already behaved there. On pageshow and when the page is shown again, the
+// heap is replaced with the highest stored revision. A cookie holds that
+// snapshot too: the cookie jar is not part of the page snapshot, so a
+// frozen localStorage or IndexedDB view cannot hide the close. Tabs are
+// not kept in sessionStorage or history.state; both would come back with
+// the restored page.
 
 import { TABS_STORAGE_KEY, snapshotTabs } from "./tab-order.mjs";
 
@@ -34,6 +45,10 @@ export { TABS_STORAGE_KEY };
 export const TAB_MIRROR_DB = "mark-vector-tabs";
 export const TAB_MIRROR_STORE = "tabs";
 const TAB_MIRROR_KEY = "open";
+// Readable from this page. Path=/ is what document.cookie can see; the
+// value is the tab list (refs and titles), and nothing on the server reads it.
+export const TAB_STATE_COOKIE = "mv-tabs";
+const TAB_COOKIE_LIMIT = 3500;
 
 function sameTabRef(a, b) {
   if (!a || !b || a.role !== b.role) return false;
@@ -63,10 +78,39 @@ function readLocalSnapshot(storage) {
   return null;
 }
 
+export function tabCookieAssignment(snapshot, { secure = false } = {}) {
+  if (!snapshot || !Array.isArray(snapshot.tabs)) return null;
+  let encoded;
+  try {
+    encoded = encodeURIComponent(JSON.stringify(snapshot));
+  } catch {
+    return null;
+  }
+  if (encoded.length > TAB_COOKIE_LIMIT) return null;
+  const secureAttr = secure ? "; Secure" : "";
+  return `${TAB_STATE_COOKIE}=${encoded}; Path=/; Max-Age=31536000; SameSite=Lax${secureAttr}`;
+}
+
+export function readTabCookie(cookieString) {
+  if (!cookieString) return null;
+  const prefix = `${TAB_STATE_COOKIE}=`;
+  const found = String(cookieString).split(";").map((part) => part.trim()).find((part) => part.startsWith(prefix));
+  if (!found) return null;
+  try {
+    const saved = JSON.parse(decodeURIComponent(found.slice(prefix.length)));
+    if (saved && Array.isArray(saved.tabs)) return saved;
+  } catch {
+    // unreadable cookie
+  }
+  return null;
+}
+
 // Returns false when `snapshot.revision` is older than what is already
 // stored: a load that started before a close must not put that tab back.
 // `mirrorWrite` receives the accepted snapshot (the IndexedDB copy).
-export function writeTabSnapshot(storage, snapshot, { mirrorWrite } = {}) {
+// `cookieWrite` receives a document.cookie assignment. The cookie jar stays
+// outside a restored page heap.
+export function writeTabSnapshot(storage, snapshot, { mirrorWrite, cookieWrite, secure = false } = {}) {
   const incoming = snapshot && typeof snapshot === "object" ? snapshot : null;
   if (!incoming || !Array.isArray(incoming.tabs)) return false;
   const previous = readLocalSnapshot(storage);
@@ -79,7 +123,7 @@ export function writeTabSnapshot(storage, snapshot, { mirrorWrite } = {}) {
       storage.setItem(TABS_STORAGE_KEY, JSON.stringify(stored));
       wrote = true;
     } catch {
-      // localStorage unavailable - the mirror may still keep the list
+      // localStorage unavailable - the mirror and cookie may still keep the list
     }
   }
   if (typeof mirrorWrite === "function") {
@@ -88,6 +132,17 @@ export function writeTabSnapshot(storage, snapshot, { mirrorWrite } = {}) {
       wrote = true;
     } catch {
       // mirror unavailable
+    }
+  }
+  if (typeof cookieWrite === "function") {
+    const line = tabCookieAssignment(stored, { secure });
+    if (line) {
+      try {
+        cookieWrite(line);
+        wrote = true;
+      } catch {
+        // cookie unavailable
+      }
     }
   }
   return wrote;
@@ -105,14 +160,70 @@ export function readTabSnapshot(storage) {
   return readLocalSnapshot(storage);
 }
 
-// localStorage may have been rolled back to an older checkpoint. The
-// greater revision is the list the user last closed or opened.
-export function chooseTabSnapshot(localSnapshot, mirrorSnapshot) {
-  const local = localSnapshot && Array.isArray(localSnapshot.tabs) ? localSnapshot : null;
-  const mirror = mirrorSnapshot && Array.isArray(mirrorSnapshot.tabs) ? mirrorSnapshot : null;
-  if (!local) return mirror;
-  if (!mirror) return local;
-  return tabRevisionOf(mirror) > tabRevisionOf(local) ? mirror : local;
+// The greater revision wins. Pass localStorage, the IndexedDB mirror, and
+// the cookie. A tie keeps the earlier source.
+export function chooseTabSnapshot(...snapshots) {
+  let best = null;
+  for (const snapshot of snapshots) {
+    if (!snapshot || !Array.isArray(snapshot.tabs)) continue;
+    if (!best || tabRevisionOf(snapshot) > tabRevisionOf(best)) best = snapshot;
+  }
+  return best;
+}
+
+function sameTabList(left, right) {
+  if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+  for (let i = 0; i < left.length; i++) {
+    const a = left[i];
+    const b = right[i];
+    if (!sameTabRef(a && a.ref, b && b.ref)) return false;
+    if ((a && a.title) !== (b && b.title)) return false;
+  }
+  return true;
+}
+
+// A restored page heap is not the list the user left. When the stored
+// revision is newer, or the same revision disagrees, the stored list
+// replaces memory. A newer in-memory revision is a close that storage has
+// not caught up with, and it stays.
+export function reconcileTabList({ memoryRevision = 0, memoryTabs = [], memoryCurrent = -1, stored = null } = {}) {
+  const memory = {
+    tabs: (Array.isArray(memoryTabs) ? memoryTabs : []).filter((tab) => tab && tab.ref).map(({ ref, title }) => ({ ref, title })),
+    current: Number.isInteger(memoryCurrent) ? memoryCurrent : -1,
+    revision: Number.isInteger(memoryRevision) && memoryRevision >= 0 ? memoryRevision : 0,
+    changed: false,
+  };
+  if (!stored || !Array.isArray(stored.tabs)) return memory;
+  const tabs = stored.tabs.filter((tab) => tab && tab.ref).map(({ ref, title }) => ({ ref, title }));
+  const current = clampIndex(stored.current, tabs.length);
+  const storedRev = tabRevisionOf(stored);
+  if (storedRev < memory.revision) return memory;
+  const changed = storedRev > memory.revision || !sameTabList(memory.tabs, tabs) || memory.current !== current;
+  return {
+    tabs: changed ? tabs : memory.tabs,
+    current: changed ? current : memory.current,
+    revision: changed ? storedRev : memory.revision,
+    changed,
+    consumedSearch: stored.consumedSearch,
+  };
+}
+
+// pageshow runs when Orion restores a frozen page (persisted=true) and
+// also on an ordinary load. Becoming visible covers a relaunch that does
+// not set persisted. Hidden does not reconcile; that is when we flush.
+export function bindTabReconcile({ target, document, reconcile }) {
+  const onPageShow = (event) => {
+    reconcile({ persisted: !!(event && event.persisted), reason: "pageshow" });
+  };
+  const onVisibility = () => {
+    if (document.visibilityState === "visible") reconcile({ persisted: false, reason: "visible" });
+  };
+  target.addEventListener("pageshow", onPageShow);
+  document.addEventListener("visibilitychange", onVisibility);
+  return function unbindTabReconcile() {
+    target.removeEventListener("pageshow", onPageShow);
+    document.removeEventListener("visibilitychange", onVisibility);
+  };
 }
 
 // The list to store the moment a tab is closed, before any document load.
