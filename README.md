@@ -2,7 +2,7 @@
 
 마크다운 문서 단위로 입력/출력을 주고받는 LLM 클라이언트 웹 앱입니다. 대화의 각 턴(사용자 입력, LLM 응답)은 하나의 완전한 마크다운 문서로 취급되며, 파일시스템에 `.md` 파일로 저장됩니다.
 
-**인터넷에 올리기 전에:** `GOOGLE_CLIENT_ID` 또는 `APP_PASSCODE`가 없으면 이 앱은 로그인을 요구하지 않습니다. 그 호스트의 문서 조회·수정·삭제, 스토리지 삭제, LLM 호출(API 과금), Soniox 임시 키 발급, ingest가 주소만 알면 열려 있습니다. `POST /api/ingest/audio`는 세션 대신 `INGEST_TOKEN`을 보며, 그 토큰이 없으면 404입니다. `/api/public/custom-symbols`와 `/api/public/spoken-math`는 인증과 관계없이 공개이고, scripter가 그대로 읽습니다.
+**인터넷에 올리기 전에:** `GOOGLE_CLIENT_ID` 또는 `APP_PASSCODE`가 없으면 이 앱은 로그인을 요구하지 않습니다. 그 호스트의 문서 조회·수정·삭제, 스토리지 삭제, LLM 호출(API 과금), Soniox 임시 키 발급, ingest가 주소만 알면 열려 있습니다. `POST /api/ingest/audio`는 세션 대신 `INGEST_TOKEN`을 보며, 그 토큰이 없으면 404입니다. `/api/public/custom-symbols`와 `/api/public/spoken-math`는 인증과 관계없이 공개이고, scripter가 그대로 읽습니다. Fly.io에 이 값을 넣는 명령은 [배포](#배포)에 있습니다.
 
 ## 라이선스
 
@@ -125,19 +125,19 @@ fly volumes create <볼륨 이름> --app <앱 이름> --region <리전> --size 1
 
 ### 시크릿
 
-주소를 알려 주기 전에 로그인을 켭니다. `APP_PASSCODE`와 `GOOGLE_CLIENT_ID`가 모두 비어 있으면 `AuthMiddleware`는 요청을 그대로 통과시키고, 문서와 API가 인증 없이 열립니다(`backend/app/auth.py`). 숫자 4자리가 아닌 `APP_PASSCODE`도 비어 있는 것과 같이 무시됩니다. 암호와 Google 중 하나만 있어도 인증이 켜지고, 둘 다 있으면 어느 쪽으로든 들어옵니다.
+공개 전 조건과, 로그인이 없을 때 열리는 범위는 맨 위의 **인터넷에 올리기 전에**에 있습니다. `APP_PASSCODE`, `GOOGLE_CLIENT_ID`, `ALLOWED_EMAILS`가 켜는 기능은 위의 환경 변수 표와 같습니다. `GOOGLE_CLIENT_SECRET`은 `GOOGLE_CLIENT_ID`와 같이 넣습니다.
 
-Google은 `GOOGLE_CLIENT_ID`와 `GOOGLE_CLIENT_SECRET`을 같이 넣습니다. 콘솔에 등록할 리다이렉트 URI는 앱의 https 주소에 `/auth/callback`을 붙인 값이고, 기본 호스트라면 `https://<앱 이름>.fly.dev/auth/callback`입니다. Fly가 TLS를 끝내고, 컨테이너는 `Dockerfile`의 `--proxy-headers`로 그 `https`를 믿습니다. `ALLOWED_EMAILS`는 들어올 수 있는 메일을 쉼표로 적습니다. 이 변수를 비우면 `config.py`의 기본값인 `iasandcb@gmail.com`만 통과합니다.
+Google 콘솔의 리다이렉트 URI는 앱의 https 주소에 `/auth/callback`을 붙인 값이고, 기본 호스트라면 `https://<앱 이름>.fly.dev/auth/callback`입니다. Fly가 TLS를 끝내고, 컨테이너는 `Dockerfile`의 `--proxy-headers`로 그 `https`를 믿습니다.
 
-로그인을 켜도 `/`, `/about`, `/p/`, `/glasses`는 링크만 있으면 열리고, `/api/ingest/`와 `/api/worker/`는 세션 대신 각자 토큰을 봅니다. `DATA_DIR`은 `fly.toml`이 이미 `/data`로 넣으므로 시크릿으로 다시 넣지 않습니다. `INGEST_TIMEZONE`과 `STORAGE_WARN_PERCENT`는 위의 환경 변수 표를 따릅니다. OpenAI 호환 엔드포인트는 [OpenAI 호환 프로바이더](#openai-호환-프로바이더-hermes-자체-호스팅-등)의 `CUSTOM_OPENAI_PROVIDERS`입니다.
+로그인을 켠 뒤에도 `/`, `/about`, `/p/`, `/glasses`는 그대로 열립니다. `/api/public/`는 맨 위 경고의 공개 CSV와 같습니다. `/api/worker/`는 세션 대신 `WORKER_TOKEN`을 봅니다. `DATA_DIR`은 `fly.toml`이 이미 `/data`로 넣으므로 시크릿으로 다시 넣지 않습니다. `INGEST_TIMEZONE`과 `STORAGE_WARN_PERCENT`는 위의 환경 변수 표를 따릅니다. OpenAI 호환 엔드포인트는 [OpenAI 호환 프로바이더](#openai-호환-프로바이더-hermes-자체-호스팅-등)의 `CUSTOM_OPENAI_PROVIDERS`입니다.
 
 값은 `fly secrets set`으로 넣습니다. `...`와 `you@example.com`은 자리표시이므로 자기 값으로 바꾸고, 쓰지 않는 줄은 빼세요. `--stage`는 저장만 하고 머신을 아직 배포하지 않습니다.
 
 | 이름 | 언제 | 켜는 기능 |
 |---|---|---|
-| `APP_PASSCODE` | 공개 전 (Google과 둘 중 하나, 또는 둘 다) | 네 자리 암호 로그인. 이 값만으로 앱 인증이 켜집니다. |
-| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | 공개 전 (암호와 둘 중 하나, 또는 둘 다) | Google 로그인. |
-| `ALLOWED_EMAILS` | Google을 쓸 때 | Google로 허용할 메일. |
+| `APP_PASSCODE` | 공개 전 (Google과 둘 중 하나, 또는 둘 다) | 환경 변수 표와 같음 |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | 공개 전 (암호와 둘 중 하나, 또는 둘 다) | 환경 변수 표와 같음. 시크릿도 같이 넣습니다 |
+| `ALLOWED_EMAILS` | Google을 쓸 때 | 환경 변수 표와 같음. 비우면 아무도 허용하지 않습니다 |
 | `ANTHROPIC_API_KEY` | 선택 | Anthropic. 없으면 그 프로바이더는 비활성. |
 | `OPENAI_API_KEY` | 선택 | OpenAI 대화, 화자 분리 전사, 실시간 받아쓰기. 없으면 비활성. |
 | `XAI_API_KEY` | 선택 | xAI(Grok). 없으면 비활성. |
