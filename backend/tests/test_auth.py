@@ -5,7 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import auth
-from app.config import settings
+from app.config import _load_allowed_emails, settings
 from app.main import app
 
 
@@ -24,7 +24,7 @@ def client():
 def google_configured(monkeypatch):
     monkeypatch.setattr(settings, "google_client_id", "test-client-id")
     monkeypatch.setattr(settings, "google_client_secret", "test-client-secret")
-    monkeypatch.setattr(settings, "allowed_emails", ["iasandcb@gmail.com"])
+    monkeypatch.setattr(settings, "allowed_emails", ["user@example.com"])
 
 
 class _FakeResponse:
@@ -85,7 +85,7 @@ def test_root_shows_landing_page_without_session(isolated_data_dir, google_confi
 
 def test_about_always_shows_landing_page(isolated_data_dir, google_configured, client):
     assert 'id="landing"' in client.get("/about").text
-    session = auth._sign_session({"email": "iasandcb@gmail.com", "exp": time.time() + 3600})
+    session = auth._sign_session({"email": "user@example.com", "exp": time.time() + 3600})
     client.cookies.set(auth.SESSION_COOKIE, session)
     assert 'id="landing"' in client.get("/about").text
 
@@ -114,7 +114,7 @@ def test_public_share_link_reachable_without_session(isolated_data_dir, google_c
 
 
 def test_authenticated_request_reaches_the_app(isolated_data_dir, google_configured, client):
-    session = auth._sign_session({"email": "iasandcb@gmail.com", "exp": time.time() + 3600})
+    session = auth._sign_session({"email": "user@example.com", "exp": time.time() + 3600})
     client.cookies.set(auth.SESSION_COOKIE, session)
     resp = client.get("/")
     assert resp.status_code == 200
@@ -190,7 +190,7 @@ def test_callback_allows_configured_email(isolated_data_dir, google_configured, 
     _patch_google_client(
         monkeypatch,
         token_payload={"access_token": "tok"},
-        userinfo_payload={"email": "IASandCB@gmail.com", "email_verified": True},
+        userinfo_payload={"email": "User@example.com", "email_verified": True},
     )
     client.cookies.set(auth.STATE_COOKIE, "s1")
     resp = client.get("/auth/callback?code=abc&state=s1", follow_redirects=False)
@@ -202,14 +202,14 @@ def test_callback_allows_configured_email(isolated_data_dir, google_configured, 
     me = session_client.get("/auth/me")
     assert me.status_code == 200
     # normalized to lowercase, matching settings.allowed_emails
-    assert me.json()["email"] == "iasandcb@gmail.com"
+    assert me.json()["email"] == "user@example.com"
 
 
 def test_callback_rejects_unlisted_email(isolated_data_dir, google_configured, client, monkeypatch):
     _patch_google_client(
         monkeypatch,
         token_payload={"access_token": "tok"},
-        userinfo_payload={"email": "someone-else@gmail.com", "email_verified": True},
+        userinfo_payload={"email": "other@example.com", "email_verified": True},
     )
     client.cookies.set(auth.STATE_COOKIE, "s1")
     resp = client.get("/auth/callback?code=abc&state=s1", follow_redirects=False)
@@ -221,7 +221,7 @@ def test_callback_rejects_unverified_email(isolated_data_dir, google_configured,
     _patch_google_client(
         monkeypatch,
         token_payload={"access_token": "tok"},
-        userinfo_payload={"email": "iasandcb@gmail.com", "email_verified": False},
+        userinfo_payload={"email": "user@example.com", "email_verified": False},
     )
     client.cookies.set(auth.STATE_COOKIE, "s1")
     resp = client.get("/auth/callback?code=abc&state=s1", follow_redirects=False)
@@ -239,7 +239,7 @@ def test_callback_handles_token_exchange_failure(isolated_data_dir, google_confi
 
 
 def test_logout_clears_session_and_redirects(isolated_data_dir, google_configured, client):
-    session = auth._sign_session({"email": "iasandcb@gmail.com", "exp": time.time() + 3600})
+    session = auth._sign_session({"email": "user@example.com", "exp": time.time() + 3600})
     client.cookies.set(auth.SESSION_COOKIE, session)
     resp = client.get("/auth/logout", follow_redirects=False)
     assert resp.headers["location"] == "/login"
@@ -252,3 +252,72 @@ def test_logout_clears_session_and_redirects(isolated_data_dir, google_configure
 
 def test_me_without_session_is_401(isolated_data_dir, client):
     assert client.get("/auth/me").status_code == 401
+
+
+def test_allowed_emails_default_is_empty(monkeypatch):
+    monkeypatch.delenv("ALLOWED_EMAILS", raising=False)
+    assert _load_allowed_emails() == []
+    monkeypatch.setenv("ALLOWED_EMAILS", " User@example.com, other@example.com ")
+    assert _load_allowed_emails() == ["user@example.com", "other@example.com"]
+
+
+def _passcode_client(monkeypatch, tmp_path, base_url="http://testserver"):
+    monkeypatch.setattr(settings, "data_dir", str(tmp_path))
+    monkeypatch.setattr(settings, "app_passcode", "1234")
+    auth.passcode_limiter.reset()
+    return TestClient(app, base_url=base_url)
+
+
+def test_passcode_cookie_is_secure_only_on_https(monkeypatch, tmp_path):
+    http = _passcode_client(monkeypatch, tmp_path, "http://testserver")
+    plain = http.post("/auth/passcode", json={"code": "1234"})
+    assert plain.status_code == 200
+    assert "secure" not in plain.headers["set-cookie"].lower()
+
+    https = _passcode_client(monkeypatch, tmp_path, "https://testserver")
+    secured = https.post("/auth/passcode", json={"code": "1234"})
+    assert secured.status_code == 200
+    cookie = secured.headers["set-cookie"].lower()
+    assert "secure" in cookie
+    assert "httponly" in cookie
+    assert "samesite=lax" in cookie
+
+
+def test_passcode_rate_limit_backs_off_per_ip(monkeypatch, tmp_path):
+    client = _passcode_client(monkeypatch, tmp_path)
+    for _ in range(auth._PASSCODE_FREE_ATTEMPTS):
+        resp = client.post("/auth/passcode", json={"code": "0000"})
+        assert resp.status_code == 401
+    blocked = client.post("/auth/passcode", json={"code": "0000"})
+    assert blocked.status_code == 429
+    assert int(blocked.headers["retry-after"]) >= 1
+    # A correct code does not skip the lock. Another IP is still on its first try.
+    still = client.post("/auth/passcode", json={"code": "1234"})
+    assert still.status_code == 429
+    now = time.monotonic()
+    assert auth.passcode_limiter.retry_after("203.0.113.5", now) == 0
+    auth.passcode_limiter.record_failure("203.0.113.5", now)
+    assert auth.passcode_limiter.retry_after("203.0.113.5", now) == 0
+
+    auth.passcode_limiter._locked_until["testclient"] = now - 1
+    again = client.post("/auth/passcode", json={"code": "0000"})
+    assert again.status_code == 429
+    assert int(again.headers["retry-after"]) >= 2
+
+    auth.passcode_limiter.reset()
+    ok = client.post("/auth/passcode", json={"code": "1234"})
+    assert ok.status_code == 200
+    assert client.post("/auth/passcode", json={"code": "0000"}).status_code == 401
+
+
+def test_google_callback_session_cookie_is_secure_on_https(isolated_data_dir, google_configured, monkeypatch):
+    _patch_google_client(
+        monkeypatch,
+        token_payload={"access_token": "tok"},
+        userinfo_payload={"email": "user@example.com", "email_verified": True},
+    )
+    client = TestClient(app, base_url="https://testserver")
+    client.cookies.set(auth.STATE_COOKIE, "s1")
+    resp = client.get("/auth/callback?code=abc&state=s1", follow_redirects=False)
+    assert resp.status_code in (302, 307)
+    assert "secure" in resp.headers["set-cookie"].lower()

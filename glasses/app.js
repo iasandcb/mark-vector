@@ -11,6 +11,7 @@
 // /login it can't complete - no keyboard).
 import { renderMarkdown, detectMathDirective, parseCustomSymbolsCsv, setCustomAsciiMathSymbols } from "/static/js/markdown.js";
 import { splitSlides } from "/static/js/slides.js";
+import { allowAmbientConnect, liveSocketPath } from "/static/js/glasses-ambient.mjs";
 import {
   HEARTBEAT_MS,
   PONG_TIMEOUT_MS,
@@ -40,13 +41,14 @@ const liveCheckEl = document.getElementById("live-check");
 // document was *most recently* put into live preview, anywhere (see
 // backend/app/routers/live.py's /ws/live with no channel).
 const channel = new URLSearchParams(location.search).get("c");
-// Ambient mode has no channel id to act as its own secret, so the server
-// requires this instead when APP_PASSCODE is configured (see routers/
-// live.py) - set once in the URL itself when the glasses' web app is
-// configured (e.g. ".../glasses/?pin=1234"), never typed interactively.
-// Harmless to send on a channel-specific connection too (that path ignores
-// it entirely), so it's just always forwarded when present.
+// Ambient mode (no ?c=) uses the same login as the app. The device still
+// cannot type, so the page URL may carry ?pin= once, when the glasses web
+// app is configured. That value is posted to /auth/passcode for an
+// mv_session cookie and is not put on the websocket. A ?c= link does not
+// need it. See frontend/static/js/glasses-ambient.mjs.
 const pin = new URLSearchParams(location.search).get("pin");
+let ambientAllowed = false;
+let connectGeneration = 0;
 
 // The editor appends its language when it copies this URL (app.js's
 // glassesUrl), so an iPhone that has never opened mark-vector still shows
@@ -404,7 +406,7 @@ function noteDrop(ws) {
   // fixed, or the reason might not be the pin at all), so this is a hint
   // shown alongside the retry loop, not a replacement for it.
   if (!channel && consecutiveFastFails >= 2) {
-    renderIdle("Can't connect - check this page's own URL has the right ?pin= (see the live-preview checkbox in mark-vector).");
+    renderIdle("Can't connect in ambient mode. With a passcode, this page's ?pin= is exchanged for a session cookie and is not sent on the socket. A ?c= link does not need it.");
   }
   // No radio: say disconnected and wait for `online`. Dialing on a timer
   // while the phone is offline only burns the backoff.
@@ -490,7 +492,8 @@ function startHeartbeat() {
   }, HEARTBEAT_MS);
 }
 
-function connect() {
+async function connect() {
+  const generation = ++connectGeneration;
   started = true;
   clearTimeout(retryTimer);
   clearTimeout(pongTimer);
@@ -505,12 +508,41 @@ function connect() {
       // already closing
     }
   }
+  const decision = await allowAmbientConnect({
+    channel,
+    pin,
+    alreadyAllowed: ambientAllowed,
+    requestPasscode: async (code) => {
+      const resp = await fetch("/auth/passcode", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ code }),
+      });
+      return resp.status;
+    },
+  });
+  if (generation !== connectGeneration) return;
+  if (decision.remember) ambientAllowed = true;
+  if (!decision.ok) {
+    if (!decision.retry) {
+      renderIdle("Can't connect - check ?pin= on this page's URL. It is exchanged for a session and is not sent on the socket.");
+      retrying = false;
+      paintLink();
+      return;
+    }
+    retrying = true;
+    paintLink();
+    clearTimeout(retryTimer);
+    retryTimer = setTimeout(connect, retryDelay);
+    retryDelay = Math.min(retryDelay * 1.5, 10000);
+    return;
+  }
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  const path = channel ? `/ws/live/${encodeURIComponent(channel)}` : "/ws/live";
-  const query = pin ? `?pin=${encodeURIComponent(pin)}` : "";
+  const path = liveSocketPath(channel);
   openedThisAttempt = false;
   attemptStartedAt = Date.now();
-  const ws = new WebSocket(`${proto}://${location.host}${path}${query}`);
+  const ws = new WebSocket(`${proto}://${location.host}${path}`);
   socket = ws;
   paintLink();
 

@@ -31,7 +31,12 @@ def _load_custom_providers() -> list[dict]:
 
 
 def _load_allowed_emails() -> list[str]:
-    raw = os.getenv("ALLOWED_EMAILS", "iasandcb@gmail.com")
+    """Comma-separated Google allowlist.
+
+    Unset or blank allows nobody. There is no built-in address, so a public
+    checkout does not ship a personal default.
+    """
+    raw = os.getenv("ALLOWED_EMAILS", "")
     return [e.strip().lower() for e in raw.split(",") if e.strip()]
 
 

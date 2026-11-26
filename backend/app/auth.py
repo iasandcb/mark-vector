@@ -2,6 +2,7 @@ import base64
 import hashlib
 import hmac
 import json
+import math
 import secrets
 import time
 import urllib.parse
@@ -25,6 +26,63 @@ SESSION_COOKIE = "mv_session"
 SESSION_MAX_AGE = 60 * 60 * 24 * 30  # 30 days - a personal app, not worth re-prompting often
 STATE_COOKIE = "mv_oauth_state"
 STATE_MAX_AGE = 10 * 60  # just long enough to complete the Google redirect round-trip
+
+# Five wrong passcodes from one IP still answer 401. The next one arms a
+# per-process backoff that starts at 1s and doubles up to 5 minutes. Tries
+# inside that window are 429 and do not check the code. One success clears
+# the IP. This is in-memory: a second process, or a restart, starts over.
+_PASSCODE_FREE_ATTEMPTS = 5
+_PASSCODE_BACKOFF_CAP = 300
+
+
+class PasscodeRateLimiter:
+    def __init__(self):
+        self._failures: dict[str, int] = {}
+        self._locked_until: dict[str, float] = {}
+
+    def reset(self) -> None:
+        self._failures.clear()
+        self._locked_until.clear()
+
+    def retry_after(self, ip: str, now: float) -> int:
+        until = self._locked_until.get(ip)
+        if until is None or now >= until:
+            return 0
+        return max(1, math.ceil(until - now))
+
+    def record_failure(self, ip: str, now: float) -> int:
+        count = self._failures.get(ip, 0) + 1
+        self._failures[ip] = count
+        if count <= _PASSCODE_FREE_ATTEMPTS:
+            return 0
+        delay = min(_PASSCODE_BACKOFF_CAP, 2 ** (count - _PASSCODE_FREE_ATTEMPTS - 1))
+        self._locked_until[ip] = now + delay
+        return delay
+
+    def record_success(self, ip: str) -> None:
+        self._failures.pop(ip, None)
+        self._locked_until.pop(ip, None)
+
+
+passcode_limiter = PasscodeRateLimiter()
+
+
+def _client_ip(request: Request) -> str:
+    if request.client and request.client.host:
+        return request.client.host
+    return "unknown"
+
+
+def _set_session_cookie(response, request: Request, value: str):
+    """Secure only on HTTPS, so a local http://127.0.0.1 login still sticks."""
+    response.set_cookie(
+        SESSION_COOKIE,
+        value,
+        max_age=SESSION_MAX_AGE,
+        httponly=True,
+        samesite="lax",
+        secure=request.url.scheme == "https",
+    )
 
 # Reachable with no session at all: the login page and the OAuth dance
 # itself (obviously), this app's own JS/CSS (the login page needs to load
@@ -96,21 +154,31 @@ async def auth_config():
 
 
 @router.post("/passcode")
-async def passcode_login(req: PasscodeLoginRequest):
+async def passcode_login(req: PasscodeLoginRequest, request: Request):
     if not settings.app_passcode:
         raise HTTPException(status_code=404, detail="Passcode sign-in is not configured")
+    ip = _client_ip(request)
+    now = time.monotonic()
+    retry_after = passcode_limiter.retry_after(ip, now)
+    if retry_after:
+        raise HTTPException(status_code=429, detail="Too many attempts", headers={"Retry-After": str(retry_after)})
     # compare_digest over a plain `==` - a 4-digit passcode is guessable
     # enough already without also leaking timing information about how many
-    # leading digits matched.
-    if not hmac.compare_digest(req.code, settings.app_passcode):
+    # leading digits matched. A different length never reaches compare_digest
+    # (older Pythons raise; the length of a 4-digit code is not a secret).
+    if len(req.code) != len(settings.app_passcode) or not hmac.compare_digest(req.code, settings.app_passcode):
+        delay = passcode_limiter.record_failure(ip, now)
+        if delay:
+            raise HTTPException(status_code=429, detail="Too many attempts", headers={"Retry-After": str(delay)})
         raise HTTPException(status_code=401, detail="Incorrect passcode")
 
+    passcode_limiter.record_success(ip)
     # No `email` - unlike a Google session, there's no identity behind a
     # shared passcode to record. Every other reader of a session payload
     # (auth.me, AuthMiddleware) already treats a missing/None email as fine.
     session_value = _sign_session({"email": None, "exp": time.time() + SESSION_MAX_AGE})
     response = JSONResponse({"ok": True})
-    response.set_cookie(SESSION_COOKIE, session_value, max_age=SESSION_MAX_AGE, httponly=True, samesite="lax")
+    _set_session_cookie(response, request, session_value)
     return response
 
 
@@ -172,9 +240,7 @@ async def callback(request: Request, code: str | None = None, state: str | None 
 
     session_value = _sign_session({"email": email, "exp": time.time() + SESSION_MAX_AGE})
     response = RedirectResponse("/")
-    response.set_cookie(
-        SESSION_COOKIE, session_value, max_age=SESSION_MAX_AGE, httponly=True, samesite="lax"
-    )
+    _set_session_cookie(response, request, session_value)
     response.delete_cookie(STATE_COOKIE)
     return response
 
