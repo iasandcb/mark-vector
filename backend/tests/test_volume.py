@@ -316,6 +316,6 @@ def test_storage_routes_use_session_auth(data, monkeypatch):
     assert client.post("/api/storage/cleanup/preview").status_code == 401
     assert client.post("/api/storage/cleanup").status_code == 401
     assert client.get("/api/storage", headers={"Authorization": "Bearer not-a-session"}).status_code == 401
-    session = auth._sign_session({"email": "iasandcb@gmail.com", "exp": time.time() + 3600})
+    session = auth._sign_session({"email": "user@example.com", "exp": time.time() + 3600})
     client.cookies.set(auth.SESSION_COOKIE, session)
     assert client.get("/api/storage").status_code == 200

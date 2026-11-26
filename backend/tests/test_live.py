@@ -2,6 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
+from app import auth
 from app.config import settings
 from app.main import app
 
@@ -14,11 +15,23 @@ def client():
 @pytest.fixture
 def with_passcode(monkeypatch):
     monkeypatch.setattr(settings, "app_passcode", "1234")
+    monkeypatch.setattr(settings, "google_client_id", None)
 
 
 @pytest.fixture
 def without_passcode(monkeypatch):
     monkeypatch.setattr(settings, "app_passcode", None)
+    monkeypatch.setattr(settings, "google_client_id", None)
+
+
+@pytest.fixture
+def isolated_session(tmp_path, monkeypatch, client, with_passcode):
+    """A passcode login on this client. The cookie is what ambient mode wants."""
+    monkeypatch.setattr(settings, "data_dir", str(tmp_path))
+    auth.passcode_limiter.reset()
+    resp = client.post("/auth/passcode", json={"code": "1234"})
+    assert resp.status_code == 200
+    assert auth.SESSION_COOKIE in resp.cookies
 
 
 class TestAmbientPinGate:
@@ -51,6 +64,41 @@ class TestAmbientPinGate:
     def test_channel_specific_connections_never_need_a_pin(self, client, with_passcode):
         # The channel id itself is the access control there (same model as
         # a publish token) - unaffected by APP_PASSCODE either way.
+        with client.websocket_connect("/ws/live/some-channel"):
+            pass
+
+    def test_session_cookie_opens_ambient_without_a_query_pin(self, client, with_passcode, isolated_session):
+        with client.websocket_connect("/ws/live"):
+            pass
+
+    def test_wrong_length_pin_is_rejected(self, client, with_passcode):
+        with pytest.raises(WebSocketDisconnect) as exc:
+            with client.websocket_connect("/ws/live?pin=12345"):
+                pass
+        assert exc.value.code == 1008
+
+    def test_google_auth_requires_a_session_and_ignores_the_query_pin(self, client, monkeypatch):
+        monkeypatch.setattr(settings, "google_client_id", "test-client-id")
+        monkeypatch.setattr(settings, "app_passcode", "1234")
+        with pytest.raises(WebSocketDisconnect) as exc:
+            with client.websocket_connect("/ws/live?pin=1234"):
+                pass
+        assert exc.value.code == 1008
+        with pytest.raises(WebSocketDisconnect):
+            with client.websocket_connect("/ws/live"):
+                pass
+
+    def test_google_auth_accepts_a_passcode_session(self, client, monkeypatch, isolated_session):
+        # Glasses exchanges ?pin= for this cookie, including when Google is
+        # also configured. The socket then sees the session, not the pin.
+        monkeypatch.setattr(settings, "google_client_id", "test-client-id")
+        monkeypatch.setattr(settings, "app_passcode", "1234")
+        with client.websocket_connect("/ws/live"):
+            pass
+
+    def test_channel_stays_open_when_google_auth_is_on(self, client, monkeypatch):
+        monkeypatch.setattr(settings, "google_client_id", "test-client-id")
+        monkeypatch.setattr(settings, "app_passcode", None)
         with client.websocket_connect("/ws/live/some-channel"):
             pass
 

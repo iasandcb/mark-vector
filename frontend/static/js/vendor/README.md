@@ -2,6 +2,11 @@
 
 Third-party code committed as a build output rather than fetched at runtime.
 
+License texts for the files in this directory:
+
+- `LICENSE.codemirror.txt` — CodeMirror 6, MIT
+- `LICENSE.lz-string.txt` — lz-string 1.5.0. The source header names the WTFPL v2; the 1.5.0 tag's own LICENSE file is MIT. Both are included.
+
 ## codemirror.js
 
 CodeMirror 6, bundled into one ES module for `static/js/editor.js`.

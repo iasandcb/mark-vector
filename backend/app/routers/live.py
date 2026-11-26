@@ -1,7 +1,9 @@
+import hmac
 import json
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from ..auth import is_authenticated
 from ..config import settings
 
 router = APIRouter()
@@ -114,27 +116,40 @@ async def live_channel(websocket: WebSocket, channel: str):
             _channels.pop(channel, None)
 
 
+def _legacy_pin_matches(presented: str) -> bool:
+    """Passcode-only deployments still accept ?pin= so a glasses page that
+    has not reloaded keeps working. Google sign-in does not: that mode wants
+    the session cookie the glasses page mints via POST /auth/passcode."""
+    expected = settings.app_passcode or ""
+    if settings.google_client_id or not expected or len(presented) != len(expected):
+        return False
+    return hmac.compare_digest(presented, expected)
+
+
+def _ambient_allowed(websocket: WebSocket) -> bool:
+    """Same gate as the rest of the app.
+
+    Auth off: open. A valid mv_session (Google or passcode login) is enough
+    whenever auth is on. With Google configured, that cookie is the only
+    way in. With only a passcode, a legacy query pin is compared in constant
+    time as well, for a glasses page from before the cookie exchange.
+    """
+    if is_authenticated(websocket):
+        return True
+    return _legacy_pin_matches(websocket.query_params.get("pin") or "")
+
+
 @router.websocket("/ws/live")
 async def live_latest(websocket: WebSocket):
     """Ambient mode: a glasses screen opened with no ?c= connects here
     instead of to a specific channel, and always tracks whichever channel
     most recently published an update (see _latest_state/_latest_followers
-    above) - "the page that most recently did live-to-glasses", without
-    needing to know its channel id.
+    above).
 
-    Unlike /ws/live/{channel}, there's no unguessable secret standing in
-    for access control here - "show me whatever's currently live, from
-    anyone" is exactly the point of ambient mode, so without a check here
-    it would leak to literally anyone who found this URL, no matter what
-    else is locked down. Gated on the app's own passcode (see
-    Settings.app_passcode / auth.py) instead - passed as a query param
-    (glasses/app.js reads it from the page's own ?pin=, set once when the
-    glasses' web app URL itself is configured, since the device has no way
-    to type it interactively) rather than a session cookie, since nothing
-    else about this websocket goes through AuthMiddleware either (it only
-    wraps http-scope requests - see auth.py). A no-op, like every other
-    passcode check in this app, until APP_PASSCODE is actually set."""
-    if settings.app_passcode and websocket.query_params.get("pin") != settings.app_passcode:
+    AuthMiddleware never sees this socket. The check is _ambient_allowed.
+    Channel sockets (/ws/live/{channel}) stay capability URLs and do not
+    call it. scripter does not open this socket."""
+    if not _ambient_allowed(websocket):
         await websocket.close(code=1008)
         return
     await websocket.accept()
