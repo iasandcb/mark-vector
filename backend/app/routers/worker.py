@@ -5,7 +5,7 @@ secret (not INGEST_TOKEN). With the variable unset every route 404s, the
 same way ingest does. Session auth does not apply — see auth.py's public
 prefix — because the worker has no browser session.
 
-The JSON contract is documented in the README ("YouTube 영상 작업 큐").
+The JSON contract is documented in docs/youtube-queue.md ("YouTube 영상 작업 큐").
 """
 
 import hmac
